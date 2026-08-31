@@ -17,7 +17,7 @@ from leadforge.grid import build_plan
 from leadforge.models import ICP
 from leadforge.normalize import to_business
 from leadforge.providers.base import get_chain
-from leadforge.util import LOG, ProviderDegraded, ProviderFailed
+from leadforge.util import LOG, ProviderDegraded, ProviderFailed, emit_progress
 
 
 # --------------------------------------------------------------------------- discover
@@ -43,8 +43,11 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     from leadforge.grid import PlannedQuery
 
     hard_cap = min(limit, icp.caps.max_leads) if limit else icp.caps.max_leads
-    for q in pending:
+    total_q = len(pending)
+    for qi, q in enumerate(pending):
+        emit_progress("discover", qi, total_q, q["query_text"])
         if processed >= hard_cap:
+            emit_progress("discover", total_q, total_q, f"lead cap reached ({processed})")
             break
         pq = PlannedQuery(text=q["query_text"], category="", area="",
                           tile=_tile_from_json(q["tile_json"]))
@@ -68,6 +71,7 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
                 break
         new_count += per_query_new
         db.finish_query(conn, q["id"], status, len(listings))
+        emit_progress("discover", qi + 1, total_q, f"{processed} unique leads so far")
 
     total_biz = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
     still_pending = len(db.pending_queries(conn, run_id))

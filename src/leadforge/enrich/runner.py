@@ -24,7 +24,7 @@ from leadforge.enrich.extract import (
 from leadforge.enrich.validate import validate_email
 from leadforge.models import Contact, Evidence, Person
 from leadforge.normalize import COUNTRY_TO_REGION
-from leadforge.util import LOG, HostThrottle, now_iso
+from leadforge.util import LOG, HostThrottle, emit_progress, now_iso
 
 
 def _region_for_business(b, default_region: str) -> str:
@@ -111,7 +111,8 @@ def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
            WHERE json_extract(b.enrich_json,'$.registry_checked') IS NULL
              AND NOT EXISTS (SELECT 1 FROM people p WHERE p.business_id=b.id AND p.labeled_by='registry')"""
     ).fetchall()
-    for b in rows:
+    for bi, b in enumerate(rows):
+        emit_progress("registry", bi + 1, len(rows), b["name"] or "")
         country = (b["address_country"] or "").strip().upper()
         for reg in registries:
             if country not in reg.jurisdictions():
@@ -154,7 +155,10 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
         LOG.info("social presence skipped: %s", social_msg)
     with ThreadPoolExecutor(max_workers=cfg.politeness.workers) as pool:
         futures = {pool.submit(_process_one, cfg, throttle, b): b for b in queue}
+        done_n = 0
         for fut in as_completed(futures):
+            done_n += 1
+            emit_progress("enrich", done_n, len(futures), futures[fut]["name"] or "")
             b = futures[fut]
             try:
                 res = fut.result()

@@ -151,3 +151,30 @@ def social_network(url: str) -> str | None:
         return None
     host = urlsplit(url if "//" in url else "https://" + url).netloc.lower().removeprefix("www.")
     return SOCIAL_HOSTS.get(host) or SOCIAL_HOSTS.get(apex)
+
+
+# --- progress heartbeat (v0.1.3) -------------------------------------------------------------
+# Long stages used to be silent for hours. Two bounded channels, safe under the token contract:
+#  - stdout: one `LF_PROGRESS {json}` line per unit of work (agents may read or ignore; docs/06)
+#  - stderr: an in-place progress bar, only when stderr is an interactive terminal (humans)
+def emit_progress(stage: str, done: int, total: int | None, msg: str = "") -> None:
+    import json as _json
+    import sys as _sys
+
+    payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
+    print("LF_PROGRESS " + _json.dumps(payload, ensure_ascii=False), flush=True)
+    try:
+        if _sys.stderr.isatty():
+            if total:
+                width = 24
+                filled = max(0, min(width, round(width * done / total)))
+                bar = "#" * filled + "-" * (width - filled)
+                line = f"[{bar}] {done}/{total} {stage}" + (f" · {msg[:60]}" if msg else "")
+            else:
+                line = f"[{stage}] {done} done" + (f" · {msg[:60]}" if msg else "")
+            _sys.stderr.write("\r" + line.ljust(100)[:100])
+            if total and done >= total:
+                _sys.stderr.write("\n")
+            _sys.stderr.flush()
+    except Exception:  # noqa: BLE001 — a broken terminal must never break the pipeline
+        pass

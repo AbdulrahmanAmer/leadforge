@@ -66,3 +66,15 @@ digest line for machines.
 4. Label DM batches in a single pass from snippets; do not browse candidate websites to "double-check" (the pipeline already stored
    evidence URLs for the human).
 5. Final answer to the user: counts, tier split, top hooks, sheet path. Never paste sheet contents beyond ≤ 5 example rows if asked.
+
+
+## LF_PROGRESS heartbeat (v0.1.3)
+
+Long stages (discover / enrich / registry) additionally emit bounded progress lines to stdout:
+
+    LF_PROGRESS {"stage": "discover", "done": 12, "total": 30, "msg": "car garage in Leeds"}
+
+Rules: one line per unit of work (query / site / lookup), never unbounded; agents MAY ignore them
+entirely (the digest contract is unchanged — still exactly one LF_DIGEST at the end) or relay them
+as status. Humans at an interactive terminal also get an in-place progress bar on stderr; that bar
+is suppressed automatically when stderr is not a TTY (pipes, CI, agent harnesses).

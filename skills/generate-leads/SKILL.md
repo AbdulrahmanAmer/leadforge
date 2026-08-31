@@ -15,7 +15,7 @@ interview → launch → adjudicate decision makers → deliver.
 
 ## Iron rules (token contract — full version: `references/cli.md`)
 
-1. Every `leadforge` command ends with one `LF_DIGEST {json}` line. **Read only that line.** Prefer `--json` flags.
+1. Every `leadforge` command ends with one `LF_DIGEST {json}` line. **That line is the result.** Long stages also stream bounded `LF_PROGRESS {json}` lines — use them to report progress to the user ("12/30 queries done") or ignore them; never treat them as the result. Prefer `--json` flags.
 2. **Never** read files under `leadforge_data/` (db/cache/exports/logs) — unbounded. The ONE exception: the small NDJSON batch produced by
    `leadforge dm export`.
 3. Never scrape/crawl/search the web yourself for lead data. If the pipeline can't get something, it says so in the digest.

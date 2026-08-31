@@ -200,3 +200,16 @@ def test_doctor_digest_contract(offline, monkeypatch):
     d = json.loads(lines[0][len("LF_DIGEST "):])
     assert REQUIRED_KEYS <= set(d) and d["cmd"] == "doctor"
     assert set(d["counts"]) >= {"checks", "fixed", "failed"}
+
+
+def test_progress_lines_are_bounded_json_and_digest_stays_unique(offline):
+    runner = offline
+    _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
+    res = runner.invoke(app, ["--json", "discover", "--icp", "icp.yaml", "--limit", "5"])
+    digests = [ln for ln in res.output.splitlines() if ln.startswith("LF_DIGEST ")]
+    progress = [ln for ln in res.output.splitlines() if ln.startswith("LF_PROGRESS ")]
+    assert len(digests) == 1
+    assert progress, "long stages must emit progress heartbeats"
+    for ln in progress:
+        d = json.loads(ln[len("LF_PROGRESS "):])
+        assert {"stage", "done", "total", "msg"} <= set(d)
