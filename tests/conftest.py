@@ -30,3 +30,9 @@ def sample_icp():
         "qualify": {"hard": ["no_phone"], "soft": ["website_missing", "stale_site"]},
         "decision_maker": {"titles_priority": ["Owner", "General Manager"]},
     })
+
+
+@pytest.fixture(autouse=True)
+def _no_ui(monkeypatch):
+    """Tests must never pop Excel or console windows (auto-open features, v0.1.3)."""
+    monkeypatch.setenv("LEADFORGE_NO_UI", "1")

@@ -47,8 +47,18 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
 
         from crawl4ai import AsyncWebCrawler
 
+        # headed mode = a visible, ordinary browser window (debug aid + renders sites that refuse
+        # plain HTTP clients). Deliberately NO stealth/anti-detection flags — icm/SCOPE.md red line.
+        kwargs = {"verbose": False}
+        if getattr(cfg.crawl, "headed_browser", False):
+            try:
+                from crawl4ai import BrowserConfig
+                kwargs = {"config": BrowserConfig(headless=False, verbose=False)}
+            except ImportError:
+                kwargs = {"headless": False, "verbose": False}
+
         async def _run() -> str:
-            async with AsyncWebCrawler(verbose=False) as crawler:
+            async with AsyncWebCrawler(**kwargs) as crawler:
                 res = await crawler.arun(url=url, page_timeout=int(cfg.crawl.timeout_s * 1000))
                 html = getattr(res, "html", "") or ""
                 if html:

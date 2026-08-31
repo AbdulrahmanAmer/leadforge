@@ -34,6 +34,7 @@ class DiscoveryCfg(BaseModel):
 
 class CrawlCfg(BaseModel):
     pages_per_site: int = 6
+    headed_browser: bool = False  # browser-escalation runs VISIBLY (debug aid; real-browser rendering, no stealth flags)
     stale_after_years: int = 2  # copyright year older than this many years back => stale_site signal
     timeout_s: float = 15.0
     max_text_bytes: int = 400_000
@@ -73,11 +74,13 @@ class SocialCfg(BaseModel):
 
 class ExportCfg(BaseModel):
     formats: list[str] = Field(default_factory=lambda: ["xlsx", "csv"])
+    auto_open: bool = True  # open the finished XLSX with the OS default app (skipped in CI)
 
 
 class Config(BaseModel):
     data_dir: str = "leadforge_data"
     default_region: str = "US"
+    progress_window: bool = True  # headless runs pop a console with the live bar (Windows; skipped in CI)
     discovery: DiscoveryCfg = Field(default_factory=DiscoveryCfg)
     crawl: CrawlCfg = Field(default_factory=CrawlCfg)
     politeness: PolitenessCfg = Field(default_factory=PolitenessCfg)

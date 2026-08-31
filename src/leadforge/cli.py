@@ -244,6 +244,11 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
                            staleness_days=cfg.validation.staleness_days)
     counts = summarize_for_digest(conn, run["id"])
     db.set_stage(conn, run["id"], "exported", **counts)
+    if cfg.export.auto_open:
+        from leadforge.util import open_artifact
+        xlsx = [a for a in artifacts if a.endswith(".xlsx")]
+        if xlsx:
+            open_artifact(xlsx[0])
     _say(ctx, f"exported {counts['leads']} leads -> {artifacts[0]}")
     emit_digest(True, "export", run=run["id"], counts=counts, warnings=top_hooks(conn, run["id"]),
                 artifacts=artifacts, next_=None)
@@ -345,6 +350,45 @@ def config_cmd(ctx: typer.Context,
     else:
         emit_digest(False, "config", warnings=[f"unknown action '{action}' (set|get)"], next_=None)
         raise typer.Exit(2)
+
+
+@app.command()
+def watch(ctx: typer.Context):
+    """Live progress bar for the run happening in this workspace (tail of the progress feed)."""
+    import time as _time
+
+    from leadforge.util import render_progress_line
+
+    cfg = _cfg(ctx)
+    feed = cfg.data_path / "progress.jsonl"
+    typer.echo(f"watching {feed} — Ctrl+C to close (the run itself is unaffected)", err=True)
+    pos = 0
+    idle = 0.0
+    last = None
+    try:
+        while True:
+            if feed.is_file():
+                with open(feed, encoding="utf-8") as fh:
+                    fh.seek(pos)
+                    lines = fh.readlines()
+                    pos = fh.tell()
+                if lines:
+                    idle = 0.0
+                    for ln in lines[-40:]:
+                        try:
+                            last = json.loads(ln)
+                            render_progress_line(last["stage"], last["done"], last["total"], last.get("msg", ""))
+                        except (ValueError, KeyError):
+                            continue
+                else:
+                    idle += 0.5
+            _time.sleep(0.5)
+            if idle > 900:  # 15 min of silence — run is over or long gone
+                typer.echo("\nno progress for 15m — closing. (leadforge status --json for state)", err=True)
+                break
+    except KeyboardInterrupt:
+        pass
+    emit_digest(True, "watch", counts={}, warnings=[], next_=None)
 
 
 @app.command()

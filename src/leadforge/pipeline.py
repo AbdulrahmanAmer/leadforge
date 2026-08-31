@@ -17,13 +17,34 @@ from leadforge.grid import build_plan
 from leadforge.models import ICP
 from leadforge.normalize import to_business
 from leadforge.providers.base import get_chain
-from leadforge.util import LOG, ProviderDegraded, ProviderFailed, emit_progress
+from leadforge.util import (
+    LOG,
+    ProviderDegraded,
+    ProviderFailed,
+    emit_progress,
+    open_artifact,
+    open_progress_window,
+    set_progress_file,
+)
 
 
 # --------------------------------------------------------------------------- discover
+def _progress_ui(cfg: Config) -> None:
+    """Feed file for `leadforge watch` + auto console window when running headless (agent-driven)."""
+    import sys
+    set_progress_file(cfg.data_path / "progress.jsonl")
+    try:
+        headless = not sys.stderr.isatty()
+    except Exception:  # noqa: BLE001
+        headless = True
+    if headless and cfg.progress_window:
+        open_progress_window(cfg.workspace)
+
+
 def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None,
                  provider: str | None = None, run_id: str | None = None) -> tuple[str, dict, list[str]]:
     ensure_ready(cfg)
+    _progress_ui(cfg)
     conn = db.connect(cfg.db_path)
     if run_id is None:
         existing = db.latest_run(conn, icp.icp_hash())
@@ -125,6 +146,7 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
                  limit: int | None = None, skip_dm: bool = False) -> dict:
     ensure_ready(cfg)
     conn = db.connect(cfg.db_path)
+    _progress_ui(cfg)
     run = db.latest_run(conn, icp.icp_hash()) if resume else None
     stage = run["stage"] if run else "planned"
     run_id = run["id"] if run else None
@@ -182,6 +204,10 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         from leadforge.export import export_run, summarize_for_digest, top_hooks
         artifacts = export_run(conn, icp, run_id, cfg.exports_dir, cfg.export.formats,
                                staleness_days=cfg.validation.staleness_days)
+        if cfg.export.auto_open:
+            xlsx = [a for a in artifacts if a.endswith(".xlsx")]
+            if xlsx:
+                open_artifact(xlsx[0])
         ecounts = summarize_for_digest(conn, run_id)
         db.set_stage(conn, run_id, "exported", **ecounts)
         warns += top_hooks(conn, run_id)

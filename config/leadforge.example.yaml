@@ -3,6 +3,7 @@
 # Everything here is optional — these ARE the defaults (env overrides: LEADFORGE_SECTION__KEY=value).
 
 data_dir: leadforge_data          # all state (db, cache, exports, logs, bin) lives here; gitignored
+progress_window: true             # headless runs pop a console with the live progress bar (Windows); set false or LEADFORGE_NO_UI=1 to disable
 default_region: US                # ISO2 fallback for phone parsing when a listing has no country
 
 discovery:
@@ -21,6 +22,7 @@ discovery:
 
 crawl:
   pages_per_site: 6
+  headed_browser: false           # true = browser escalation opens a VISIBLE browser window (debug; renders sites that refuse plain HTTP). No stealth flags ever (icm/SCOPE.md)
   timeout_s: 15
   max_text_bytes: 400000
 
@@ -47,3 +49,4 @@ social:                           # social/video presence signals (unit U4.8)
 
 export:
   formats: [xlsx, csv]
+  auto_open: true                 # open the finished XLSX automatically (skipped in CI / LEADFORGE_NO_UI)

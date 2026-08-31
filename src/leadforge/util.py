@@ -161,6 +161,58 @@ def social_network(url: str) -> str | None:
 _PROG = {"stage": None, "start": 0.0, "spin": 0}
 _SPINNER = "|/-\\"
 _CLEAR = "\r\x1b[2K"
+_PROGRESS_FILE: str | None = None
+
+
+def set_progress_file(path) -> None:
+    """Mirror progress events to a JSONL file so `leadforge watch` (and the auto-opened progress
+    window) can render a live bar for runs launched headless by an agent."""
+    global _PROGRESS_FILE
+    _PROGRESS_FILE = str(path)
+    try:
+        from pathlib import Path as _P
+        _P(path).write_text("", encoding="utf-8")  # fresh run, fresh feed
+    except OSError:
+        pass
+
+
+def _gui_ok() -> bool:
+    import os as _os
+    return not (_os.environ.get("CI") or _os.environ.get("LEADFORGE_NO_UI"))
+
+
+def open_progress_window(workspace) -> None:
+    """Pop a console running `leadforge watch` so a human can see the live bar for a run an
+    agent launched headless. Windows-only; no-op elsewhere, in CI, or when LEADFORGE_NO_UI is set."""
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    if not _gui_ok() or _os.name != "nt" or _os.environ.get("LEADFORGE_WATCH_CHILD"):
+        return
+    try:
+        env = dict(_os.environ, LEADFORGE_WATCH_CHILD="1")
+        _sp.Popen([_sys.executable, "-m", "leadforge", "watch"], cwd=str(workspace), env=env,
+                  creationflags=_sp.CREATE_NEW_CONSOLE)
+    except Exception as e:  # noqa: BLE001 — a UI nicety must never break the pipeline
+        LOG.debug("progress window failed: %s", type(e).__name__)
+
+
+def open_artifact(path) -> None:
+    """Open a finished export with the OS default app. No-op in CI / with LEADFORGE_NO_UI."""
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    if not _gui_ok():
+        return
+    try:
+        if _os.name == "nt":
+            _os.startfile(str(path))  # noqa: S606
+        elif _sys.platform == "darwin":
+            _sp.Popen(["open", str(path)])
+        else:
+            _sp.Popen(["xdg-open", str(path)])
+    except Exception as e:  # noqa: BLE001
+        LOG.debug("auto-open failed: %s", type(e).__name__)
 
 
 def _fmt_secs(sec: float) -> str:
@@ -175,17 +227,30 @@ def _fmt_secs(sec: float) -> str:
 def emit_progress(stage: str, done: int, total: int | None, msg: str = "") -> None:
     import json as _json
     import sys as _sys
-    import time as _time
 
     try:
         human = _sys.stderr.isatty()
     except Exception:  # noqa: BLE001
         human = False
 
+    payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
+    if _PROGRESS_FILE:
+        try:
+            with open(_PROGRESS_FILE, "a", encoding="utf-8") as fh:
+                fh.write(_json.dumps(payload, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
     if not human:
-        payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
         print("LF_PROGRESS " + _json.dumps(payload, ensure_ascii=False), flush=True)
         return
+    render_progress_line(stage, done, total, msg)
+
+
+def render_progress_line(stage: str, done: int, total: int | None, msg: str = "") -> None:
+    """The human-facing in-place bar (used by emit_progress on a TTY and by `leadforge watch`)."""
+    import sys as _sys
+    import time as _time
 
     try:
         now = _time.monotonic()
