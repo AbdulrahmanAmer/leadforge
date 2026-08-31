@@ -206,7 +206,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
         c.alignment = Alignment(vertical="center")
     for r in rows:
         ws.append([_safe_cell(r.get(c, '') if r.get(c, '') != '' else '-') for c in columns])
-    # styling: tier fill, hyperlinks, zebra, widths
+    # styling: tier fill, hyperlinks, widths (deliberately no zebra — tier colors carry the rows)
     tier_col = columns.index("Tier") + 1
     web_col = columns.index("Website") + 1
     maps_col = columns.index("Maps") + 1
