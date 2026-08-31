@@ -62,10 +62,11 @@ class GosomProvider(DiscoveryProvider):
         if d.proxies:
             args += ["-proxies", ",".join(d.proxies)]
         if query.tile is not None and d.grid_mode == "auto":
-            # Geo-targeted tile job. NOTE: flag value formats are live-verified in ICM U8.2 before
-            # grid_mode=auto ships as default; until then grid_mode stays "off" in config.
+            # Tile.bbox is GeoJSON order (minLng,minLat,maxLng,maxLat); gosom -grid-bbox wants
+            # 'minLat,minLon,maxLat,maxLon' (verified against v1.17.4 -h) — swap or we scrape
+            # a box on the wrong continent.
             b = query.tile.bbox
-            args += ["-grid-bbox", f"{b[0]},{b[1]},{b[2]},{b[3]}", "-grid-cell", str(query.tile.cell_km)]
+            args += ["-grid-bbox", f"{b[1]},{b[0]},{b[3]},{b[2]}", "-grid-cell", str(query.tile.cell_km)]
 
         LOG.info("gosom fetch: %s", query.text)
         proc, timed_out = self._run_with_watchdog(args, out_path, d.timeout_min * 60,

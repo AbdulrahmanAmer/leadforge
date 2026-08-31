@@ -120,6 +120,33 @@ def test_gosom_timeout_salvages_partial_output(tmp_path, monkeypatch):
     assert len(listings) == 1 and listings[0].data["title"] == "Partial Shop"
 
 
+def test_gosom_grid_bbox_is_lat_first(tmp_path, monkeypatch):
+    """v0.1.4: Tile.bbox is GeoJSON (minLng,minLat,maxLng,maxLat) but gosom -grid-bbox wants
+    'minLat,minLon,maxLat,maxLon' (per -h). Passing it verbatim scraped a box on the wrong
+    continent — the exact drift U8.2 predicted for grid mode."""
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.discovery.grid_mode = "auto"
+    prov = GosomProvider(cfg)
+    from leadforge.grid import PlannedQuery, Tile
+    from leadforge.providers import gosom as gosom_mod
+    q = PlannedQuery(text="x in y", category="", area="",
+                     tile=Tile(bbox=(-3.80, 40.30, -3.60, 40.50), cell_km=1.0))
+    captured: dict = {}
+
+    def fake_run(args, out, t, **kw):
+        captured["args"] = args
+        out.write_text("", encoding="utf-8")
+        return {"returncode": 0, "stderr": ""}, False
+
+    monkeypatch.setattr(gosom_mod, "gosom_path", lambda cfg: "gosom-fake")
+    monkeypatch.setattr(GosomProvider, "_run_with_watchdog", staticmethod(fake_run))
+    prov.fetch(q)
+    args = captured["args"]
+    bbox = args[args.index("-grid-bbox") + 1]
+    assert bbox == "40.3,-3.8,40.5,-3.6"  # lat first, exactly as gosom -h documents
+
+
 def test_gosom_real_fixture_maps_to_business(tmp_path, monkeypatch):
     """U8.2: real bytes from a live Guildford run must map cleanly through to_business()."""
     from pathlib import Path
