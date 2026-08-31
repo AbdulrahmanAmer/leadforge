@@ -97,6 +97,57 @@ def test_full_pipeline_offline(cfg, sample_icp, patched, monkeypatch, tmp_path):
     assert any(p["is_dm"] == 1 and p["labeled_by"] == "agent" for p in people)
 
 
+def test_resume_recovers_from_killed_enrich(cfg, sample_icp, patched, tmp_path):
+    """v0.1.4: a run killed mid-enrich persisted stage='enriching', which no dispatch block
+    handled — every --resume no-opped with ok=true/next=null, permanently wedging the run."""
+    import yaml
+    icp_path = tmp_path / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
+    from leadforge.pipeline import run_pipeline
+    r1 = run_pipeline(cfg, sample_icp, icp_path)
+    assert r1["stage"] == "dm_pending"
+    conn = db.connect(cfg.db_path)
+    db.set_stage(conn, r1["run"], "enriching")  # simulate the kill
+    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True)
+    assert r2["stage"] == "dm_pending"  # enrich is idempotent; the run moves forward again
+
+
+def test_degraded_queries_are_retried_on_resume(cfg, sample_icp, patched, monkeypatch, tmp_path):
+    """v0.1.4: the digest promised '--resume retries degraded queries' but pending_queries only
+    selected status='pending' — the promised recovery was a silent no-op, tiles lost forever."""
+    import yaml
+
+    from leadforge.pipeline import run_discover, run_pipeline
+    from leadforge.util import ProviderDegraded, now_iso
+    icp_path = tmp_path / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
+
+    def degrading_fetch(self, query, limit=None):
+        raise ProviderDegraded("captcha")
+
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.fetch", degrading_fetch)
+    run_id, counts, warns = run_discover(cfg, sample_icp, icp_path)
+    conn = db.connect(cfg.db_path)
+    degraded = conn.execute("SELECT COUNT(*) c FROM queries WHERE run_id=? AND status='degraded'",
+                            (run_id,)).fetchone()["c"]
+    assert counts["tiles_degraded"] >= 1 and degraded >= 1
+
+    def recovered_fetch(self, query, limit=None):
+        return [RawListing(provider="gosom", fetched_at=now_iso(), data={
+            "title": "Late Arrival Garage", "category": "auto repair shop",
+            "phone": "713-555-0300", "review_rating": "4.0", "review_count": "40",
+            "place_id": "PID_LATE"})]
+
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.fetch", recovered_fetch)
+    r = run_pipeline(cfg, sample_icp, icp_path, resume=True)
+    conn = db.connect(cfg.db_path)
+    left = conn.execute("SELECT COUNT(*) c FROM queries WHERE run_id=? AND status='degraded'",
+                        (run_id,)).fetchone()["c"]
+    assert left == 0  # the promise is now kept
+    assert conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"] >= 1
+    assert r["stage"] in ("dm_pending", "exported")
+
+
 def test_apply_labels_accepts_documented_tsv_variant(cfg, tmp_path):
     """v0.1.4: dm-labeling.md documents 'biz<TAB>pick<TAB>confidence<TAB>title_override' — apply
     must accept it, not just NDJSON (an agent following the docs used to get 'bad label line')."""

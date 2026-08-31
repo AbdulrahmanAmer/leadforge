@@ -21,7 +21,12 @@ _state: dict = {}
 
 
 def _cfg(ctx: typer.Context) -> Config:
-    return ctx.obj["cfg"]
+    cfg = ctx.obj["cfg"]
+    if cfg is None:  # leadforge.yaml is invalid — fail with a digest, and keep `config set` usable to repair
+        emit_digest(False, "config-load", warnings=[ctx.obj.get("cfg_error", "leadforge.yaml invalid")],
+                    next_="leadforge config set <key> <value> to repair, or fix/delete leadforge.yaml")
+        raise typer.Exit(2)
+    return cfg
 
 
 @app.callback()
@@ -31,7 +36,14 @@ def _root(
     json_only: bool = typer.Option(False, "--json", help="suppress human output; emit only the digest line"),
     verbose: bool = typer.Option(False, "--verbose", help="debug logging to the logfile"),
 ):
-    cfg = load_config(".", data_dir_override=data_dir)
+    # A broken leadforge.yaml must not brick the whole CLI: commands get a clean digest via _cfg(),
+    # and `config set` / `version` (which never touch cfg) still run so the workspace can be repaired.
+    try:
+        cfg = load_config(".", data_dir_override=data_dir)
+    except Exception as e:  # noqa: BLE001 — any parse/validation error, reported not stacktraced
+        ctx.obj = {"cfg": None, "json_only": json_only,
+                   "cfg_error": f"leadforge.yaml invalid: {type(e).__name__}: {str(e)[:100]}"}
+        return
     setup_logging(cfg.logs_dir, verbose=verbose)
     ctx.obj = {"cfg": cfg, "json_only": json_only}
 
@@ -138,12 +150,16 @@ def enrich(
     ctx: typer.Context,
     icp: str = typer.Option("icp.yaml", "--icp", help="used for caps.max_sites"),
     limit: int = typer.Option(0, "--limit"),
-    stage: str = typer.Option("all", "--stage", help="all|site|validate"),
+    stage: str = typer.Option("all", "--stage", help="all|site|registry|validate"),
 ):
     """Crawl business sites, extract + validate contacts, build DM candidates."""
     from leadforge.enrich.runner import run_enrich
 
     cfg = _cfg(ctx)
+    if stage not in ("all", "site", "registry", "validate"):
+        # a typo used to be a silent zero-work success — an agent read that as "nothing left"
+        emit_digest(False, "enrich", warnings=[f"unknown --stage '{stage}' (all|site|registry|validate)"])
+        raise typer.Exit(2)
     conn = db.connect(cfg.db_path)
     run = db.latest_run(conn)
     # site budget: explicit --limit wins, else the campaign's cap, else a safe default
@@ -155,7 +171,11 @@ def enrich(
             max_sites = load_icp(Path(icp)).caps.max_sites
         except LeadForgeError:
             max_sites = 300
-    counts = run_enrich(conn, cfg, max_sites, stage=stage)
+    try:
+        counts = run_enrich(conn, cfg, max_sites, stage=stage)
+    except LeadForgeError as e:
+        emit_digest(False, "enrich", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
+        raise typer.Exit(e.exit_code) from e
     warns = [f"{counts['needs_browser']} sites need a browser pass — pip install -e .[browser]"] if counts.get("needs_browser") else []
     _say(ctx, f"sites={counts['sites_crawled']} contacts={counts['contacts']} dm_candidates={counts['dm_candidates']}")
     emit_digest(True, "enrich", run=run["id"] if run else None, counts=counts, warnings=warns,
@@ -181,7 +201,11 @@ def dm_export(
 
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
-    icp_obj = load_icp(Path(icp))
+    try:
+        icp_obj = load_icp(Path(icp))
+    except LeadForgeError as e:
+        emit_digest(False, "dm export", warnings=[str(e)[:120]])
+        raise typer.Exit(e.exit_code) from e
     out_path = Path(out) if out else cfg.workspace / ("dm_batch.tsv" if tsv else "dm_batch.ndjson")
     n, remaining = export_batch(conn, icp_obj, out_path, max_biz=max_biz, tsv=tsv)
     _say(ctx, f"batch={n} remaining={remaining} -> {out_path}")
@@ -219,7 +243,11 @@ def score(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
     if not run:
         emit_digest(False, "score", warnings=["no run found; discover first"])
         raise typer.Exit(4)
-    counts = score_run(conn, load_icp(Path(icp)), run["id"])
+    try:
+        counts = score_run(conn, load_icp(Path(icp)), run["id"])
+    except LeadForgeError as e:
+        emit_digest(False, "score", warnings=[str(e)[:120]])
+        raise typer.Exit(e.exit_code) from e
     _say(ctx, f"scored={counts['scored']} A={counts['tier_a']} B={counts['tier_b']} C={counts['tier_c']} DQ={counts['dq']}")
     emit_digest(True, "score", run=run["id"], counts=counts, next_="leadforge export")
 
@@ -240,8 +268,12 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
         raise typer.Exit(4)
     out_dir = Path(out) if out else cfg.exports_dir
     formats = [f.strip() for f in format_.split(",") if f.strip()] if format_ else cfg.export.formats
-    artifacts = export_run(conn, load_icp(Path(icp)), run["id"], out_dir, formats,
-                           staleness_days=cfg.validation.staleness_days)
+    try:
+        artifacts = export_run(conn, load_icp(Path(icp)), run["id"], out_dir, formats,
+                               staleness_days=cfg.validation.staleness_days)
+    except LeadForgeError as e:
+        emit_digest(False, "export", warnings=[str(e)[:120]])
+        raise typer.Exit(e.exit_code) from e
     counts = summarize_for_digest(conn, run["id"])
     db.set_stage(conn, run["id"], "exported", **counts)
     if cfg.export.auto_open:
@@ -296,12 +328,23 @@ def status(ctx: typer.Context, run_id: str | None = typer.Option(None, "--run"))
 
 
 @app.command()
-def suppress(ctx: typer.Context, action: str = typer.Argument(..., help="add|list"), value: str = typer.Argument("")):
+def suppress(ctx: typer.Context, action: str = typer.Argument(..., help="add|list"), value: str = typer.Argument(""),
+             kind: str | None = typer.Option(None, "--kind", help="domain|email|place_id (default: guessed from the value)")):
     """Manage the opt-out suppression list (domain/email/place_id)."""
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
+    if action not in ("add", "list"):
+        # 'suppress remove x' used to silently print the list and report ok=true
+        emit_digest(False, "suppress", warnings=[f"unknown action '{action}' (add|list)"])
+        raise typer.Exit(2)
     if action == "add":
-        kind = "email" if "@" in value else "domain"
+        if not value.strip():
+            emit_digest(False, "suppress", warnings=["empty value — nothing to suppress"])
+            raise typer.Exit(2)
+        if kind is not None and kind not in ("domain", "email", "place_id"):
+            emit_digest(False, "suppress", warnings=[f"unknown --kind '{kind}' (domain|email|place_id)"])
+            raise typer.Exit(2)
+        kind = kind or ("email" if "@" in value else "domain")
         db.suppress(conn, kind, value, reason="cli")
         n = conn.execute("SELECT COUNT(*) c FROM suppression").fetchone()["c"]
         _say(ctx, f"suppressed {kind}: {value}")
@@ -325,20 +368,30 @@ def config_cmd(ctx: typer.Context,
     data = data or {}
     parts = key.split(".")
     if action == "set":
+        try:
+            parsed = yaml.safe_load(value) if value else value
+        except yaml.YAMLError as e:
+            emit_digest(False, "config", warnings=[f"value is not parseable YAML: {value[:60]}"], next_=None)
+            raise typer.Exit(2) from e
         node = data
         for p in parts[:-1]:
             node = node.setdefault(p, {})
             if not isinstance(node, dict):
                 emit_digest(False, "config", warnings=[f"'{p}' is not a mapping in leadforge.yaml"], next_=None)
                 raise typer.Exit(2)
-        node[parts[-1]] = yaml.safe_load(value) if value else value
-        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
-        # validate the result parses into Config before declaring success
-        try:
-            load_config(".")
-        except Exception as e:  # noqa: BLE001 — report, don't stacktrace
-            emit_digest(False, "config", warnings=[f"invalid value for {key}: {type(e).__name__}"], next_=None)
-            raise typer.Exit(2) from e
+        node[parts[-1]] = parsed
+        # validate BEFORE writing: a bad value written first used to brick every command
+        # (the root callback loads leadforge.yaml), including the repair `config set` itself
+        merged = yaml.safe_dump(data, sort_keys=False)
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "leadforge.yaml").write_text(merged, encoding="utf-8")
+            try:
+                load_config(td)
+            except Exception as e:  # noqa: BLE001 — report, don't stacktrace
+                emit_digest(False, "config", warnings=[f"invalid value for {key}: {type(e).__name__}"], next_=None)
+                raise typer.Exit(2) from e
+        path.write_text(merged, encoding="utf-8")
         _say(ctx, f"{key} = {value!r} written to {path}")
         emit_digest(True, "config", counts={"set": 1}, next_=None)
     elif action == "get":
@@ -360,6 +413,9 @@ def watch(ctx: typer.Context):
     from leadforge.util import render_progress_line
 
     cfg = _cfg(ctx)
+    import os as _os
+    if _os.name == "nt":
+        _os.system("")  # enables VT escape processing on legacy conhost (documented side effect)
     feed = cfg.data_path / "progress.jsonl"
     typer.echo(f"watching {feed} — Ctrl+C to close (the run itself is unaffected)", err=True)
     pos = 0
@@ -368,6 +424,8 @@ def watch(ctx: typer.Context):
     try:
         while True:
             if feed.is_file():
+                if feed.stat().st_size < pos:
+                    pos = 0  # feed truncated = a new run started in this workspace — start over
                 with open(feed, encoding="utf-8") as fh:
                     fh.seek(pos)
                     lines = fh.readlines()
@@ -382,6 +440,8 @@ def watch(ctx: typer.Context):
                             continue
                 else:
                     idle += 0.5
+            else:
+                idle += 0.5  # no feed at all still counts toward the 15m timeout
             _time.sleep(0.5)
             if idle > 900:  # 15 min of silence — run is over or long gone
                 typer.echo("\nno progress for 15m — closing. (leadforge status --json for state)", err=True)
@@ -403,7 +463,14 @@ def main() -> None:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    app()
+    try:
+        app()
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:  # noqa: BLE001 — the digest contract holds even on unexpected crashes
+        emit_digest(False, "error", warnings=[f"{type(e).__name__}: {str(e)[:120]}"],
+                    next_="see the logfile; leadforge doctor if environment-related")
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

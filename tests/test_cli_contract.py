@@ -163,6 +163,37 @@ def test_dm_apply_digest_contract(offline, tmp_path):
         assert d["cmd"] == "dm apply"
 
 
+def test_config_set_invalid_value_never_bricks(tmp_path):
+    """v0.1.4: `config set` wrote first and validated second — one bad value killed EVERY
+    command (incl. the repair set and version) with a traceback and no digest."""
+    bad = _digest(_run(["--json", "config", "set", "crawl.timeout_s", "abc"], tmp_path).stdout)
+    assert bad["ok"] is False
+    assert _digest(_run(["--json", "version"], tmp_path).stdout)["ok"] is True
+    good = _digest(_run(["--json", "config", "set", "crawl.timeout_s", "15"], tmp_path).stdout)
+    assert good["ok"] is True
+
+
+def test_hand_broken_yaml_degrades_with_digest_and_is_repairable(tmp_path):
+    (tmp_path / "leadforge.yaml").write_text("crawl:\n  timeout_s: notanumber\n", encoding="utf-8")
+    d = _digest(_run(["--json", "status"], tmp_path).stdout)
+    assert d["ok"] is False  # clean digest, not a pydantic traceback
+    fix = _digest(_run(["--json", "config", "set", "crawl.timeout_s", "15"], tmp_path).stdout)
+    assert fix["ok"] is True
+    assert _digest(_run(["--json", "status"], tmp_path).stdout)["ok"] is True
+
+
+def test_enrich_stage_typo_is_an_error_not_silent_success(tmp_path):
+    d = _digest(_run(["--json", "enrich", "--stage", "sites"], tmp_path).stdout)
+    assert d["ok"] is False and any("unknown --stage" in w for w in d["warnings"])
+
+
+def test_suppress_unknown_action_is_an_error(tmp_path):
+    d = _digest(_run(["--json", "suppress", "remove", "foo.example"], tmp_path).stdout)
+    assert d["ok"] is False
+    d2 = _digest(_run(["--json", "suppress", "add", ""], tmp_path).stdout)
+    assert d2["ok"] is False  # empty value used to insert an empty domain row
+
+
 def test_config_set_get_roundtrip(offline):
     runner = offline
     d = _invoke_digest(runner, ["config", "set", "registry.companies_house_key", "test-key-123"])

@@ -38,7 +38,7 @@ def _progress_ui(cfg: Config) -> None:
     except Exception:  # noqa: BLE001
         headless = True
     if headless and cfg.progress_window:
-        open_progress_window(cfg.workspace)
+        open_progress_window(cfg.workspace, data_dir=cfg.data_path)
 
 
 def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None,
@@ -54,6 +54,10 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
             _plan_into_db(conn, cfg, icp, run_id)
     db.set_stage(conn, run_id, "discovering")
+    # a degraded query (captcha/timeout) is retryable, and the digest tells the agent
+    # "rerun with --resume later" — so a resumed discover must actually re-attempt them
+    conn.execute("UPDATE queries SET status='pending' WHERE run_id=? AND status='degraded'", (run_id,))
+    conn.commit()
 
     chain = get_chain(cfg, only=provider)
     warns: list[str] = []
@@ -99,7 +103,8 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     if still_pending == 0 or processed >= hard_cap:
         db.set_stage(conn, run_id, "discovered", businesses=total_biz)
     if degraded:
-        warns.append(f"{degraded} queries degraded (captcha/timeout); rerun with --resume later")
+        warns.append(f"{degraded} queries degraded (captcha/timeout); "
+                     "run --resume retries them until the DM gate")
     counts = {"businesses": total_biz, "new": new_count, "tiles_degraded": degraded,
               "queries_done": len(pending) - still_pending}
     return run_id, counts, warns[:5]
@@ -153,6 +158,13 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     warns: list[str] = []
     artifacts: list[str] = []
 
+    # Degraded discovery tiles (captcha/timeout) are re-attempted on resume until the DM gate;
+    # past it a resume means "finish the run", not "scrape more". Re-entering discovery moves the
+    # stage back through discovered -> enrich, so late arrivals still get enriched normally.
+    if run_id is not None and stage in ("discovered", "enriching") and conn.execute(
+            "SELECT 1 FROM queries WHERE run_id=? AND status='degraded' LIMIT 1", (run_id,)).fetchone():
+        stage = "discovering"
+
     # DISCOVER
     if stage in ("planned", "discovering") or run_id is None:
         run_id, dcounts, dwarn = run_discover(cfg, icp, icp_path, limit=limit, run_id=run_id)
@@ -161,8 +173,9 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
 
     conn = db.connect(cfg.db_path)  # refresh connection view
 
-    # ENRICH
-    if stage == "discovered":
+    # ENRICH ('enriching' = a previous run died mid-enrich; the stage is idempotent —
+    # businesses_for_enrich skips already-crawled rows — so resume just re-enters it)
+    if stage in ("discovered", "enriching"):
         db.set_stage(conn, run_id, "enriching")
         from leadforge.enrich.runner import run_enrich
         ecounts = run_enrich(conn, cfg, limit or icp.caps.max_sites, stage="all")

@@ -174,7 +174,7 @@ def social_network(url: str) -> str | None:
 #  - agent/pipe (stdout not a TTY): bounded `LF_PROGRESS {json}` lines on stdout (docs/06)
 #  - human terminal (stderr a TTY): ONE in-place animated bar with %, ETA and live status;
 #    each finished stage collapses to a permanent one-line summary above the bar (the history).
-_PROG = {"stage": None, "start": 0.0, "spin": 0}
+_PROG = {"stage": None, "start": 0.0, "spin": 0, "done0": 0}
 _SPINNER = "|/-\\"
 _CLEAR = "\r\x1b[2K"
 _PROGRESS_FILE: str | None = None
@@ -197,18 +197,28 @@ def _gui_ok() -> bool:
     return not (_os.environ.get("CI") or _os.environ.get("LEADFORGE_NO_UI"))
 
 
-def open_progress_window(workspace) -> None:
+_WINDOW_SPAWNED = False
+
+
+def open_progress_window(workspace, data_dir=None) -> None:
     """Pop a console running `leadforge watch` so a human can see the live bar for a run an
-    agent launched headless. Windows-only; no-op elsewhere, in CI, or when LEADFORGE_NO_UI is set."""
+    agent launched headless. Windows-only; no-op elsewhere, in CI, or when LEADFORGE_NO_UI is set.
+    Once per process — run_pipeline and run_discover both call this on the same run."""
+    global _WINDOW_SPAWNED
     import os as _os
     import subprocess as _sp
     import sys as _sys
-    if not _gui_ok() or _os.name != "nt" or _os.environ.get("LEADFORGE_WATCH_CHILD"):
+    if _WINDOW_SPAWNED or not _gui_ok() or _os.name != "nt" or _os.environ.get("LEADFORGE_WATCH_CHILD"):
         return
     try:
         env = dict(_os.environ, LEADFORGE_WATCH_CHILD="1")
-        _sp.Popen([_sys.executable, "-m", "leadforge", "watch"], cwd=str(workspace), env=env,
+        # pass the resolved data dir through, or a --data-dir run's window tails the wrong feed
+        args = [_sys.executable, "-m", "leadforge"]
+        if data_dir is not None:
+            args += ["--data-dir", str(data_dir)]
+        _sp.Popen([*args, "watch"], cwd=str(workspace), env=env,
                   creationflags=_sp.CREATE_NEW_CONSOLE)
+        _WINDOW_SPAWNED = True
     except Exception as e:  # noqa: BLE001 — a UI nicety must never break the pipeline
         LOG.debug("progress window failed: %s", type(e).__name__)
 
@@ -274,7 +284,7 @@ def render_progress_line(stage: str, done: int, total: int | None, msg: str = ""
             if _PROG["stage"] is not None:  # previous stage becomes a permanent history line
                 _sys.stderr.write(_CLEAR + f"\x1b[32m[done]\x1b[0m {_PROG['stage']} "
                                   f"({_fmt_secs(now - _PROG['start'])})\n")
-            _PROG.update(stage=stage, start=now)
+            _PROG.update(stage=stage, start=now, done0=max(0, done - 1))
         _PROG["spin"] = (_PROG["spin"] + 1) % len(_SPINNER)
         spin = _SPINNER[_PROG["spin"]]
         elapsed = now - _PROG["start"]
@@ -283,7 +293,10 @@ def render_progress_line(stage: str, done: int, total: int | None, msg: str = ""
             width = 22
             filled = min(width, round(width * done / max(1, total)))
             bar = "\x1b[36m" + "█" * filled + "\x1b[90m" + "░" * (width - filled) + "\x1b[0m"
-            eta = f" ~{_fmt_secs(elapsed / done * (total - done))} left" if 0 < done < total else ""
+            # rate from items seen by THIS process only — a watch window attached mid-run must not
+            # divide its own short elapsed by the run's full done count (ETA was ~4x under)
+            seen = done - _PROG["done0"]
+            eta = f" ~{_fmt_secs(elapsed / seen * (total - done))} left" if 0 < seen and done < total else ""
             line = (f"{spin} \x1b[1m{stage}\x1b[0m {bar} {pct:3d}% ({done}/{total})"
                     f"  {msg[:46]}  {_fmt_secs(elapsed)}{eta}")
         else:
