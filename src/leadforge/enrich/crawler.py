@@ -149,7 +149,6 @@ class SiteCrawler:
         result = CrawlResult(ok=False)
         if not self._allowed(website):
             result.error = "robots-disallowed"  # the site said no — the browser must not go either
-            result.needs_browser = True  # WATCHED-FAIL MUTATION
             return result
         resp = self._get(website)
         if resp is None:

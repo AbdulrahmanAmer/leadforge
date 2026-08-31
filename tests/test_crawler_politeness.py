@@ -13,6 +13,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     requests: list[str] = []
     home_html = b"<html><body>hello</body></html>"
     robots = b""
+    page_status = 200  # non-robots paths: set 403 to fake a WAF block
 
     def do_GET(self):  # noqa: N802 — http.server API
         type(self).requests.append(self.path)
@@ -20,6 +21,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             body = self.robots
         elif self.path.endswith(".xml"):
             self.send_response(404)
+            self.end_headers()
+            return
+        elif type(self).page_status != 200:
+            self.send_response(type(self).page_status)
             self.end_headers()
             return
         else:
@@ -40,6 +45,7 @@ def server():
         requests = []
         robots = b""
         home_html = _Handler.home_html
+        page_status = 200
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -78,6 +84,33 @@ def test_robots_disallow_is_respected(tmp_path, monkeypatch, server):
     finally:
         crawler.close()
     assert "/private" not in handler.requests  # never even requested
+
+
+def test_crawl_of_robots_disallowed_home_never_flags_browser(tmp_path, monkeypatch, server):
+    """The red line, proven at crawl() level against a real server (the runner-level test
+    monkeypatches crawl() away, which is how a needs_browser mutation once went green)."""
+    base, handler = server
+    handler.robots = b"User-agent: *\nDisallow: /\n"
+    cfg, crawler = _crawler(tmp_path, monkeypatch)
+    try:
+        res = crawler.crawl(base)
+    finally:
+        crawler.close()
+    assert res.ok is False and res.error == "robots-disallowed"
+    assert res.needs_browser is False  # a site that said no must never be browser-rendered
+    assert all(p == "/robots.txt" for p in handler.requests)  # homepage never even requested
+
+
+def test_crawl_of_blocked_home_flags_browser(tmp_path, monkeypatch, server):
+    base, handler = server
+    handler.page_status = 403  # WAF-style block for the plain HTTP client; robots readable + permissive
+    cfg, crawler = _crawler(tmp_path, monkeypatch)
+    try:
+        res = crawler.crawl(base)
+    finally:
+        crawler.close()
+    assert res.ok is False
+    assert res.needs_browser is True
 
 
 def test_pages_per_site_cap(tmp_path, monkeypatch, server):
