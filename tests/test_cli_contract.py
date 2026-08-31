@@ -244,3 +244,66 @@ def test_progress_lines_are_bounded_json_and_digest_stays_unique(offline):
     for ln in progress:
         d = json.loads(ln[len("LF_PROGRESS "):])
         assert {"stage", "done", "total", "msg"} <= set(d)
+
+
+# --- v0.2.0: render-check diagnostic ----------------------------------------------------------
+def test_render_check_reports_robots_refusal_without_rendering(tmp_path):
+    """The red line, at the diagnostic level: a robots-disallowed URL must be refused, and the
+    command must say so in the digest rather than rendering it anyway."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        rendered_paths: list[str] = []
+
+        def do_GET(self):  # noqa: N802
+            H.rendered_paths.append(self.path)
+            body = b"User-agent: *\nDisallow: /\n" if self.path == "/robots.txt" else b"<html>hi</html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/"
+        d = _digest(_run(["--json", "render-check", url], tmp_path).stdout)
+    finally:
+        srv.shutdown()
+    assert d["cmd"] == "render-check" and d["ok"] is False
+    assert any("robots" in w.lower() for w in d["warnings"])
+    assert H.rendered_paths == ["/robots.txt"]  # the page itself was never fetched
+
+
+def test_render_check_emits_a_digest_for_an_allowed_url(tmp_path):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = (b"" if self.path == "/robots.txt"
+                    else b"<html><body>Call 020 7946 0958 <a href='mailto:hi@x.example'>m</a></body></html>")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_address[1]}/"
+        d = _digest(_run(["--json", "render-check", url], tmp_path).stdout)
+    finally:
+        srv.shutdown()
+    assert d["cmd"] == "render-check" and d["ok"] is True
+    assert d["counts"]["static_ok"] is True          # plain client served it; no render needed
+    assert d["counts"]["emails"] >= 1

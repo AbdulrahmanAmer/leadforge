@@ -465,6 +465,60 @@ def watch(ctx: typer.Context):
     emit_digest(True, "watch", counts={}, warnings=[], next_=None)
 
 
+@app.command("render-check")
+def render_check(ctx: typer.Context, url: str = typer.Argument(..., help="one site URL to diagnose"),
+                 force: bool = typer.Option(False, "--force", help="render even if the plain client succeeded")):
+    """Diagnose the browser fallback on ONE url: robots -> plain fetch -> rendered fetch -> contacts.
+
+    Makes the bot-wall escalation observable without running a whole campaign. Honors robots exactly
+    like the crawler: a disallowed URL is never fetched or rendered.
+    """
+    from leadforge.enrich import browser
+    from leadforge.enrich.crawler import SiteCrawler
+    from leadforge.enrich.extract import extract_emails, extract_people, extract_phones
+    from leadforge.util import HostThrottle
+
+    cfg = _cfg(ctx)
+    throttle = HostThrottle(cfg.politeness.delay_s)
+    crawler = SiteCrawler(cfg, throttle)
+    counts: dict = {"static_ok": False, "needs_browser": False, "rendered": False,
+                    "emails": 0, "phones": 0, "people": 0}
+    warns: list[str] = []
+    try:
+        if not crawler._allowed(url):
+            emit_digest(False, "render-check", counts=counts,
+                        warnings=[f"robots.txt disallows {url} — not fetched, not rendered"],
+                        next_="nothing to do: the site opted out")
+            raise typer.Exit(0)
+        res = crawler.crawl(url)
+        counts["static_ok"] = res.ok
+        counts["needs_browser"] = res.needs_browser
+        if res.error:
+            warns.append(f"static: {res.error}")
+        html = ""
+        if res.ok and not force:
+            html = res.pages[0].html if res.pages else ""
+        elif not browser.is_available():
+            warns.append("browser extra not installed — pip install -e .[browser] && crawl4ai-setup")
+        elif res.needs_browser or force:
+            html = browser.fetch_rendered(url, cfg, throttle)
+            counts["rendered"] = bool(html)
+            if not html:
+                warns.append("render returned nothing (blocked, failed, or 4xx+)")
+        if html:
+            text = SiteCrawler.extract_text(html)
+            region = cfg.default_region
+            counts["emails"] = len(extract_emails(html, text))
+            counts["phones"] = len(extract_phones(html, text, region))
+            counts["people"] = len(extract_people(text, url))
+            counts["bytes"] = len(html)
+    finally:
+        crawler.close()
+    _say(ctx, f"static_ok={counts['static_ok']} needs_browser={counts['needs_browser']} "
+              f"rendered={counts['rendered']} emails={counts['emails']} phones={counts['phones']}")
+    emit_digest(True, "render-check", counts=counts, warnings=warns, next_=None)
+
+
 @app.command()
 def version():
     """Print version."""

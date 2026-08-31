@@ -32,9 +32,13 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
 - [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
 - [x] **U3.7** gosom serve mode — CLOSED BY DESIGN (multi-hour runs handled by resume + stall watchdog instead)
-- [x] **U4.5** Browser escalation — implemented + wiring tests; crawl4ai IS installed on this machine
-      (2026-08-31); v0.1.4 added the HTTP-blocked fallback + render rejection + signal parity.
-      Live render against a real JS-only site remains UNPROVEN (no live blocked-site run yet).
+- [x] **U4.5** Browser escalation — **LIVE-PROVEN 2026-08-31 (v0.2.0)** via `leadforge render-check`
+      against 7 real Birmingham sites: `shamsautos.com` 403s the plain client, renders in a real
+      browser, and yields 1 email the static path lost — the fallback's whole purpose, demonstrated
+      end to end. `example.com --force` renders in 0.54s (crawl4ai works on this machine).
+      3 sites (msautocentreltd / ritz-garage / wmss) 403 the browser too and are reported honestly
+      as "render returned nothing". 2 sites (aargroupltd / parkmillsautocentre) are robots-disallowed
+      and were refused without a single page fetch — the red line, verified live, not just in tests.
 - [x] **U4.6** Registry cross-check — implemented + fixture tests; Companies House LIVE-PROVEN (18 real directors, Guildford campaign); OpenCorporates fixture-tested
 - [x] **U4.7** GLiNER DM upgrade — hook + selection rule + tests (skip cleanly without [ner])
 - [x] **U4.8** Social/video presence — implemented (youtube via yt-dlp; others honest 'unknown'), linkedin-exclusion tested
