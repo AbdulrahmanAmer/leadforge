@@ -143,3 +143,11 @@ def test_email_matches_business():
     assert not email_matches_business("tool@gov.uk", "bluetickaccountants.com")
     assert not email_matches_business("client@othersite.com", "acme.co.uk")
     assert email_matches_business("x@anything.com", None)  # no domain to compare
+
+
+def test_suffix_truncated_email_is_dropped():
+    from leadforge.enrich.extract import extract_emails
+    html = "<p><b>i</b>nfo@cmbpartners.co.uk and info@cmbpartners.co.uk</p>"
+    out = extract_emails(html, "info@cmbpartners.co.uk")
+    assert "info@cmbpartners.co.uk" in out
+    assert "nfo@cmbpartners.co.uk" not in out

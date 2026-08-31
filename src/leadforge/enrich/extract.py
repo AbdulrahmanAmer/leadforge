@@ -94,7 +94,10 @@ def extract_emails(html: str, text: str) -> dict[str, str]:
             _add(m)
     for m in AT_DOT_RE.finditer(text):
         _add(f"{m.group(1)}@{m.group(2)}.{m.group(3)}")
-    return found
+    # Markup can split a local part mid-word ("<b>i</b>nfo@x.com" -> regex sees "nfo@x.com").
+    # When one found email is a strict suffix of another, the longer one is the real address.
+    return {e: lab for e, lab in found.items()
+            if not any(o != e and o.endswith(e) for o in found)}
 
 
 FREEMAIL_DOMAINS = {
@@ -225,11 +228,19 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         # character gap between the two spans (0 when adjacent/overlapping)
         return max(t["start"] - n["end"], n["start"] - t["end"], 0)
 
+    def _plausible_name(name: str) -> bool:
+        words = name.split()
+        return (1 <= len(words) <= 4
+                and all(w[0].isupper() for w in words)
+                and not any(w.casefold() in NAME_WORD_STOPLIST for w in words)
+                and name.casefold() not in NAME_STOPWORDS)
+
     out: list[PersonCandidate] = []
     seen: set[str] = set()
     for n in names:
-        key = n["text"].casefold()
-        if key in seen:
+        name = re.sub(r"\s+", " ", n["text"]).strip()  # GLiNER spans can cross layout newlines
+        key = name.casefold()
+        if key in seen or not _plausible_name(name):
             continue
         # a title belongs to a name only when nearly adjacent — 40 chars, not a whole sentence away
         near = [t for t in titles if _gap(t, n) <= 40]
@@ -237,7 +248,8 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         seen.add(key)
         snip_start = max(0, n["start"] - 140)
         snippet = re.sub(r"\s+", " ", text[snip_start : snip_start + 300]).strip()
-        out.append(PersonCandidate(name=n["text"].strip(), title=title.title(), snippet=snippet, source_url=source_url))
+        out.append(PersonCandidate(name=name, title=re.sub(r"\s+", " ", title).strip().title(),
+                                   snippet=snippet, source_url=source_url))
         if len(out) >= max_candidates:
             break
     return out
