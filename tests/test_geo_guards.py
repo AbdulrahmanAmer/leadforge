@@ -122,3 +122,31 @@ def test_max_leads_is_a_hard_stop(cfg, sample_icp, monkeypatch, tmp_path):
     conn = db.connect(cfg.db_path)
     n = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
     assert n <= 3, f"max_leads=3 but {n} businesses upserted"
+
+
+def test_duplicate_listings_do_not_consume_max_leads(cfg, sample_icp, monkeypatch, tmp_path):
+    """Found live: a 1000-cap run stopped at 709 uniques because cross-category duplicates
+    counted against the cap. The cap must count unique upserts only."""
+    import yaml
+
+    from leadforge.models import RawListing
+    from leadforge.util import now_iso
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.available", lambda self: (True, "mock"))
+    # every query returns the SAME 5 businesses -> duplicates across queries
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.fetch", lambda self, q, limit=None: [
+        RawListing(provider="gosom", fetched_at=now_iso(), data={
+            "title": f"Shop {i}", "address": f"{i} A St, Houston, TX 77001",
+            "phone": f"713-555-0{i:03d}", "place_id": f"PID_{i}"}) for i in range(5)])
+    sample_icp.caps.max_leads = 8
+    icp_path = tmp_path / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
+    from leadforge import db
+    from leadforge.pipeline import run_discover
+    run_id, counts, _ = run_discover(cfg, sample_icp, icp_path)
+    conn = db.connect(cfg.db_path)
+    n = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
+    assert n == 5  # all uniques kept
+    # all queries ran (duplicates never ate the cap of 8)
+    pending = conn.execute("SELECT COUNT(*) c FROM queries WHERE status='pending'").fetchone()["c"]
+    assert pending == 0

@@ -61,7 +61,9 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
                 continue
             _bid, created = db.upsert_business(conn, biz)
             per_query_new += int(created)
-            processed += 1
+            # cap counts UNIQUE leads, not raw listings: cross-category duplicates (a garage that is
+            # also an MOT centre) must not consume max_leads (found live: 1000-cap run stopped at 709)
+            processed += int(created)
             if processed >= hard_cap:
                 break
         new_count += per_query_new
