@@ -162,3 +162,46 @@ def extract_people(text: str, source_url: str, max_candidates: int = 8) -> list[
         if len(out) >= max_candidates:
             return out
     return out
+
+
+# --- U4.7: optional GLiNER zero-shot upgrade (extra [ner]) -----------------------------------
+_GLINER_MODEL = None
+
+
+def ner_available() -> bool:
+    try:
+        import gliner  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _gliner_model():
+    global _GLINER_MODEL
+    if _GLINER_MODEL is None:
+        from gliner import GLiNER
+        _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+    return _GLINER_MODEL
+
+
+def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
+    """GLiNER path — same return type and caps as extract_people(); caller falls back when unavailable."""
+    model = _gliner_model()
+    ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.5)
+    names = [e for e in ents if e["label"] == "person name"]
+    titles = [e for e in ents if e["label"] == "job title"]
+    out: list[PersonCandidate] = []
+    seen: set[str] = set()
+    for n in names:
+        key = n["text"].casefold()
+        if key in seen:
+            continue
+        near = [t for t in titles if abs(t["start"] - n["end"]) <= 80 or abs(n["start"] - t["end"]) <= 80]
+        title = min(near, key=lambda t: min(abs(t["start"] - n["end"]), abs(n["start"] - t["end"])))["text"] if near else ""
+        seen.add(key)
+        snip_start = max(0, n["start"] - 140)
+        snippet = re.sub(r"\s+", " ", text[snip_start : snip_start + 300]).strip()
+        out.append(PersonCandidate(name=n["text"].strip(), title=title.title(), snippet=snippet, source_url=source_url))
+        if len(out) >= max_candidates:
+            break
+    return out

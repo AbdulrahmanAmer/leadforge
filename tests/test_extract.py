@@ -56,3 +56,20 @@ def test_extract_people_title_name():
     assert "Joe Alvarez" in names or "Maria Chen" in names
     for p in people:
         assert len(p.snippet) <= 300 and p.source_url.endswith("/about")
+
+
+# --- U4.7 GLiNER path (skips when [ner] extra absent) ----------------------------------------
+def test_gliner_path_matches_heuristic_quality():
+    import pytest as _pytest
+    _pytest.importorskip("gliner")
+    from leadforge.enrich.extract import extract_people, extract_people_ner
+    text = "About us. Jane Doe, Owner. Contact John Smith — Managing Director — for quotes."
+    heur = extract_people(text, "http://x")
+    ner = extract_people_ner(text, "http://x")
+    assert len(ner) >= len(heur)
+    assert all(len(c.snippet) <= 300 for c in ner)
+
+
+def test_ner_available_is_bool():
+    from leadforge.enrich.extract import ner_available
+    assert ner_available() in (True, False)

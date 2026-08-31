@@ -13,7 +13,14 @@ from leadforge import db
 from leadforge.config import Config
 from leadforge.enrich import browser
 from leadforge.enrich.crawler import SiteCrawler
-from leadforge.enrich.extract import extract_emails, extract_people, extract_phones, extract_socials
+from leadforge.enrich.extract import (
+    extract_emails,
+    extract_people,
+    extract_people_ner,
+    extract_phones,
+    extract_socials,
+    ner_available,
+)
 from leadforge.enrich.validate import validate_email
 from leadforge.models import Contact, Evidence, Person
 from leadforge.normalize import COUNTRY_TO_REGION
@@ -37,6 +44,8 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         if not res.ok:
             return out
         region = _region_for_business(b, cfg.default_region)
+        # U4.7: GLiNER zero-shot people extraction when the [ner] extra is installed, else heuristic.
+        people_fn = extract_people_ner if ner_available() else extract_people
         for page in res.pages:
             for email, label in extract_emails(page.html, page.text).items():
                 out["emails"].setdefault(email, {"label": label, "url": page.url})
@@ -45,7 +54,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                     out["phones"].append(phone)
             for net, url in extract_socials(page.html).items():
                 out["socials"].setdefault(net, url)
-            for cand in extract_people(page.text, page.url):
+            for cand in people_fn(page.text, page.url):
                 out["people"].append(cand)
         # U4.5: browser escalation — only when static found nothing and the extra is installed.
         if res.needs_browser and browser.is_available() and not out["emails"] and not out["people"]:
@@ -61,7 +70,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                 text = SiteCrawler.extract_text(rendered)
                 for email, label in extract_emails(rendered, text).items():
                     out["emails"].setdefault(email, {"label": label, "url": url})
-                for cand in extract_people(text, url):
+                for cand in people_fn(text, url):
                     out["people"].append(cand)
             if rendered_any:
                 out["needs_browser"] = False
