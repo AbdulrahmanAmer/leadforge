@@ -60,7 +60,7 @@ class SocialCfg(BaseModel):
     cookie/session auth (see icm/SCOPE.md and the provider module docstring).
     """
 
-    enabled: bool = False
+    enabled: bool = True  # auto: is_available() still gates on the agent-reach CLI actually answering
     networks: list[str] = Field(default_factory=lambda: ["youtube", "facebook", "instagram"])
     max_networks: int = 3
     stale_months: int = 6

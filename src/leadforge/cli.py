@@ -304,6 +304,46 @@ def suppress(ctx: typer.Context, action: str = typer.Argument(..., help="add|lis
         emit_digest(True, "suppress", counts={"suppressed": len(rows)})
 
 
+@app.command("config")
+def config_cmd(ctx: typer.Context,
+               action: str = typer.Argument(..., help="set|get"),
+               key: str = typer.Argument(..., help="dotted path, e.g. registry.companies_house_key"),
+               value: str = typer.Argument("", help="value (for set)")):
+    """Read or write one workspace config value in leadforge.yaml (no manual yaml editing)."""
+    import yaml
+
+    path = Path("leadforge.yaml")
+    data = yaml.safe_load(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    data = data or {}
+    parts = key.split(".")
+    if action == "set":
+        node = data
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+            if not isinstance(node, dict):
+                emit_digest(False, "config", warnings=[f"'{p}' is not a mapping in leadforge.yaml"], next_=None)
+                raise typer.Exit(2)
+        node[parts[-1]] = yaml.safe_load(value) if value else value
+        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        # validate the result parses into Config before declaring success
+        try:
+            load_config(".")
+        except Exception as e:  # noqa: BLE001 — report, don't stacktrace
+            emit_digest(False, "config", warnings=[f"invalid value for {key}: {type(e).__name__}"], next_=None)
+            raise typer.Exit(2) from e
+        _say(ctx, f"{key} = {value!r} written to {path}")
+        emit_digest(True, "config", counts={"set": 1}, next_=None)
+    elif action == "get":
+        node = data
+        for p in parts:
+            node = node.get(p, {}) if isinstance(node, dict) else {}
+        _say(ctx, f"{key} = {node!r}")
+        emit_digest(True, "config", counts={}, warnings=[], next_=None)
+    else:
+        emit_digest(False, "config", warnings=[f"unknown action '{action}' (set|get)"], next_=None)
+        raise typer.Exit(2)
+
+
 @app.command()
 def version():
     """Print version."""

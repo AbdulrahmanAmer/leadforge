@@ -82,6 +82,12 @@ def _warnings(icp: ICP) -> list[str]:
         w.append(f"{len(icp.target.categories)} categories multiplies queries; consider splitting campaigns")
     if not icp.decision_maker.titles_priority:
         w.append("no DM titles set; DM labeling will be weaker")
+    if geo.country in ("GB", "UK"):
+        from leadforge.config import load_config
+        if not load_config(".").registry.companies_house_key:
+            w.append("UK campaign: a free Companies House key adds registry-verified directors — "
+                     "get one at https://developer.company-information.service.gov.uk then run: "
+                     "leadforge config set registry.companies_house_key <KEY>")
     return w
 
 

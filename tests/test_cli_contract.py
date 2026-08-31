@@ -161,3 +161,27 @@ def test_dm_apply_digest_contract(offline, tmp_path):
             json.dumps({"biz": pending[0]["id"], "pick": 0, "confidence": 0.9}) + "\n", encoding="utf-8")
         d = _invoke_digest(runner, ["dm", "apply", "--in", "dm_labels.ndjson"])
         assert d["cmd"] == "dm apply"
+
+
+def test_config_set_get_roundtrip(offline):
+    runner = offline
+    d = _invoke_digest(runner, ["config", "set", "registry.companies_house_key", "test-key-123"])
+    assert d["ok"] is True
+    from leadforge.config import load_config
+    assert load_config(".").registry.companies_house_key == "test-key-123"
+    d2 = _invoke_digest(runner, ["config", "get", "registry.companies_house_key"])
+    assert d2["ok"] is True
+
+
+def test_intake_warns_uk_without_registry_key(offline):
+    runner = offline
+    d = _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
+    # answers.yaml in this fixture is US — no UK warning
+    assert not any("Companies House" in w for w in d["warnings"])
+    import pathlib
+    pathlib.Path("answers.yaml").write_text(
+        "campaign: t\noffer:\n  what: Web redesign\n"
+        "target:\n  categories: [accounting firm]\n"
+        "  geography:\n    country: GB\n    areas: [Guildford]\n", encoding="utf-8")
+    d2 = _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
+    assert any("Companies House" in w for w in d2["warnings"])

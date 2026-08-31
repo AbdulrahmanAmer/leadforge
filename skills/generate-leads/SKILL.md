@@ -51,6 +51,13 @@ Ask conversationally (batch related questions; skip what the user already stated
 7. **Decision-maker titles** — who they want to reach (Owner, GM, Marketing Manager, …).
 8. **Volume cap** — how many leads they want (default 200).
 
+**UK campaigns only — one optional extra question.** If the country is GB and `leadforge config get
+registry.companies_house_key` is empty, ask ONCE: "Want registry-verified company directors on the sheet?
+It needs a free Companies House API key (2-minute signup at
+https://developer.company-information.service.gov.uk — create an application, copy the key)." If they paste
+one: `leadforge config set registry.companies_house_key <KEY>`. If they decline or hesitate, proceed
+without it — never block the campaign on this.
+
 Write the answers to `answers.yaml` (schema in `references/icp-guide.md`), then:
 
 ```bash
