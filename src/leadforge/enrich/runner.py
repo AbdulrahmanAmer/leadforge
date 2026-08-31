@@ -87,6 +87,8 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
         return
     throttle = HostThrottle(cfg.politeness.delay_s)
     browser_ok = browser.is_available()
+    from leadforge.providers.registry import get_registries
+    registries = get_registries(cfg)  # once per run so a 429 disable sticks for the whole batch
     with ThreadPoolExecutor(max_workers=cfg.politeness.workers) as pool:
         futures = {pool.submit(_process_one, cfg, throttle, b): b for b in queue}
         for fut in as_completed(futures):
@@ -97,13 +99,14 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
                 LOG.warning("enrich failed for %s: %s", b["id"], e)
                 db.update_enrich(conn, b["id"], {"crawled_at": now_iso(), "error": str(e)[:200]})
                 continue
-            _persist(conn, cfg, b, res, counts)
+            _persist(conn, cfg, b, res, counts, registries)
             if res["needs_browser"] and not browser_ok:
                 counts["needs_browser"] += 1
     conn.commit()
 
 
-def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict) -> None:
+def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
+             registries: list | None = None) -> None:
     counts["sites_crawled"] += 1
     bid = b["id"]
     for email, meta in res["emails"].items():
@@ -127,9 +130,24 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict) 
         db.add_evidence(conn, Evidence(business_id=bid, ref_table="people", fact="dm_candidate",
                                        url=cand.source_url, snippet=f"{cand.name} — {cand.title}", observed_at=now_iso()))
         counts["dm_candidates"] += 1
-    enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
+    _registry_cross_check(conn, b, counts, registries or [])
+    enrich ={"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
               "pages": res["pages"], "needs_browser": res["needs_browser"]}
     db.update_enrich(conn, bid, enrich)
+
+
+def _registry_cross_check(conn: sqlite3.Connection, b, counts: dict, registries: list) -> None:
+    """U4.6: officer lookup from public registries — key-gated (empty list when no keys), country-gated."""
+    if not registries:
+        return
+    country = (b["address_country"] or "").strip().upper()
+    for reg in registries:
+        if country not in reg.jurisdictions():
+            continue
+        for person, ev in reg.lookup(b):
+            db.add_person(conn, person)
+            db.add_evidence(conn, ev)
+            counts["dm_candidates"] += 1
 
 
 def _validate_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
