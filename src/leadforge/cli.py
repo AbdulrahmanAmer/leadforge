@@ -7,6 +7,7 @@ Every command ends with exactly one LF_DIGEST line (docs/06). Human output stays
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import typer
@@ -309,6 +310,10 @@ def version():
 
 
 def main() -> None:
+    # Digest lines must be UTF-8 regardless of platform locale (Windows pipes default to cp1252).
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     app()
 
 
