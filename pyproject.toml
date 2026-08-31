@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leadforge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Internal B2B lead-generation engine: OSS scraping, website deep-crawl, DM discovery, ICP scoring, XLSX export. Built to be driven by AI agent harnesses (Claude Code / Codex) at minimal token cost."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -34,7 +34,7 @@ dependencies = [
 browser = ["crawl4ai>=0.9.2"]          # JS-rendered site escalation (Playwright; run `crawl4ai-setup` once)
 ner = ["gliner>=0.2"]                  # optional local zero-shot person/title extraction
 addressing = ["usaddress>=0.5.10"]     # better US address splitting (compiled wheel; optional)
-registry = []                          # reserved: registry adapters use core httpx; keys via config
+social = ["yt-dlp>=2024.1.0"]          # youtube presence probe backend; without it every network reports "unknown"
 dev = ["pytest>=8.2", "ruff>=0.5", "pytest-timeout>=2.3"]
 
 [project.scripts]

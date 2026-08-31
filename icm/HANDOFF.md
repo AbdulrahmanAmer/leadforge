@@ -27,7 +27,7 @@ offline (see `tests/test_pipeline_e2e.py`). Your job is to finish the optional u
 
 ```bash
 pip install -e .[dev]     # pure-python; never needs a compiler
-pytest -q                 # MUST stay green — 45 passed, 1 xfailed is the shipped baseline
+pytest -q                 # MUST stay green — full suite green (see icm/STATE.md for the current count)
 ruff check src tests      # MUST stay clean
 leadforge doctor --fix    # bootstraps the runtime (downloads the pinned gosom binary)
 ```
@@ -38,7 +38,7 @@ re-install; do not start feature work on a red baseline.
 ## The remaining work (all specced; do in this order)
 
 Each unit below has a **binding spec in a stub file's docstring** and **acceptance criteria in
-`docs/05-icm-build-plan.md`**. The stub raises `NotImplementedError` and has an xfail/skipped test waiting.
+`docs/05-icm-build-plan.md`**. (Historical: all units are now implemented — this file is kept as the orientation record.)
 
 | Order | Unit | File (spec in docstring) | Gate |
 |---|---|---|---|

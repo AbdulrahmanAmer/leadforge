@@ -93,3 +93,15 @@ What to expect and set:
 - **DM labeling** arrives in batches of ≤60; expect ~15–20 batches for 1,000 leads. Label a batch whenever
   one is ready (`dm export` → `dm apply`) — the pipeline waits at the DM gate, nothing is lost.
 - If runs get rate-limited (degraded queries pile up), pause and resume hours later; never work around it.
+
+## Account-fit profile (WE SCORE-style prospecting)
+
+For "prospecting engine" briefs (fixed 0-100 account rubric, A-D grades, contactability + data-confidence
+columns, MANUAL_REVIEW/READY_FOR_OUTREACH statuses), set `scoring: { profile: account_fit }` in answers.yaml.
+Full worked example: `config/icp.wescore.example.yaml` (MENA, six target industries).
+
+What it adds per lead: employee estimate + band (50-500 = target), departments detected, tech stack
+(Microsoft 365 via MX records; CRM/ERP/WMS via site fingerprints — UNKNOWN is never treated as NO),
+industry-specific buying triggers with freshness banding, and a separate Contactability (0-100) and
+Data Confidence (0-100) score. Hard rule inherited from the spec: unknown facts never disqualify;
+only CONFIRMED negatives do (e.g. a stated headcount under 20).

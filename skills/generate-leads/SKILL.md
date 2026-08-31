@@ -4,7 +4,7 @@ description: Generate scored B2B lead lists from open-source scraping. Use when 
 license: MIT
 compatibility: Requires shell access, Python 3.11+, and network. Windows, macOS, Linux.
 metadata:
-  version: "0.1.0"
+  version: "0.1.1"
   author: leadforge
 ---
 
@@ -50,6 +50,8 @@ Ask conversationally (batch related questions; skip what the user already stated
    agency).
 7. **Decision-maker titles** — who they want to reach (Owner, GM, Marketing Manager, …).
 8. **Volume cap** — how many leads they want (default 200).
+9. **Profile** — ordinary lead-gen uses the default scoring; a prospecting-engine brief (account rubric,
+   grades, manual-review statuses) uses `scoring: { profile: account_fit }` — see `references/icp-guide.md`.
 
 **UK campaigns only — one optional extra question.** If the country is GB and `leadforge config get
 registry.companies_house_key` is empty, ask ONCE: "Want registry-verified company directors on the sheet?

@@ -18,9 +18,10 @@ HARD_PREFIXES = ("competitor:", "existing_client:")
 SOFT_QUALIFIERS = {
     "website_missing", "website_no_ssl", "stale_site", "low_rating_high_volume",
     "few_reviews", "weak_social_presence", "phone_only_booking", "hiring",
-    # social/video presence signals — populated by the optional Agent-Reach unit (U4.8, providers/social.py);
-    # harmless no-ops until that unit is built and `social.enabled` is turned on
-    "stale_social", "no_social_presence", "no_video_presence",
+    # social/video presence signals (U4.8, providers/social.py; on by default, degrade silently).
+    # no_social_presence = the site links no profile at all; weak_social_presence = crawler found none.
+    # active_social is a NEGATIVE need signal (they post recently) — no hook template on purpose.
+    "stale_social", "no_social_presence", "no_video_presence", "active_social",
 }
 
 
@@ -86,8 +87,8 @@ class Target(BaseModel):
     @classmethod
     def _cats(cls, v: list[str]) -> list[str]:
         v = [c.strip() for c in v if c.strip()]
-        if not 1 <= len(v) <= 5:
-            raise ValueError("1-5 categories required")
+        if not 1 <= len(v) <= 20:
+            raise ValueError("1-20 categories required")
         return v
 
 
@@ -118,6 +119,7 @@ class DecisionMaker(BaseModel):
 
 class Scoring(BaseModel):
     weights_override: dict[str, float] = Field(default_factory=dict)
+    profile: str = "default"  # default | account_fit (WE SCORE 0-100 rubric + contactability + data confidence)
 
 
 class Caps(BaseModel):
@@ -247,7 +249,7 @@ class Score(BaseModel):
     business_id: str
     run_id: str
     total: float
-    tier: Literal["A", "B", "C", "DQ"]
+    tier: Literal["A", "B", "C", "D", "DQ"]
     factors: list[ScoreFactor]
     need_hooks: list[str] = Field(default_factory=list)
     scored_at: str = ""

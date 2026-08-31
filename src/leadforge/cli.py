@@ -226,7 +226,8 @@ def score(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
 
 # ----------------------------------------------------------------------------- export
 @app.command()
-def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out: str | None = typer.Option(None, "--out")):
+def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out: str | None = typer.Option(None, "--out"),
+           format_: str | None = typer.Option(None, "--format", help="comma list, e.g. xlsx,csv (default: config export.formats)")):
     """Write the styled XLSX + CSV + report.json."""
     from leadforge.export import export_run, summarize_for_digest, top_hooks
     from leadforge.intake import load_icp
@@ -238,7 +239,9 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
         emit_digest(False, "export", warnings=["no run found"])
         raise typer.Exit(4)
     out_dir = Path(out) if out else cfg.exports_dir
-    artifacts = export_run(conn, load_icp(Path(icp)), run["id"], out_dir, cfg.export.formats)
+    formats = [f.strip() for f in format_.split(",") if f.strip()] if format_ else cfg.export.formats
+    artifacts = export_run(conn, load_icp(Path(icp)), run["id"], out_dir, formats,
+                           staleness_days=cfg.validation.staleness_days)
     counts = summarize_for_digest(conn, run["id"])
     db.set_stage(conn, run["id"], "exported", **counts)
     _say(ctx, f"exported {counts['leads']} leads -> {artifacts[0]}")
@@ -348,6 +351,7 @@ def config_cmd(ctx: typer.Context,
 def version():
     """Print version."""
     typer.echo(f"leadforge {__version__}")
+    emit_digest(True, "version", counts={}, warnings=[], next_=None)
 
 
 def main() -> None:

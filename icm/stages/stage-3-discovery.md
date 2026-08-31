@@ -3,7 +3,7 @@
 **Read `icm/SCOPE.md` first.** Everything here is ordinary API-client and subprocess work on public business
 listings; nothing in this stage requires or permits evasion of any kind.
 
-Prereqs: G0–G2 green (`pytest -q` → 59 passed, 1 xfailed). Files you will touch are named exactly.
+Prereqs: G0–G2 green (`pytest -q` → full suite green (see icm/STATE.md for the current count)). Files you will touch are named exactly.
 
 ---
 

@@ -174,7 +174,8 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     # EXPORT
     if stage == "scored":
         from leadforge.export import export_run, summarize_for_digest, top_hooks
-        artifacts = export_run(conn, icp, run_id, cfg.exports_dir, cfg.export.formats)
+        artifacts = export_run(conn, icp, run_id, cfg.exports_dir, cfg.export.formats,
+                               staleness_days=cfg.validation.staleness_days)
         ecounts = summarize_for_digest(conn, run_id)
         db.set_stage(conn, run_id, "exported", **ecounts)
         warns += top_hooks(conn, run_id)

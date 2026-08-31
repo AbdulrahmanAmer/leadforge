@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.1.1] — 2026-08-31
+
+### Added
+- **WE SCORE prospecting profile** (`scoring: {profile: account_fit}`): account-intel enrichment
+  (`enrich/profile.py` — tech stack via MX records + site fingerprints, departments, headcount estimate,
+  industry buying triggers with freshness bands; tri-state facts, UNKNOWN never counts as NO), a fixed
+  0-100 account-fit rubric with A-D grades, separate Contactability and Data Confidence scores, and
+  NEW/READY_FOR_OUTREACH/MANUAL_REVIEW/DISQUALIFIED statuses in the export. Example:
+  `config/icp.wescore.example.yaml`.
+- **Registry DM auto-pick** (ADR-010): exactly one active individual director from Companies House is
+  marked as the decision maker automatically; ambiguous cases still go to the agent.
+- `leadforge config set|get`, `export --format`, `doctor --fix --full` bootstraps all quality extras
+  (incl. new `[social]` yt-dlp extra); `version` now emits a digest; export gains a `Stale?` column
+  driven by `validation.staleness_days`.
+- Intake seeds default soft qualifiers so the "Likely Need (Hook)" column is populated by default.
+
+### Fixed
+- gosom v1.17.4 hangs after writing results: a stall watchdog (`discovery.stall_s`) terminates and
+  salvages the written listings; captcha classification preserved on the kill path.
+- doctor `--fix --full` falsely reported fresh extras as failed (stale import caches — now probed in a
+  child interpreter); crawl4ai-setup timeout no longer crashes doctor.
+- Junk-email extraction (word-splitting obfuscation regex, markup-truncation artifacts, cross-domain
+  testimonial emails), newline-crossing person names, GLiNER title pairing, Excel phone mangling.
+- Hardcoded copyright year; suppressed domains leaking into exports; `caps.max_leads` not enforced.
+
+### CI
+- Matrix extended to Python 3.11-3.14; release tags trigger CI; version-consistency job; non-editable
+  install check; digest asserted in CLI smoke.
+
 ## [0.1.0] — 2026-08-31 (finalized)
 
 Finalize session (same day) — all remaining ICM units landed:
@@ -41,7 +70,7 @@ Initial scaffold, produced from the staged ICM build plan (`docs/05-icm-build-pl
   adapter, normalizer, polite static crawler, contact/people extractors, validators, DM export/apply loop,
   scoring engine with per-factor explanations and need-hooks, styled XLSX/CSV/report export, and a Typer CLI
   on the `LF_DIGEST` contract.
-- 64 tests + 2 xfail placeholders; ruff clean; full offline end-to-end pipeline test.
+- full offline end-to-end pipeline test; ruff clean.
 
 ### Location quality
 - `target.geography.country` is **required** (ISO2, validated) and areas must be specific: geocoding is

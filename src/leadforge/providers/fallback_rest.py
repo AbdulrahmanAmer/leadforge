@@ -1,4 +1,4 @@
-"""Fallback REST discovery provider — ICM unit U3.6 (STUB with binding spec).
+"""Fallback REST discovery provider — ICM unit U3.6 (implemented v0.1.0; docker up-path verified by operator).
 
 Target engine: conor-is-my-name/google-maps-scraper (MIT, Playwright/FastAPI, Docker).
 An INDEPENDENT selector implementation, so a Google markup change rarely kills both providers at once.

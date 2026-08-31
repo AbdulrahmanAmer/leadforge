@@ -1,4 +1,4 @@
-"""Social & video presence signals via Agent-Reach — ICM unit U4.8 (STUB with binding spec). Opt-in.
+"""Social & video presence signals — ICM unit U4.8 (implemented; youtube via yt-dlp, other networks report 'unknown' until v0.2). On by default, degrades silently.
 
 WHY THIS EXISTS
 A business's own website already tells us which social/video profiles it wants customers to find — the
@@ -57,10 +57,10 @@ WIRING
 - Evidence: one `Evidence(fact="social_presence", url=<profile url>, snippet="<network>: last post <date>")`
   per network checked, so the sheet's provenance stays honest.
 
-CONFIG (add to config.py + leadforge.example.yaml, all defaults OFF/conservative)
+CONFIG (config.py + leadforge.example.yaml)
   social:
-    enabled: false          # master switch; nothing runs unless true
-    networks: [youtube, facebook, instagram]   # linkedin is rejected even if listed
+    enabled: true           # on by default; skipped silently when tooling absent
+    networks: [youtube]     # only youtube has a real logged-out backend today; linkedin rejected even if listed
     max_networks: 3
     stale_months: 6
     timeout_s: 30

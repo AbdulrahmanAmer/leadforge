@@ -103,21 +103,19 @@ Architecture, data model, pipeline behavior and every decision are documented in
 
 See [`docs/07-compliance.md`](docs/07-compliance.md) for the practical GDPR/PECR/CAN-SPAM posture. Not legal advice.
 
-## Status & finishing the build
+## Status
 
-The core pipeline works end to end (see `tests/test_pipeline_e2e.py`). A few optional units remain — a fallback
-discovery provider, browser escalation for JS-heavy sites, registry cross-checks, and live validation against the
-real scraper.
-
-**To finish it with an AI coding session:** open the repo in Claude Code or Codex and say **`BUILD LEADFORGE`**
-(or run `/finalize`, or paste [`icm/PROMPT.txt`](icm/PROMPT.txt)). The session self-orients from
-[`icm/HANDOFF.md`](icm/HANDOFF.md) and works the checklist in [`icm/STATE.md`](icm/STATE.md).
+**v0.1.1 — shipped and live-validated.** Every ICM unit is implemented and tested; live end-to-end runs
+(real Google Maps scraping, site enrichment, Companies House officer cross-check, scored XLSX export)
+have been completed on Windows. Deferred to v0.2: gosom serve mode, geo grid tiling, real Facebook/
+Instagram presence probes (see `icm/STATE.md`).
 
 ```bash
-pip install -e .[dev] && pytest -q && ruff check src tests   # baseline: 64 passed, 2 xfailed, clean
+pip install -e .[dev] && pytest -q && ruff check src tests   # suite must be fully green (no xfails)
 ```
 
-Optional extras: `.[browser]` (JS-rendered sites), `.[ner]` (local zero-shot name/title extraction),
+Optional extras (installed automatically by `leadforge doctor --fix --full`): `.[browser]` (JS-rendered
+sites), `.[ner]` (local zero-shot name/title extraction), `.[social]` (yt-dlp presence probe),
 `.[addressing]` (better US address splitting).
 
 ## License

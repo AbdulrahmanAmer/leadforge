@@ -6,7 +6,7 @@
 `icm/HANDOFF.md`, then `icm/STATE.md`, then `docs/05-icm-build-plan.md`, then `AGENTS.md` — and start working
 the remaining units in the order `icm/STATE.md` lists.** Do not explore the repo first and do not re-architect
 anything; the design is decided and documented. Verify the baseline (`pip install -e .[dev] && pytest -q &&
-ruff check src tests` → 59 passed, 1 xfailed, ruff clean) before writing code.
+ruff check src tests` → full suite green (see icm/STATE.md for the current count)) before writing code.
 
 The same instructions exist as a pasteable prompt in `icm/PROMPT.txt` and as the `/finalize` command.
 

@@ -1,0 +1,48 @@
+# WE SCORE-style prospecting ICP (account_fit profile) — MENA, six target industries.
+# The account_fit profile scores 0-100 per the fixed rubric (industry/size/revenue/growth/
+# complexity/technology/trigger), grades A-D, and adds Contactability + Data Confidence columns.
+# UNKNOWN facts never score as NO and never disqualify.
+version: 1
+campaign: wescore-mena-prospects
+offer:
+  what: "Business-system integration and optimisation (ERP/CRM/operations software)"
+  value_prop: "Growing companies with operational complexity and systems that need to talk to each other"
+  sender: "WE SCORE"
+target:
+  # The six target industries as Maps-searchable category variants (aliases welcome — matching is
+  # substring-based both ways at scoring time; anything outside lands in MANUAL_REVIEW, not dropped).
+  categories:
+    - manufacturer
+    - logistics service
+    - freight forwarding
+    - hospital
+    - clinic
+    - consulting firm
+    - accounting firm
+    - engineering consultant
+    - general contractor
+    - construction company
+    - software company
+  geography: { areas: ["Dubai", "Abu Dhabi", "Riyadh", "Cairo"], country: AE }  # one country per campaign; run one per country
+  size: { min_reviews: 0 }
+qualify:
+  hard: [no_phone]
+  soft: [website_missing, stale_site, few_reviews, weak_social_presence, no_video_presence]
+decision_maker:
+  titles_priority:
+    - "Operations Manager"
+    - "Operations Director"
+    - "Head of Operations"
+    - "VP Operations"
+    - "CTO"
+    - "CIO"
+    - "IT Manager"
+    - "IT Director"
+    - "CEO"
+    - "COO"
+    - "Founder"
+    - "Managing Director"
+    - "General Manager"
+scoring: { profile: account_fit }
+caps: { max_leads: 500, max_sites: 600, max_tiles: 40 }
+compliance: { region_profile: eu }

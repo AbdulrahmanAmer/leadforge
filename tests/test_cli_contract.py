@@ -185,3 +185,18 @@ def test_intake_warns_uk_without_registry_key(offline):
         "  geography:\n    country: GB\n    areas: [Guildford]\n", encoding="utf-8")
     d2 = _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
     assert any("Companies House" in w for w in d2["warnings"])
+
+
+def test_version_digest_contract(offline):
+    d = _invoke_digest(offline, ["version"])
+    assert d["cmd"] == "version" and d["ok"] is True
+
+
+def test_doctor_digest_contract(offline, monkeypatch):
+    # no --fix: checks may fail (no binary in tmp workspace) but the digest contract must hold
+    res = offline.invoke(app, ["--json", "doctor"])
+    lines = [ln for ln in res.output.splitlines() if ln.startswith("LF_DIGEST ")]
+    assert len(lines) == 1
+    d = json.loads(lines[0][len("LF_DIGEST "):])
+    assert REQUIRED_KEYS <= set(d) and d["cmd"] == "doctor"
+    assert set(d["counts"]) >= {"checks", "fixed", "failed"}

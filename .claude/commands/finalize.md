@@ -14,7 +14,7 @@ Read these four files now, in order, before doing anything else:
 Then:
 
 - Confirm the baseline is green before writing code: `pip install -e .[dev]`, `pytest -q`, `ruff check src tests`.
-  Expected: **64 passed, 2 xfailed**, ruff clean. If red, run `leadforge doctor --fix` and reinstall first.
+  Expected: **full suite green** (count in icm/STATE.md), ruff clean. If red, run `leadforge doctor --fix` and reinstall first.
 - Work the remaining units in the order listed in `icm/STATE.md`. Each has a binding spec in its stub file's
   docstring, plus acceptance criteria in `docs/05-icm-build-plan.md` and `icm/stages/*.md`.
 - After each unit: tests green, ruff clean, tick the checkbox in `icm/STATE.md`, and commit using the unit id

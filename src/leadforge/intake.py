@@ -34,7 +34,21 @@ def compile_icp(answers_path: Path, out_path: Path) -> tuple[ICP, list[str]]:
         raise InputError(_fmt_validation(e)) from e
 
     icp = ICP.model_validate(answers.model_dump())
+
+    # Hooks are gated on qualify.soft — an ICP that lists none gets an empty "Likely Need" column.
+    # Seed offer-agnostic defaults so every campaign produces hooks unless the user opts out.
+    _SOFT_DEFAULTS = ["website_missing", "stale_site", "few_reviews",
+                      "weak_social_presence", "no_video_presence"]
+    seeded = [s for s in _SOFT_DEFAULTS if s not in icp.qualify.soft]
+    if len(icp.qualify.soft) < 3 and seeded:
+        icp.qualify.soft = list(icp.qualify.soft) + seeded
+    else:
+        seeded = []
+
     warnings = _warnings(icp)
+    if seeded:
+        warnings.append(f"seeded default need signals: {', '.join(seeded)} "
+                        "(list 3+ soft qualifiers in answers.yaml to override)")
 
     # deterministic serialization -> stable hash
     out_path.write_text(

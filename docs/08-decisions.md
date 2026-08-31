@@ -54,3 +54,14 @@ never needs a compiler; typed models validate every boundary; 3.10 not supported
 **Context:** compliance posture (docs/07) must survive refactors. **Decision:** robots.txt check, per-host single-flight + delay,
 caps, and suppression filtering are enforced inside `enrich/crawler.py` / `db.py` with tests (U8.1/U8.4), not left to call-site
 discipline. **Consequences:** slightly more plumbing; guarantees hold for any future command added on top.
+
+
+## ADR-010 — Registry DM auto-pick (v0.1.1, amends ADR-003)
+**Context:** ADR-003 made the agent the final DM arbiter. Live UK runs showed Companies House returns the
+registered directors — official identity, stronger than any inference from website text — and big runs queue
+dozens of obvious single-director cases for manual labeling. **Decision:** when a registry returns exactly one
+ACTIVE INDIVIDUAL officer (corporate officers like "X Ltd/LLP" excluded by name pattern), the pipeline marks
+them the DM automatically (`labeled_by=registry`, confidence 0.9). Zero or 2+ individuals still go to the
+agent. **Consequences:** DM batches shrink dramatically on registry-covered campaigns; the agent's judgment is
+reserved for genuinely ambiguous cases; a wrong registry match remains possible but is bounded by the
+locality-overlap match rule (U4.6).

@@ -150,7 +150,8 @@ def install_quality_extras(rep_add) -> None:
         # a child interpreter sees the truth
         return subprocess.run([sys.executable, "-c", f"import {mod}"], capture_output=True).returncode == 0
 
-    for extra, probe_mod, post in (("ner", "gliner", None), ("browser", "crawl4ai", "crawl4ai-setup")):
+    for extra, probe_mod, post in (("ner", "gliner", None), ("browser", "crawl4ai", "crawl4ai-setup"),
+                                   ("social", "yt_dlp", None)):
         already = _importable_fresh(probe_mod)
         if not already:
             proc = subprocess.run([sys.executable, "-m", "pip", "install", "-e", f"{root}[{extra}]"],

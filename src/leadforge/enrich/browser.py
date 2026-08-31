@@ -1,4 +1,4 @@
-"""Browser escalation for JS-rendered sites — ICM unit U4.5 (STUB with binding spec). Optional [browser] extra.
+"""Browser escalation for JS-rendered sites — ICM unit U4.5 (implemented). Optional [browser] extra.
 
 === SPEC (implement exactly; acceptance criteria docs/05 U4.5) ===
 1. is_available() -> bool: True iff `import crawl4ai` succeeds.

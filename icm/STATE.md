@@ -1,19 +1,18 @@
 # Build State Tracker
 
-Single source of truth for what's done vs left. Tick boxes as you complete units. Baseline shipped by the
-scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
+Single source of truth for what's done vs left. Current baseline (v0.1.1, 2026-08-31): **121 passed, 0 skipped locally with all extras (1 browser-render skip without them)**, ruff clean.
 
 ## Stage gates
 
 - [x] **G0 Foundations** — package installs, doctor works, smoke tests green
 - [x] **G1 Contracts & data model** — models ↔ DDL ↔ docs/03 aligned; merge/dedupe tested
 - [x] **G2 Intake & ICP** — compiler validates + deterministic hash; example ICPs compile
-- [~] **G3 Discovery** — gosom adapter + normalizer + planner done & tested; *fallback (U3.6) + live run (U8.2) pending*
-- [~] **G4 Enrichment** — crawler/extractors/validators/DM-loop done & tested; *browser (U4.5), registries (U4.6), NER (U4.7) pending*
+- [x] **G3 Discovery** — gosom adapter (+stall watchdog) + normalizer + planner + fallback provider; live-validated
+- [x] **G4 Enrichment** — crawler/extractors/validators/DM-loop + browser + registries (CH live-proven) + NER + account-intel profile
 - [x] **G5 Scoring** — rubric + hooks + explanations; deterministic, tested
 - [x] **G6 Export** — XLSX/CSV/report; produced in E2E test (verify visually on a real machine at G6/U8.2)
 - [x] **G7 Harness integration** — both plugins + skill + AGENTS/CLAUDE + install.py present (validate live at U8.2)
-- [~] **G8 Ship** — test suite (91), CI green, live E2E done, guardrails audit clean, v0.1.0 tagged &
+- [~] **G8 Ship** — test suite, CI green, live E2E done, guardrails audit clean, v0.1.0 tagged &
       pushed. Remaining for full G8: partner installs from the GitHub link and completes a campaign
       unaided + operator opens the sheet in Excel/LibreOffice.
 
@@ -31,12 +30,12 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
 - [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
-- [~] **U3.7** gosom serve mode (optional) — SKIPPED: multi-hour runs not needed yet (stage-3 doc says skip unless needed)
+- [~] **U3.7** gosom serve mode — DEFERRED to v0.2 (multi-hour runs handled by resume + stall watchdog instead)
 - [x] **U4.5** Browser escalation — implemented + wiring tests; live render UNPROVEN ([browser] extra not installed here)
-- [x] **U4.6** Registry cross-check — implemented + fixture tests; live key path UNPROVEN (no keys configured)
+- [x] **U4.6** Registry cross-check — implemented + fixture tests; Companies House LIVE-PROVEN (18 real directors, Guildford campaign); OpenCorporates fixture-tested
 - [x] **U4.7** GLiNER DM upgrade — hook + selection rule + tests (skip cleanly without [ner])
 - [x] **U4.8** Social/video presence — implemented (youtube via yt-dlp; others honest 'unknown'), linkedin-exclusion tested
-- [x] **U8.1** Finish test suite — 89 tests: politeness (real server), suppression e2e, digest contract per command, extractor edges
+- [x] **U8.1** Finish test suite — politeness (real server), suppression e2e, digest contract per command, extractor edges
 - [x] **U8.2** Live E2E validation — real UK campaign (accounting firms, Guildford): 15/15 businesses with
       phone-or-website, 0 dup place_id, DM loop round-tripped (5 applied, 5 rejected), XLSX/CSV exported;
       real fixture committed. NO field drift in GOSOM_FIELD_MAP. Excel/LibreOffice VISUAL check UNPROVEN
@@ -59,3 +58,14 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 - 2026-08-31 finalize: CLI now forces UTF-8 stdout/stderr in `main()` (Windows cp1252 pipes broke the digest contract).
 - 2026-08-31 scaffold: `discovery.grid_mode` defaults `off`; gosom `-grid-bbox/-grid-cell` value formats
   need live verification before enabling grid tiling by default (part of U8.2).
+
+## v0.1.1 (2026-08-31)
+- gosom stall watchdog (v1.17.4 hangs after writing; salvage + captcha check preserved; `discovery.stall_s`)
+- Registry DM auto-pick (ADR-010); OpenCorporates fixture tests
+- WE SCORE account_fit profile: tech/departments/headcount/trigger detection (`enrich/profile.py`),
+  0-100 rubric + A-D grades + contactability + data confidence + statuses (`score.py`), account columns in export
+- Hooks column fixed (intake seeds default soft qualifiers); staleness flag implemented; version digest;
+  export --format flag; social honest defaults (+[social] yt-dlp extra); CI matrix 3.11-3.14 + tag trigger
+  + version-consistency job; doctor extras probe fixed (child interpreter)
+- Deferred to v0.2: serve mode, grid tiling verification, real FB/IG probes, fallback_rest docker proof,
+  claude plugin validate in CI, TSV dm format reconciliation (NDJSON canonical)

@@ -70,8 +70,8 @@ union of evidence · tests green.
 | **U3.3** gosom adapter | pinned v1.17.4; write query file; subprocess `-json -results … -depth -c -lang -exit-on-inactivity 3m` (+ `-grid-bbox/-grid-cell/-zoom` per tile; `-proxies` passthrough); NDJSON parse → RawListing; stderr captcha/crash classification → cooldown/degrade | `providers/gosom.py` | ✅ |
 | **U3.4** Normalizer | raw→Business per docs/03 §3 (E.164, address split usaddress/pyap, category alias map, url canon, name_norm, dedupe_key) | `src/leadforge/normalize.py` | ✅ |
 | **U3.5** `discover` command | orchestrate U3.1–U3.4 with per-tile checkpoints + digest | `cli.py` | ✅ |
-| **U3.6** Fallback REST provider | conor-is-my-name docker REST (`GET /scrape-get?query=`) adapter; health-check; same RawListing out | `providers/fallback_rest.py` | 🧩 |
-| **U3.7** ⭐ Long-run serve mode | drive gosom `-web` REST (`:8080/api`, OpenAPI) for multi-hour jobs; `discover --serve` | `providers/gosom.py` | 🔨 |
+| **U3.6** Fallback REST provider | conor-is-my-name docker REST (`GET /scrape-get?query=`) adapter; health-check; same RawListing out | `providers/fallback_rest.py` | ✅ |
+| **U3.7** ⭐ Long-run serve mode | drive gosom `-web` REST (`:8080/api`, OpenAPI) for multi-hour jobs; `discover --serve` | `providers/gosom.py` | ⏸ deferred v0.2 |
 
 **Spec U3.6:** constructor takes `base_url` from config (`providers.fallback_rest.url`, default `http://localhost:8765`); `fetch()` GETs
 `/scrape-get` with `query`, `max_results`; 30 s timeout; map fields {name→name, address, phone, website, rating, reviews, lat, lng,
@@ -90,10 +90,10 @@ phone-or-website, 0 duplicate `place_id` rows · captcha path manually simulated
 | **U4.2** Extractors | emails (mailto/regex/cfemail/at-dot), phones, socials allowlist, copyright-staleness, person+title candidate snippets (≤300 chars) + evidence | `enrich/extract.py` | ✅ |
 | **U4.3** Validators | email tiers syntax→MX→disposable→role; phone validity; liveness | `enrich/validate.py` | ✅ |
 | **U4.4** DM loop | `dm export` NDJSON batches (≤60, `--tsv` variant) · `dm apply` labels → people.is_dm | `enrich/dm.py`, `cli.py` | ✅ |
-| **U4.5** ⭐ Browser escalation | crawl4ai adapter behind `[browser]` extra: re-fetch `needs_browser` sites → `fit_markdown` → same extractors | `enrich/browser.py` | 🧩 |
-| **U4.6** ⭐ Registry cross-check | Companies House (free key) + OpenCorporates (free token) officer/PSC lookup → people rows `labeled_by=registry` + evidence; config-gated | `providers/registry.py` | 🧩 |
-| **U4.7** ⭐ Local NER upgrade | GLiNER zero-shot person/title extraction behind `[ner]` extra, replacing heuristic candidates when installed | `enrich/dm.py` hook | 🔨 |
-| **U4.8** ⭐ Social/video presence | Agent-Reach reads the public business profiles the site itself links (YouTube/FB/IG): exists? last post? → `stale_social` / `no_social_presence` / `no_video_presence` signals + hooks. Config-gated, LinkedIn excluded, logged-out only | `providers/social.py` | 🧩 |
+| **U4.5** ⭐ Browser escalation | crawl4ai adapter behind `[browser]` extra: re-fetch `needs_browser` sites → `fit_markdown` → same extractors | `enrich/browser.py` | ✅ |
+| **U4.6** ⭐ Registry cross-check | Companies House (free key) + OpenCorporates (free token) officer/PSC lookup → people rows `labeled_by=registry` + evidence; config-gated | `providers/registry.py` | ✅ |
+| **U4.7** ⭐ Local NER upgrade | GLiNER zero-shot person/title extraction behind `[ner]` extra, replacing heuristic candidates when installed | `enrich/dm.py` hook | ✅ |
+| **U4.8** ⭐ Social/video presence | Agent-Reach reads the public business profiles the site itself links (YouTube/FB/IG): exists? last post? → `stale_social` / `no_social_presence` / `no_video_presence` signals + hooks. Config-gated, LinkedIn excluded, logged-out only | `providers/social.py` | ✅ (youtube; other networks v0.2) |
 
 **Spec U4.5:** `browser.py` exposes `fetch_rendered(url) -> str (markdown)`; import crawl4ai lazily; raise `EnvError` with install hint if
 extra missing; respect same politeness (delay, robots); cap 3 pages/site rendered. Acceptance: a known JS-only site (e.g. a React SPA
@@ -148,11 +148,11 @@ install via `/plugins` → `$generate-leads` visible; `npx skills add Abdulrahma
 
 | Unit | Deliverable | Files | Status |
 |---|---|---|---|
-| **U8.1** Test suite completion | crawler politeness timing test, gosom adapter parse fixtures, cli digest contract test (every command emits valid LF_DIGEST) | `tests/` | 🔨 partially ✅ |
-| **U8.2** Live E2E validation | full campaign on the real Windows machine: small ICP → sheet; fix selector/field drift found | — | 🔨 |
-| **U8.3** CI | GitHub Actions: ruff + pytest on 3.11/3.12, Win+Ubuntu matrix; `claude plugin validate` step | `.github/workflows/ci.yml` | 🔨 |
-| **U8.4** Compliance guardrails audit | verify invariants list docs/04 §5 against code; suppression E2E test | — | 🔨 |
-| **U8.5** Versioning & share | tag v0.1.0, README install matrix verified with partner's harness, CHANGELOG | — | 🔨 |
+| **U8.1** Test suite completion | crawler politeness timing test, gosom adapter parse fixtures, cli digest contract test (every command emits valid LF_DIGEST) | `tests/` | ✅ |
+| **U8.2** Live E2E validation | full campaign on the real Windows machine: small ICP → sheet; fix selector/field drift found | — | ✅ |
+| **U8.3** CI | GitHub Actions: ruff + pytest on 3.11/3.12, Win+Ubuntu matrix; `claude plugin validate` step | `.github/workflows/ci.yml` | ✅ |
+| **U8.4** Compliance guardrails audit | verify invariants list docs/04 §5 against code; suppression E2E test | — | ✅ |
+| **U8.5** Versioning & share | tag v0.1.0, README install matrix verified with partner's harness, CHANGELOG | — | ✅ |
 
 **Gate G8 (ship):** partner installs from the GitHub link on his machine and completes a campaign without editing code · CI green ·
 `docs/` matches behavior (audit) · v0.1.0 tagged.

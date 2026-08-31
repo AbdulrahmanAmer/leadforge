@@ -6,13 +6,14 @@ data_dir: leadforge_data          # all state (db, cache, exports, logs, bin) li
 default_region: US                # ISO2 fallback for phone parsing when a listing has no country
 
 discovery:
-  providers: [gosom]              # order matters; add fallback_rest when U3.6 lands
-  grid_mode: "off"                # off | auto  (auto = gosom -grid-bbox tiling; verify flags live before enabling, see U8.2)
+  providers: [gosom]              # order matters; append fallback_rest only if you run its docker container (deliberately not default)
+  grid_mode: "off"                # off | auto  (auto = gosom -grid-bbox tiling; flag formats not yet live-verified — deferred to v0.2)
   grid_cell_km: 3.0
-  depth: 10                       # gosom scroll depth per query
+  depth: 10                       # gosom scroll depth per query (auto-capped to 1 when `--limit <= 20` — smoke runs shouldn't scrape for 30 min)
   concurrency: 2                  # keep low; raise only with proxies
   lang: en
-  timeout_min: 30                 # per provider batch
+  timeout_min: 30                 # hard cap per query
+  stall_s: 180                    # kill gosom when its results file stops growing this long (v1.17.4 hangs after finishing; written listings are salvaged)
   proxies: []                     # e.g. ["socks5://user:pass@host:port"] — passthrough to the engine
   email_crawl: false              # gosom -email (slow); we do our own site crawl instead
   fallback_rest:
@@ -36,9 +37,9 @@ registry:                         # optional free-registration keys; leave empty
   companies_house_key: ""
   opencorporates_token: ""
 
-social:                           # optional social/video presence signals via Agent-Reach (unit U4.8)
-  enabled: false                  # master switch — nothing runs unless true
-  networks: [youtube, facebook, instagram]   # linkedin is rejected even if you list it (icm/SCOPE.md)
+social:                           # social/video presence signals (unit U4.8)
+  enabled: true                   # on by default; silently skipped when the tooling is absent
+  networks: [youtube]             # only youtube has a real logged-out backend (yt-dlp) today; linkedin is rejected even if you list it (icm/SCOPE.md)
   max_networks: 3                 # per business, to keep runs cheap and polite
   stale_months: 6                 # "stale_social" threshold
   timeout_s: 30

@@ -26,6 +26,7 @@ class DiscoveryCfg(BaseModel):
     concurrency: int = 2
     lang: str = "en"
     timeout_min: int = 30
+    stall_s: float = 180.0  # kill gosom when results stop growing this long (v1.17.4 hangs after finishing)
     proxies: list[str] = Field(default_factory=list)
     email_crawl: bool = False
     fallback_rest: FallbackRestCfg = Field(default_factory=FallbackRestCfg)
@@ -33,6 +34,7 @@ class DiscoveryCfg(BaseModel):
 
 class CrawlCfg(BaseModel):
     pages_per_site: int = 6
+    stale_after_years: int = 2  # copyright year older than this many years back => stale_site signal
     timeout_s: float = 15.0
     max_text_bytes: int = 400_000
 
@@ -54,14 +56,15 @@ class RegistryCfg(BaseModel):
 
 
 class SocialCfg(BaseModel):
-    """Optional social/video presence signals via Agent-Reach (U4.8, providers/social.py).
+    """Social/video presence signals (U4.8, providers/social.py).
 
-    Off by default. Public, logged-out, business-owned profiles only — never LinkedIn, never
+    On by default — is_available() still gates on the tooling actually answering, so absence
+    degrades silently. Public, logged-out, business-owned profiles only — never LinkedIn, never
     cookie/session auth (see icm/SCOPE.md and the provider module docstring).
     """
 
     enabled: bool = True  # auto: is_available() still gates on the agent-reach CLI actually answering
-    networks: list[str] = Field(default_factory=lambda: ["youtube", "facebook", "instagram"])
+    networks: list[str] = Field(default_factory=lambda: ["youtube"])  # only youtube has a real logged-out backend today
     max_networks: int = 3
     stale_months: int = 6
     timeout_s: float = 30.0

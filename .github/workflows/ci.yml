@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -14,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python: ["3.11", "3.12"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -36,8 +37,34 @@ jobs:
       - name: CLI smoke (digest contract)
         shell: bash
         run: |
+          python -m leadforge --json version | grep -c "^LF_DIGEST " | grep -qx "1"
+          python -m leadforge --json status | grep -c "^LF_DIGEST " | grep -qx "1"
+
+      - name: Non-editable install works
+        shell: bash
+        run: |
+          python -m pip uninstall -y leadforge
+          python -m pip install .
           python -m leadforge version
-          python -m leadforge --json status
+
+  versions:
+    name: Version strings agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: pyproject == __init__ == plugin manifests == skill frontmatter
+        run: |
+          python - <<'EOF'
+          import json, re, sys, tomllib
+          py = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          init = re.search(r'__version__ = "([^"]+)"', open("src/leadforge/__init__.py").read()).group(1)
+          claude = json.load(open(".claude-plugin/plugin.json"))["version"]
+          codex = json.load(open(".codex-plugin/plugin.json"))["version"]
+          skill = re.search(r'version: "([^"]+)"', open("skills/generate-leads/SKILL.md").read()).group(1)
+          versions = {"pyproject": py, "__init__": init, "claude-plugin": claude, "codex-plugin": codex, "skill": skill}
+          print(versions)
+          sys.exit(0 if len(set(versions.values())) == 1 else 1)
+          EOF
 
   manifests:
     name: Validate plugin manifests

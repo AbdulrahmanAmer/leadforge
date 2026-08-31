@@ -54,7 +54,7 @@ flowchart LR
         DOC["doctor.py\nenv checks + self-install"]
         INT["intake.py\nanswers.yaml → icp.yaml compiler"]
         GRD["grid.py\ngeo tiling + query planner"]
-        PRV["providers/\nbase.py · gosom.py · fallback_rest.py\n· registry stubs"]
+        PRV["providers/\nbase.py · gosom.py · fallback_rest.py\n· registries"]
         NRM["normalize.py\nraw → canonical Business\n(sheet-ready fields)"]
         ENR["enrich/\ncrawler.py · extract.py\nvalidate.py · dm.py"]
         SCR["score.py\nweighted rubric + explanations\n+ need-hooks"]

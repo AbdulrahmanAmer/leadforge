@@ -103,7 +103,6 @@ def test_fallback_rest_non_list_is_degraded(tmp_path, monkeypatch):
 
 def test_gosom_timeout_salvages_partial_output(tmp_path, monkeypatch):
     """A 30m timeout must not discard the listings gosom already wrote to disk."""
-    import subprocess
 
     monkeypatch.chdir(tmp_path)
     cfg = load_config(tmp_path)
@@ -115,11 +114,8 @@ def test_gosom_timeout_salvages_partial_output(tmp_path, monkeypatch):
     out_path = cfg.cache_dir / f"gosom_{sha1_hex(q.text + str(q.tile), 8)}.json"
     out_path.write_text('{"title": "Partial Shop", "place_id": "P9"}\n', encoding="utf-8")
     monkeypatch.setattr(gosom_mod, "gosom_path", lambda cfg: "gosom-fake")
-
-    def _timeout(*a, **k):
-        raise subprocess.TimeoutExpired(cmd="gosom", timeout=1)
-
-    monkeypatch.setattr(gosom_mod.subprocess, "run", _timeout)
+    monkeypatch.setattr(GosomProvider, "_run_with_watchdog",
+                        staticmethod(lambda args, out, t, **kw: ({"returncode": -1, "stderr": ""}, True)))
     listings = prov.fetch(q)
     assert len(listings) == 1 and listings[0].data["title"] == "Partial Shop"
 
@@ -145,3 +141,25 @@ def test_gosom_real_fixture_maps_to_business(tmp_path, monkeypatch):
         assert biz.phone_e164 and biz.phone_e164.startswith("+44")
         assert biz.website and biz.website.startswith("http")
         assert biz.address_city == "Guildford"
+
+
+def test_watchdog_terminates_stalled_process(tmp_path):
+    """A process that wrote output then hangs is killed after the stall window."""
+    import sys
+    out = tmp_path / "results.json"
+    out.write_text('{"title": "X"}\n', encoding="utf-8")
+    args = [sys.executable, "-c", "import time; time.sleep(600)"]
+    t0 = __import__("time").monotonic()
+    proc, timed_out = GosomProvider._run_with_watchdog(args, out, hard_timeout_s=600,
+                                                       stall_s=3, poll_s=0.5)
+    elapsed = __import__("time").monotonic() - t0
+    assert timed_out is True
+    assert elapsed < 15, f"watchdog took {elapsed:.0f}s to fire"
+
+
+def test_watchdog_returns_normally_on_clean_exit(tmp_path):
+    import sys
+    out = tmp_path / "results.json"
+    proc, timed_out = GosomProvider._run_with_watchdog(
+        [sys.executable, "-c", "print('hi')"], out, hard_timeout_s=60, stall_s=3, poll_s=0.5)
+    assert timed_out is False and proc["returncode"] == 0

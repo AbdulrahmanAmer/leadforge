@@ -56,6 +56,12 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                 out["socials"].setdefault(net, url)
             for cand in people_fn(page.text, page.url):
                 out["people"].append(cand)
+        # WE SCORE account-intel profile (v0.1.1): tech stack, departments, headcount, triggers.
+        from leadforge.enrich.profile import build_profile
+        try:
+            out["profile"] = build_profile(res.pages, b["domain"], b["category"])
+        except Exception as e:  # noqa: BLE001 — profiling is additive, never blocks enrichment
+            LOG.warning("profile build failed for %s: %s", b["id"], type(e).__name__)
         # U4.5: browser escalation — only when static found nothing and the extra is installed.
         if res.needs_browser and browser.is_available() and not out["emails"] and not out["people"]:
             urls = [p.url for p in res.pages[:browser.MAX_RENDERED_PAGES_PER_SITE]] or [b["website"]]
@@ -159,6 +165,8 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
                                            observed_at=now_iso()))
     enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
               "pages": res["pages"], "needs_browser": res["needs_browser"]}
+    if res.get("profile"):
+        enrich["profile"] = res["profile"]
     if social_presence:
         enrich["social_presence"] = social_presence
     db.update_enrich(conn, bid, enrich)
@@ -169,13 +177,42 @@ def _registry_cross_check(conn: sqlite3.Connection, b, counts: dict, registries:
     if not registries:
         return
     country = (b["address_country"] or "").strip().upper()
+    registry_people: list[Person] = []
     for reg in registries:
         if country not in reg.jurisdictions():
             continue
         for person, ev in reg.lookup(b):
+            registry_people.append(person)
             db.add_person(conn, person)
             db.add_evidence(conn, ev)
             counts["dm_candidates"] += 1
+    _auto_pick_registry_dm(conn, b, registry_people, counts)
+
+
+_CORPORATE_OFFICER_RE = None
+
+
+def _is_corporate_officer(name: str) -> bool:
+    global _CORPORATE_OFFICER_RE
+    if _CORPORATE_OFFICER_RE is None:
+        import re
+        _CORPORATE_OFFICER_RE = re.compile(r"\b(ltd|llp|limited|plc|inc|gmbh|company|corporation)\b", re.IGNORECASE)
+    return bool(_CORPORATE_OFFICER_RE.search(name))
+
+
+def _auto_pick_registry_dm(conn: sqlite3.Connection, b, registry_people: list[Person], counts: dict) -> None:
+    """v0.1.1 (amends ADR-003): exactly ONE active individual director from the official registry is
+    stronger evidence than any agent inference — auto-mark them DM so big runs don't queue the
+    obvious cases. 0 or 2+ individuals (or corporate officers only) stay with the agent."""
+    individuals = [p for p in registry_people if not _is_corporate_officer(p.name)]
+    if len(individuals) != 1:
+        return
+    dm = individuals[0]
+    conn.execute(
+        "UPDATE people SET is_dm=1, dm_confidence=0.9, labeled_at=? "
+        "WHERE business_id=? AND name=? AND labeled_by='registry'",
+        (now_iso(), b["id"], dm.name))
+    counts["dm_auto_picked"] = counts.get("dm_auto_picked", 0) + 1
 
 
 def _validate_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:

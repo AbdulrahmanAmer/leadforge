@@ -8,7 +8,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -22,12 +22,19 @@ from leadforge.util import now_iso
 COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
     "Email", "Email Tier", "Website", "Address", "City", "Region", "Postal", "Country",
-    "Rating", "Reviews", "Likely Need (Hook)", "Why This Score", "Maps", "Source", "Verified On",
+    "Rating", "Reviews", "Likely Need (Hook)", "Why This Score", "Maps", "Source", "Verified On", "Stale?",
+]
+# account_fit profile (WE SCORE spec) appends the account-intel columns
+ACCOUNT_COLUMNS = COLUMNS + [
+    "Employees", "Employee Range", "Revenue", "Departments", "Microsoft 365", "CRM", "ERP",
+    "Other Systems", "Trigger", "Trigger Strength", "LinkedIn", "Contactability", "Data Confidence",
+    "Status",
 ]
 _TIER_FILL = {
     "A": PatternFill("solid", fgColor="C6EFCE"),
     "B": PatternFill("solid", fgColor="FFEB9C"),
     "C": PatternFill("solid", fgColor="FCE4D6"),
+    "D": PatternFill("solid", fgColor="E7E6E6"),
     "DQ": PatternFill("solid", fgColor="D9D9D9"),
 }
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
@@ -52,7 +59,7 @@ def _display_phone(e164: str | None) -> str:
         return e164
 
 
-def _row_for(conn: sqlite3.Connection, s) -> dict:
+def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
@@ -67,7 +74,7 @@ def _row_for(conn: sqlite3.Connection, s) -> dict:
     ev = db.evidence_for(conn, s["business_id"])
     if ev:
         verified = max((e["observed_at"] for e in ev), default="")
-    return {
+    row = {
         "Score": round(s["total"]), "Tier": s["tier"], "Business": s["name"], "Category": s["category"] or "",
         "DM Name": dm["name"] if dm else "", "DM Title": dm["title"] if dm else "",
         "DM Conf": round(dm["dm_confidence"], 2) if dm else "",
@@ -80,51 +87,82 @@ def _row_for(conn: sqlite3.Connection, s) -> dict:
         "Reviews": s["review_count"] if s["review_count"] is not None else "",
         "Likely Need (Hook)": hooks[0] if hooks else "", "Why This Score": top_why,
         "Maps": s["maps_url"] or "", "Source": s["source"] or "", "Verified On": verified,
+        "Stale?": _stale_flag(verified, staleness_days),
     }
+    meta = {f["factor"]: f for f in factors if f.get("group") == "meta"}
+    if "status" in meta:  # account_fit profile -> append WE SCORE account-intel columns
+        enrich = json.loads(s["enrich_json"]) if s["enrich_json"] else {}
+        prof = enrich.get("profile") or {}
+        tech = prof.get("tech") or {}
+        trig = (prof.get("triggers") or [{}])[0]
+        socials = enrich.get("socials") or {}
+
+        def tri(key):
+            f = tech.get(key) or {}
+            v = f.get("value")
+            return (f.get("name") or "yes") if v == "yes" else ("no" if v == "no" else "unknown")
+
+        row.update({
+            "Employees": (prof.get("employee_count") or {}).get("value") or "",
+            "Employee Range": prof.get("employee_range", "unknown"),
+            "Revenue": (prof.get("revenue") or {}).get("value") or "unknown",
+            "Departments": ", ".join(prof.get("departments") or []),
+            "Microsoft 365": tri("microsoft_365"), "CRM": tri("crm"), "ERP": tri("erp"),
+            "Other Systems": ", ".join(tech.get("other") or []),
+            "Trigger": trig.get("text", ""), "Trigger Strength": trig.get("strength", ""),
+            "LinkedIn": socials.get("linkedin", ""),
+            "Contactability": meta["contactability"]["points"] if "contactability" in meta else "",
+            "Data Confidence": meta["data_confidence"]["points"] if "data_confidence" in meta else "",
+            "Status": meta["status"]["why"],
+        })
+    return row
 
 
-def export_run(conn: sqlite3.Connection, icp: ICP, run_id: str, out_dir: Path, formats: list[str]) -> list[str]:
+def export_run(conn: sqlite3.Connection, icp: ICP, run_id: str, out_dir: Path, formats: list[str],
+               staleness_days: int = 90) -> list[str]:
     rows_raw = db.scores_for_run(conn, run_id)
-    rows = [_row_for(conn, s) for s in rows_raw]
+    rows = [_row_for(conn, s, staleness_days) for s in rows_raw]
     rows.sort(key=lambda r: (-r["Score"], r["Tier"]))
+    columns = ACCOUNT_COLUMNS if any("Status" in r for r in rows) else COLUMNS
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     artifacts: list[str] = []
 
     if "xlsx" in formats:
-        artifacts.append(str(_write_xlsx(run_dir / f"{icp.campaign}.xlsx", rows, icp, run_id)))
+        artifacts.append(str(_write_xlsx(run_dir / f"{icp.campaign}.xlsx", rows, icp, run_id, columns)))
     if "csv" in formats:
-        artifacts.append(str(_write_csv(run_dir / f"{icp.campaign}.csv", rows)))
+        artifacts.append(str(_write_csv(run_dir / f"{icp.campaign}.csv", rows, columns)))
     artifacts.append(str(_write_report(run_dir / "report.json", rows, icp, run_id)))
     return artifacts
 
 
-def _write_csv(path: Path, rows: list[dict]) -> Path:
+def _write_csv(path: Path, rows: list[dict], columns: list[str] = COLUMNS) -> Path:
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-        w = csv.DictWriter(fh, fieldnames=COLUMNS)
+        w = csv.DictWriter(fh, fieldnames=columns)
         w.writeheader()
         for r in rows:
             w.writerow(r)
     return path
 
 
-def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
+def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
+                columns: list[str] = COLUMNS) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads"
-    ws.append(COLUMNS)
-    for ci in range(1, len(COLUMNS) + 1):
+    ws.append(columns)
+    for ci in range(1, len(columns) + 1):
         c = ws.cell(row=1, column=ci)
         c.fill = _HEADER_FILL
         c.font = _HEADER_FONT
         c.alignment = Alignment(vertical="center")
     for r in rows:
-        ws.append([r[c] for c in COLUMNS])
+        ws.append([r.get(c, '') for c in columns])
     # styling: tier fill, hyperlinks, zebra, widths
-    tier_col = COLUMNS.index("Tier") + 1
-    web_col = COLUMNS.index("Website") + 1
-    maps_col = COLUMNS.index("Maps") + 1
-    phone_col = COLUMNS.index("Phone") + 1
+    tier_col = columns.index("Tier") + 1
+    web_col = columns.index("Website") + 1
+    maps_col = columns.index("Maps") + 1
+    phone_col = columns.index("Phone") + 1
     for ri in range(2, len(rows) + 2):
         ws.cell(row=ri, column=phone_col).number_format = "@"  # text — never scientific notation
         tier = ws.cell(row=ri, column=tier_col).value
@@ -137,7 +175,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
                 cell.hyperlink = cell.value
                 cell.font = Font(color="0563C1", underline="single")
     ws.freeze_panes = "A2"
-    ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{len(rows) + 1}"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
     _autosize(ws)
 
     _summary_sheet(wb, rows, icp, run_id)
@@ -222,10 +260,13 @@ def _pct(n: int, total: int) -> str:
 
 def summarize_for_digest(conn: sqlite3.Connection, run_id: str) -> dict:
     rows = db.scores_for_run(conn, run_id)
-    tiers = {t: 0 for t in ("A", "B", "C", "DQ")}
+    tiers = {t: 0 for t in ("A", "B", "C", "D", "DQ")}
     for s in rows:
         tiers[s["tier"]] += 1
-    return {"leads": len(rows), "tier_a": tiers["A"], "tier_b": tiers["B"], "tier_c": tiers["C"], "dq": tiers["DQ"]}
+    out = {"leads": len(rows), "tier_a": tiers["A"], "tier_b": tiers["B"], "tier_c": tiers["C"], "dq": tiers["DQ"]}
+    if tiers["D"]:
+        out["tier_d"] = tiers["D"]
+    return out
 
 
 def top_hooks(conn: sqlite3.Connection, run_id: str, k: int = 3) -> list[str]:
@@ -240,3 +281,17 @@ def top_hooks(conn: sqlite3.Connection, run_id: str, k: int = 3) -> list[str]:
 # used by export test to keep openpyxl import honest
 def _today() -> str:
     return datetime.now().strftime("%Y-%m-%d")
+
+
+def _stale_flag(verified_iso: str, staleness_days: int) -> str:
+    """'yes' when the newest evidence is older than validation.staleness_days (docs/03 §staleness)."""
+    if not verified_iso:
+        return ""
+    from datetime import datetime, timedelta
+    try:
+        seen = datetime.fromisoformat(verified_iso.replace("Z", "+00:00"))
+        if seen.tzinfo is None:
+            seen = seen.replace(tzinfo=UTC)
+    except ValueError:
+        return ""
+    return "yes" if datetime.now(tz=UTC) - seen > timedelta(days=staleness_days) else ""

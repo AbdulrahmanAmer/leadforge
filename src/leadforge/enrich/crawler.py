@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 import urllib.robotparser
 from dataclasses import dataclass, field
+from datetime import date
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -21,7 +22,7 @@ PAGE_KEYWORDS = re.compile(
     r"(about|team|staff|people|leadership|founders?|management|meet|contact|impress|imprint|legal|careers?|jobs?)",
     re.IGNORECASE,
 )
-_CURRENT_YEAR = 2026  # updated by tests if needed; staleness threshold = current - 2
+_CURRENT_YEAR = date.today().year  # staleness threshold = current - crawl.stale_after_years
 
 
 @dataclass
@@ -171,7 +172,7 @@ class SiteCrawler:
         if years:
             latest = max(years)
             result.signals["copyright_year"] = latest
-            result.signals["stale_site"] = latest < _CURRENT_YEAR - 2
+            result.signals["stale_site"] = latest < _CURRENT_YEAR - self.cfg.crawl.stale_after_years
         result.signals["careers"] = any(re.search(r"/(careers?|jobs?)\b", p.url) for p in result.pages)
         result.signals["booking_hint"] = bool(
             re.search(r"(book (now|online)|schedule (an )?appointment|calendly|acuity|squarespace-scheduling)", blob, re.IGNORECASE)

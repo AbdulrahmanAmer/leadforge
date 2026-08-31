@@ -12,7 +12,7 @@ START HERE, IN THIS ORDER:
 THEN:
 - Verify the baseline is green before writing code:
     pip install -e .[dev] && pytest -q && ruff check src tests
-  Expected baseline: 64 passed, 2 xfailed, ruff clean. If it is red, run `leadforge doctor --fix` and
+  Expected baseline: full suite green (count in icm/STATE.md). If it is red, run `leadforge doctor --fix` and
   re-install before doing anything else.
 - Work the remaining units in the order given in icm/STATE.md. Each has a binding spec in its stub file's
   docstring plus acceptance criteria in docs/05 and icm/stages/*.md.

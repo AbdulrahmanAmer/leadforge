@@ -47,7 +47,7 @@ erDiagram
         text category
         text categories_json
         text website
-        text domain UK "nullable, normalized apex"
+        text domain "nullable, normalized apex — deliberately NOT unique (franchises share domains)"
         text phone_e164
         text address_full
         text address_street

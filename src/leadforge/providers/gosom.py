@@ -68,34 +68,83 @@ class GosomProvider(DiscoveryProvider):
             args += ["-grid-bbox", f"{b[0]},{b[1]},{b[2]},{b[3]}", "-grid-cell", str(query.tile.cell_km)]
 
         LOG.info("gosom fetch: %s", query.text)
-        try:
-            proc = subprocess.run(
-                args, capture_output=True, encoding="utf-8", errors="replace",
-                timeout=d.timeout_min * 60, shell=False,
-            )
-        except subprocess.TimeoutExpired as e:
-            # Salvage whatever gosom already wrote — a timeout after N minutes usually means
+        proc, timed_out = self._run_with_watchdog(args, out_path, d.timeout_min * 60,
+                                                  stall_s=d.stall_s)
+        # Captcha classification first — it applies whether gosom exited or was killed for stalling
+        # (a consent wall is a common cause of an empty stall).
+        stderr_tail = (proc["stderr"] or "")[-2000:].lower()
+        captcha = any(m in stderr_tail for m in _CAPTCHA_MARKERS)
+        if timed_out:
+            # Salvage whatever gosom already wrote — a stall after N minutes usually means
             # dozens of complete listings are sitting in the NDJSON file.
             salvaged = list(self._parse(out_path))
             if salvaged:
-                LOG.warning("gosom timeout after %sm on '%s' — salvaged %d listings from partial output",
-                            d.timeout_min, query.text, len(salvaged))
+                LOG.warning("gosom stalled on '%s' — salvaged %d listings from written output",
+                            query.text, len(salvaged))
                 return salvaged[:limit] if limit else salvaged
-            raise ProviderDegraded(f"gosom timeout after {d.timeout_min}m on '{query.text}'") from e
+            if captcha:
+                LOG.warning("gosom captcha/consent stall; cooling down")
+                time.sleep(min(_COOLDOWN_S, 30 if limit else _COOLDOWN_S))
+                raise ProviderDegraded(f"captcha/cooldown on '{query.text}'")
+            raise ProviderDegraded(f"gosom produced nothing before stalling on '{query.text}'")
 
-        stderr_tail = (proc.stderr or "")[-2000:].lower()
-        if any(m in stderr_tail for m in _CAPTCHA_MARKERS):
+        if captcha:
             LOG.warning("gosom captcha/consent signals; cooling down %ss", _COOLDOWN_S)
             time.sleep(min(_COOLDOWN_S, 30 if limit else _COOLDOWN_S))  # short cooldown under --limit smoke tests
             raise ProviderDegraded(f"captcha/cooldown on '{query.text}'")
-        if proc.returncode != 0 and not out_path.exists():
-            raise ProviderDegraded(f"gosom exit {proc.returncode} on '{query.text}': {stderr_tail[:200]}")
+        if proc["returncode"] != 0 and not out_path.exists():
+            raise ProviderDegraded(f"gosom exit {proc['returncode']} on '{query.text}': {stderr_tail[:200]}")
 
         listings = list(self._parse(out_path))
         if limit:
             listings = listings[:limit]
         LOG.info("gosom got %d listings for '%s'", len(listings), query.text)
         return listings
+
+    @staticmethod
+    def _run_with_watchdog(args: list[str], out_path: Path, hard_timeout_s: float,
+                           stall_s: float = 180.0, poll_s: float = 5.0) -> tuple[dict, bool]:
+        """Run gosom, but don't trust it to exit: v1.17.4 reliably hangs after writing all results
+        (observed live; -exit-on-inactivity never fires). When the results file has content and has
+        stopped growing for stall_s, terminate and let the caller salvage. Returns ({returncode,
+        stderr}, timed_out) — timed_out True when we had to kill it.
+
+        stderr goes to a temp file, not a pipe: a chatty child would fill the OS pipe buffer and
+        block, which this loop would misread as a stall — and the tail must survive a kill so the
+        captcha classifier still sees it."""
+        err_path = out_path.with_suffix(".stderr.log")
+        with open(err_path, "w", encoding="utf-8", errors="replace") as err_fh:
+            proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=err_fh, shell=False)
+            start = time.monotonic()
+            last_size = -1
+            last_growth = start
+            killed = False
+            while True:
+                try:
+                    proc.wait(timeout=poll_s)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                now = time.monotonic()
+                size = out_path.stat().st_size if out_path.exists() else 0
+                if size != last_size:
+                    last_size, last_growth = size, now
+                stalled_with_output = size > 0 and (now - last_growth) >= stall_s
+                if stalled_with_output or (now - start) >= hard_timeout_s:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=10)
+                    killed = True
+                    break
+        try:
+            stderr_tail = err_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+            err_path.unlink()
+        except OSError:
+            stderr_tail = ""
+        return {"returncode": -1 if killed else proc.returncode, "stderr": stderr_tail}, killed
 
     def _parse(self, out_path: Path):
         if not out_path.exists():

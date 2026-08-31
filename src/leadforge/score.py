@@ -227,6 +227,8 @@ class Scorer:
 
 
 def score_run(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
+    if icp.scoring.profile == "account_fit":
+        return score_run_account_fit(conn, icp, run_id)
     scorer = Scorer(conn, icp, run_id)
     counts = {"scored": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0, "dq": 0}
     for b in db.all_businesses(conn):
@@ -234,5 +236,179 @@ def score_run(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
         db.save_score(conn, s)
         counts["scored"] += 1
         counts[{"A": "tier_a", "B": "tier_b", "C": "tier_c", "DQ": "dq"}[s.tier]] += 1
+    conn.commit()
+    return counts
+
+
+# ====================================================================================== account_fit
+# WE SCORE profile (v0.1.1): a fixed 0-100 account-fit rubric with A-D grades, plus separate
+# contactability and data-confidence scores (stored as meta factors so export can surface them).
+# Hard rule: UNKNOWN never scores as NO - unknown inputs earn 0 points but lower data confidence,
+# never a disqualification.
+
+def _grade(total: float, dq: bool) -> str:
+    if dq:
+        return "DQ"
+    if total >= 80:
+        return "A"
+    if total >= 65:
+        return "B"
+    if total >= 50:
+        return "C"
+    return "D"
+
+
+def _industry_fit(b, icp: ICP) -> tuple[float, str, bool]:
+    """(points/15, why, known). Aliases from ICP categories; no match => manual review, not zero-known."""
+    cats = [c.casefold() for c in ([b["category"] or ""] + json.loads(b["categories_json"] or "[]")) if c]
+    targets = [t.casefold() for t in icp.target.categories]
+    for c in cats:
+        for t in targets:
+            if t in c or c in t:
+                return 15.0, f"industry '{c}' matches target '{t}'", True
+    return 0.0, "industry outside target list -> manual review", bool(cats)
+
+
+def score_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str, b) -> Score:
+    from leadforge.enrich.profile import trigger_freshness
+    from leadforge.enrich.validate import best_email_tier
+
+    enrich = json.loads(b["enrich_json"]) if b["enrich_json"] else {}
+    prof = enrich.get("profile") or {}
+    people = db.people_for(conn, b["id"])
+    contacts = db.contacts_for(conn, b["id"])
+    dm = next((p for p in people if p["is_dm"] == 1), None)
+    factors: list[ScoreFactor] = []
+    known = 0
+    considered = 0
+
+    def add(name: str, pts: float, cap: float, why: str, is_known: bool) -> None:
+        nonlocal known, considered
+        considered += 1
+        known += int(is_known)
+        factors.append(ScoreFactor(factor=name, group="account_fit", weight=cap,
+                                   score=round(pts / cap, 3) if cap else 0.0, points=pts, why=why))
+
+    # A. Industry fit (15)
+    pts, why, is_known = _industry_fit(b, icp)
+    industry_match = pts > 0
+    add("industry_fit", pts, 15, why, is_known)
+
+    # B. Employee size (15)
+    emp = (prof.get("employee_count") or {}).get("value")
+    rng = prof.get("employee_range", "unknown")
+    if rng == "50-500":
+        add("employee_size", 15, 15, f"{emp} employees (target band)", True)
+    elif rng == "20-49":
+        add("employee_size", 5, 15, f"{emp} employees (secondary band)", True)
+    elif rng in ("<20", ">500"):
+        add("employee_size", 0, 15, f"{emp} employees (outside ICP)", True)
+    else:
+        add("employee_size", 0, 15, "employee count unknown", False)
+
+    # C. Revenue (10) - publicly underivable in most cases; UNKNOWN != NO_MATCH
+    rev = (prof.get("revenue") or {}).get("value")
+    if rev is None:
+        add("revenue", 0, 10, "revenue unknown", False)
+    else:
+        in_band = 10_000_000 <= rev <= 150_000_000
+        add("revenue", 10 if in_band else 0, 10,
+            f"revenue {rev} ({'in' if in_band else 'outside'} band)", True)
+
+    # D. Growth / expansion (15) - from detected triggers
+    triggers = prof.get("triggers") or []
+    strong_growth = [t for t in triggers if t["strength"] == "strong"]
+    if strong_growth:
+        add("growth", 15, 15, f"expansion evidence: {strong_growth[0]['text'][:80]}", True)
+    elif triggers:
+        add("growth", 8, 15, f"moderate evidence: {triggers[0]['text'][:80]}", True)
+    else:
+        add("growth", 0, 15, "no growth evidence found", False)
+
+    # E. Organisational complexity (10)
+    depts = prof.get("departments") or []
+    c_pts = (5 if len(depts) >= 2 else 0) + (5 if any(d in ("operations", "it") for d in depts) else 0)
+    add("org_complexity", c_pts, 10, f"departments: {', '.join(depts) or 'none detected'}", bool(depts))
+
+    # F. Technology maturity (15)
+    tech = prof.get("tech") or {}
+    t_pts, t_known, t_why = 0, False, []
+    for key, label, w in (("microsoft_365", "Microsoft 365", 5), ("crm", "CRM", 5), ("erp", "ERP", 5)):
+        fct = tech.get(key) or {}
+        if fct.get("value") == "yes":
+            t_pts += w
+            t_why.append(f"{label}: yes ({fct.get('name', fct.get('source', ''))})")
+            t_known = True
+        elif fct.get("state") == "CONFIRMED":
+            t_known = True
+            t_why.append(f"{label}: no")
+        else:
+            t_why.append(f"{label}: unknown")
+    add("technology", t_pts, 15, "; ".join(t_why), t_known)
+
+    # G. Buying trigger (20) with freshness banding
+    if triggers:
+        fresh = trigger_freshness(triggers[0].get("date"), now_iso())
+        strength = triggers[0]["strength"]
+        if strength == "strong" and fresh in ("VERY_STRONG", "STRONG", "UNKNOWN"):
+            g = 20.0
+        elif strength == "strong" or fresh == "MEDIUM":
+            g = 10.0
+        else:
+            g = 5.0
+        add("buying_trigger", g, 20, f"[{fresh}] {triggers[0]['text'][:100]}", True)
+    else:
+        add("buying_trigger", 0, 20, "no trigger detected", False)
+
+    total = sum(f.points for f in factors)
+
+    # DQ per spec s11 - only on CONFIRMED negatives, never on unknowns
+    dq = emp is not None and emp < 20
+    dq_reason = f"under 20 employees ({emp})" if dq else ""
+
+    # Contactability (separate 0-100; never affects fit)
+    email_tier = best_email_tier([c["tier"] for c in contacts if c["kind"] == "email"])
+    phones = [c["value"] for c in contacts if c["kind"] == "phone"]
+    has_direct = any(p.startswith(("+447",)) and len(p) > 8 for p in phones)  # mobile heuristic (UK)
+    linkedin = any(c["kind"] == "social" and c["label"] == "linkedin" for c in contacts)
+    contactability = ((30 if dm else 0)
+                      + (30 if email_tier == "valid" else 15 if email_tier == "role" else 0)
+                      + (25 if has_direct else 0) + (10 if linkedin else 0)
+                      + (5 if b["phone_e164"] else 0))
+    data_confidence = round(100 * known / considered) if considered else 0
+
+    factors.append(ScoreFactor(factor="contactability", group="meta", weight=100,
+                               score=contactability / 100, points=contactability,
+                               why="verified-DM/email/phone/linkedin/switchboard breakdown"))
+    factors.append(ScoreFactor(factor="data_confidence", group="meta", weight=100,
+                               score=data_confidence / 100, points=data_confidence,
+                               why=f"{known}/{considered} rubric inputs known"))
+    factors.append(ScoreFactor(factor="status", group="meta", weight=0, score=0, points=0,
+                               why=_account_status(_grade(total, dq), contactability, industry_match,
+                                                   rng, dq_reason)))
+
+    hooks = [t["text"][:120] for t in triggers[:1]]
+    return Score(business_id=b["id"], run_id=run_id, total=round(total, 1),
+                 tier=_grade(total, dq), factors=factors, need_hooks=hooks, scored_at=now_iso())
+
+
+def _account_status(grade: str, contactability: int, industry_match: bool, emp_range: str,
+                    dq_reason: str) -> str:
+    if grade == "DQ":
+        return f"DISQUALIFIED: {dq_reason}"
+    if not industry_match or emp_range in ("20-49", ">500") or grade == "C":
+        return "MANUAL_REVIEW"
+    if grade in ("A", "B") and contactability >= 60:
+        return "READY_FOR_OUTREACH"
+    return "NEW"
+
+
+def score_run_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
+    counts = {"scored": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0, "tier_d": 0, "dq": 0}
+    for b in db.all_businesses(conn):
+        s = score_account_fit(conn, icp, run_id, b)
+        db.save_score(conn, s)
+        counts["scored"] += 1
+        counts[{"A": "tier_a", "B": "tier_b", "C": "tier_c", "D": "tier_d", "DQ": "dq"}[s.tier]] += 1
     conn.commit()
     return counts
