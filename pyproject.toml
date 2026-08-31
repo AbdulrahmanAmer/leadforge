@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leadforge"
+version = "0.1.0"
+description = "Internal B2B lead-generation engine: OSS scraping, website deep-crawl, DM discovery, ICP scoring, XLSX export. Built to be driven by AI agent harnesses (Claude Code / Codex) at minimal token cost."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Striker & partner" }]
+keywords = ["b2b", "leads", "scraping", "sales"]
+
+# Core stays pure-python-wheel only — no compilers ever (ADR-008).
+dependencies = [
+  "typer>=0.12",
+  "rich>=13.7",
+  "pydantic>=2.7",
+  "PyYAML>=6.0",
+  "httpx>=0.27",
+  "selectolax>=0.3.21",
+  "trafilatura>=1.9",
+  "phonenumbers>=8.13",
+  "email-validator>=2.1",
+  "dnspython>=2.6",
+  "disposable-email-domains>=0.0.90",
+  "pyap>=0.3.1",
+  "tenacity>=8.3",
+  "openpyxl>=3.1",
+]
+
+[project.optional-dependencies]
+browser = ["crawl4ai>=0.9.2"]          # JS-rendered site escalation (Playwright; run `crawl4ai-setup` once)
+ner = ["gliner>=0.2"]                  # optional local zero-shot person/title extraction
+addressing = ["usaddress>=0.5.10"]     # better US address splitting (compiled wheel; optional)
+registry = []                          # reserved: registry adapters use core httpx; keys via config
+dev = ["pytest>=8.2", "ruff>=0.5", "pytest-timeout>=2.3"]
+
+[project.scripts]
+leadforge = "leadforge.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+timeout = 60

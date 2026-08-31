@@ -1,0 +1,13 @@
+{
+  "name": "leadforge",
+  "owner": { "name": "Striker" },
+  "metadata": { "description": "Self-marketplace for the LeadForge internal B2B lead-gen plugin." },
+  "plugins": [
+    {
+      "name": "leadforge",
+      "source": "./",
+      "description": "B2B lead generation: OSS scraping + site deep-crawl + DM discovery + ICP scoring + XLSX export, token-frugal by design.",
+      "category": "productivity"
+    }
+  ]
+}

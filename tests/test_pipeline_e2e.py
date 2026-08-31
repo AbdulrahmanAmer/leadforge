@@ -1,0 +1,111 @@
+"""End-to-end pipeline test (offline): mock the discovery provider + doctor + crawler, then drive
+the full run() state machine through discover -> enrich -> dm gate -> resume -> score -> export.
+
+This is the scaffold's proof that all stages wire together without network or the gosom binary.
+"""
+import json
+
+import pytest
+
+from leadforge import db
+from leadforge.models import RawListing
+from leadforge.util import now_iso
+
+
+@pytest.fixture
+def patched(monkeypatch):
+    # 1) doctor: pretend the environment is ready
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda cfg: None)
+
+    # 2) discovery provider: return two fake listings, no binary/network
+    def fake_available(self):
+        return True, "mock"
+
+    def fake_fetch(self, query, limit=None):
+        return [
+            RawListing(provider="gosom", fetched_at=now_iso(), data={
+                "title": "Alpha Auto Repair", "category": "auto repair shop",
+                "address": "1 A St, Houston, TX 77001",
+                "complete_address": {"street": "1 A St", "city": "Houston", "state": "TX",
+                                     "postal_code": "77001", "country": "United States"},
+                "phone": "713-555-0100", "web_site": "http://alpha-auto.test",
+                "review_rating": "3.4", "review_count": "90", "place_id": "PID_ALPHA",
+            }),
+            RawListing(provider="gosom", fetched_at=now_iso(), data={
+                "title": "Beta Transmission", "category": "transmission shop",
+                "address": "2 B St, Houston, TX 77002", "phone": "713-555-0200",
+                "review_rating": "4.8", "review_count": "12", "place_id": "PID_BETA",
+            }),
+        ]
+
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.available", fake_available)
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.fetch", fake_fetch)
+
+    # 3) crawler: Alpha has a reachable site with an owner + email; Beta has no site
+    from leadforge.enrich.crawler import CrawlResult, Page, SiteCrawler
+
+    def fake_crawl(self, website):
+        if "alpha" in website:
+            html = ('<html><body>Owner Sam Alpha founded the shop. '
+                    '<a href="mailto:sam@alpha-auto.test">email</a></body></html>')
+            text = "Owner Sam Alpha founded the shop in 2010. Contact sam@alpha-auto.test"
+            return CrawlResult(ok=True, pages=[Page(website, html, text)],
+                               signals={"https": False, "stale_site": True, "booking_hint": False})
+        return CrawlResult(ok=False, error="unreachable")
+
+    monkeypatch.setattr(SiteCrawler, "crawl", fake_crawl)
+    # keep email validation deterministic & offline
+    monkeypatch.setattr("leadforge.enrich.runner.validate_email",
+                        lambda email, label, cfg: ("valid" if label == "personal" else "role", {}))
+
+
+def test_full_pipeline_offline(cfg, sample_icp, patched, monkeypatch, tmp_path):
+    import yaml
+    icp_path = tmp_path / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
+
+    from leadforge.pipeline import run_pipeline
+
+    # First pass: discover -> enrich -> pauses at dm_pending (Alpha has a candidate person)
+    r1 = run_pipeline(cfg, sample_icp, icp_path)
+    assert r1["stage"] == "dm_pending"
+    assert r1["counts"]["dm_pending"] >= 1
+
+    # Agent labels the DM
+    conn = db.connect(cfg.db_path)
+    pending = db.dm_pending(conn, 10)
+    biz_id = pending[0]["id"]
+    labels = tmp_path / "dm_labels.ndjson"
+    labels.write_text(json.dumps({"biz": biz_id, "pick": 0, "confidence": 0.9}) + "\n", encoding="utf-8")
+    from leadforge.enrich.dm import apply_labels
+    applied = apply_labels(conn, labels)
+    assert applied["applied"] == 1
+
+    # Resume: score + export
+    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True)
+    assert r2["stage"] == "exported"
+    assert r2["counts"]["leads"] == 2
+    # Alpha (stale site + owner DM + valid email, web-design ICP) should outrank Beta
+    xlsx = [a for a in r2["artifacts"] if a.endswith(".xlsx")]
+    csv = [a for a in r2["artifacts"] if a.endswith(".csv")]
+    assert xlsx and csv
+    from pathlib import Path
+    assert Path(xlsx[0]).exists() and Path(csv[0]).exists()
+
+    # DM was recorded on Alpha
+    people = db.people_for(conn, biz_id)
+    assert any(p["is_dm"] == 1 and p["labeled_by"] == "agent" for p in people)
+
+
+def test_resume_is_idempotent(cfg, sample_icp, patched, tmp_path):
+    import yaml
+    icp_path = tmp_path / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
+    from leadforge.pipeline import run_pipeline
+
+    run_pipeline(cfg, sample_icp, icp_path)
+    # skip DM this time to reach export, then re-run resume: should not duplicate businesses
+    run_pipeline(cfg, sample_icp, icp_path, resume=True, skip_dm=True)
+    conn = db.connect(cfg.db_path)
+    n = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
+    assert n == 2

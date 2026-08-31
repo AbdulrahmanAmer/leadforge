@@ -1,0 +1,26 @@
+# runtime state — never commit scraped data
+leadforge_data/
+answers.yaml
+icp.yaml
+dm_batch*.ndjson
+dm_labels*.ndjson
+leadforge.yaml
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# editors/os
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

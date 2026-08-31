@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "leadforge",
+  "displayName": "LeadForge",
+  "version": "0.1.0",
+  "description": "Open-source B2B lead generation engine: scrapes Google Maps/Business listings via pinned OSS engines, deep-crawls business websites for contacts and decision makers, scores leads against your ICP, and exports a clean XLSX/CSV sheet. All heavy lifting runs in a Python CLI outside the model context — the agent only interviews the user, reads one-line digests, and labels decision makers from tiny snippets.",
+  "author": { "name": "Striker & partner" },
+  "license": "MIT",
+  "keywords": ["b2b", "leads", "lead-generation", "scraping", "sales", "google-maps"]
+}

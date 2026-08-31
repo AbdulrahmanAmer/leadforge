@@ -1,0 +1,48 @@
+erDiagram
+    RUNS ||--o{ QUERIES : "plans"
+    RUNS ||--o{ BUSINESSES : "discovers"
+    BUSINESSES ||--o{ CONTACTS : "has emails/phones/socials"
+    BUSINESSES ||--o{ PEOPLE : "has DM candidates"
+    BUSINESSES ||--o{ EVIDENCE : "every fact is sourced"
+    BUSINESSES ||--o{ SCORES : "scored per run"
+
+    RUNS {
+        text id PK
+        text stage "planned to exported"
+        text icp_hash "which campaign"
+    }
+    BUSINESSES {
+        text id PK
+        text place_id UK "dedupe key"
+        text name
+        text category
+        text phone_e164
+        text website
+        text address_city
+        real rating
+        int review_count
+    }
+    CONTACTS {
+        text kind "email|phone|social"
+        text value
+        text label "role|personal"
+        text tier "valid..invalid"
+    }
+    PEOPLE {
+        text name
+        text title
+        text snippet "<=300 chars"
+        int is_dm "agent's verdict"
+        real dm_confidence
+    }
+    EVIDENCE {
+        text fact
+        text url "where we saw it"
+        text observed_at "when"
+    }
+    SCORES {
+        real total "0-100"
+        text tier "A|B|C|DQ"
+        text factors_json "why, per factor"
+        text need_hooks_json "outreach angle"
+    }

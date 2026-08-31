@@ -1,0 +1,37 @@
+flowchart TB
+    USER(["👤 Operator"])
+    subgraph HARNESS["Agent harness (Claude Code / Codex)"]
+        AGENT["AI agent — runs the generate-leads skill"]
+    end
+    subgraph HOST["Operator machine (Windows / macOS / Linux)"]
+        CLI["leadforge CLI (Python 3.11+)"]
+        SCRAPER["gosom google-maps-scraper<br/>pinned OSS binary"]
+        DB[("SQLite — dedupe + freshness")]
+        SHEET[["XLSX / CSV exports"]]
+    end
+    subgraph EXT["Public sources on the internet"]
+        GMAPS["Google Maps / Business<br/>public listings"]
+        SITES["Business websites<br/>about · team · contact"]
+        REG["Public registries (opt-in, free keys)<br/>Companies House · OpenCorporates"]
+    end
+
+    USER -->|"answers intake questions"| AGENT
+    AGENT -->|"runs commands,<br/>reads 1-line digests only"| CLI
+    CLI --> SCRAPER
+    CLI --> DB
+    CLI --> SHEET
+    SCRAPER -->|"headless browser"| GMAPS
+    CLI -->|"polite HTTP crawl"| SITES
+    CLI -.->|"optional REST"| REG
+    SHEET --> USER
+
+    classDef human fill:#1F3864,stroke:#0f1e3d,color:#fff,stroke-width:2px
+    classDef agent fill:#C6E0F5,stroke:#1F3864,color:#0f1e3d,stroke-width:2px
+    classDef engine fill:#FFE08A,stroke:#8a6d1a,color:#3d2f05,stroke-width:2px
+    classDef ext fill:#EDEDED,stroke:#8f8f8f,color:#333
+    classDef out fill:#C6EFCE,stroke:#2c7a3f,color:#12331d,stroke-width:2px
+    class USER human
+    class AGENT agent
+    class CLI,SCRAPER,DB engine
+    class GMAPS,SITES,REG ext
+    class SHEET out

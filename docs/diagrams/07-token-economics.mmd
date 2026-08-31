@@ -1,0 +1,19 @@
+flowchart TB
+    subgraph BAD["❌ Scraping from inside an AI chat"]
+        direction LR
+        B1["Agent opens every<br/>Maps result page"] --> B2["Agent reads every<br/>website's raw HTML"] --> B3["300+ pages pushed<br/>through the context"] --> B4["💸 Hundreds of thousands<br/>of tokens — slow, truncated,<br/>error-prone"]
+    end
+    subgraph GOOD["✅ LeadForge"]
+        direction LR
+        G1["CLI scrapes + crawls<br/>everything locally"] --> G2["Agent sees ONE<br/>LF_DIGEST line<br/>per command"] --> G3["+ 300-char snippets<br/>to pick decision makers"] --> G4["✅ Under ~15k tokens<br/>for an entire campaign"]
+    end
+    BAD ~~~ GOOD
+
+    classDef bad fill:#FCE4D6,stroke:#a5502a,color:#3d1a05
+    classDef good fill:#C6EFCE,stroke:#2c7a3f,color:#12331d
+    classDef badend fill:#F4B183,stroke:#a5502a,color:#3d1a05,stroke-width:2px
+    classDef goodend fill:#8FD9A8,stroke:#2c7a3f,color:#12331d,stroke-width:2px
+    class B1,B2,B3 bad
+    class B4 badend
+    class G1,G2,G3 good
+    class G4 goodend

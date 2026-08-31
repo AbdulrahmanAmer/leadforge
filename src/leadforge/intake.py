@@ -1,0 +1,107 @@
+"""Intake / ICP compiler (U2.2) — docs/03 §4, question bank in skills/.../references/icp-guide.md.
+
+Reads the agent-written answers.yaml, validates it hard (models.py does the field validation), applies
+sensible defaults, and writes a canonical icp.yaml whose hash is deterministic (re-compile -> same hash).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import yaml
+
+from leadforge.models import ICP, Answers
+from leadforge.util import InputError
+
+
+def compile_icp(answers_path: Path, out_path: Path) -> tuple[ICP, list[str]]:
+    if not answers_path.is_file():
+        raise InputError(f"answers file not found: {answers_path}")
+    try:
+        raw = yaml.safe_load(answers_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as e:
+        raise InputError(f"answers.yaml is not valid YAML: {e}") from e
+    if not isinstance(raw, dict):
+        raise InputError("answers.yaml must be a YAML mapping (see icp-guide.md)")
+
+    errors = _preflight(raw)
+    if errors:
+        raise InputError("answers.yaml problems:\n  - " + "\n  - ".join(errors))
+
+    try:
+        answers = Answers.model_validate(raw)
+    except Exception as e:  # noqa: BLE001 — surface pydantic errors as clean field messages
+        raise InputError(_fmt_validation(e)) from e
+
+    icp = ICP.model_validate(answers.model_dump())
+    warnings = _warnings(icp)
+
+    # deterministic serialization -> stable hash
+    out_path.write_text(
+        yaml.safe_dump(icp.model_dump(mode="json"), sort_keys=True, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    return icp, warnings
+
+
+def _preflight(raw: dict) -> list[str]:
+    errs = []
+    if not raw.get("campaign"):
+        errs.append("missing 'campaign' (a kebab-case slug you invent)")
+    if not raw.get("offer", {}).get("what"):
+        errs.append("missing 'offer.what' (one sentence: what is being sold)")
+    target = raw.get("target", {})
+    if not target.get("categories"):
+        errs.append("missing 'target.categories' (1-5 business types, Maps-style phrasing)")
+    geo = target.get("geography", {})
+    if not geo.get("areas") and not geo.get("bbox"):
+        errs.append("missing 'target.geography.areas' (or a bbox)")
+    if not geo.get("country"):
+        errs.append(
+            "missing 'target.geography.country' — ASK THE USER which country (ISO2, e.g. US/GB/EG). "
+            "A bare city name is ambiguous worldwide and would scrape the wrong place"
+        )
+    return errs
+
+
+_VAGUE_HINT = ("downtown", "north", "south", "east", "west", "central", "area", "region", "metro")
+
+
+def _warnings(icp: ICP) -> list[str]:
+    w = []
+    geo = icp.target.geography
+    for area in geo.areas:
+        # a bare single-token city inside a big federal country is the classic garbage-results trap
+        if geo.country in ("US", "CA", "AU", "BR", "IN", "MX") and "," not in area:
+            w.append(f"'{area}' has no state/region — add one (e.g. '{area}, TX') to avoid same-name mixups")
+        if any(t in area.casefold() for t in _VAGUE_HINT) and "," not in area:
+            w.append(f"'{area}' is vague; a named city/suburb geocodes far more reliably")
+    if icp.caps.max_leads > 500:
+        w.append(f"max_leads={icp.caps.max_leads} is large; expect long runtime + more captcha risk")
+    if len(icp.target.categories) > 3:
+        w.append(f"{len(icp.target.categories)} categories multiplies queries; consider splitting campaigns")
+    if not icp.decision_maker.titles_priority:
+        w.append("no DM titles set; DM labeling will be weaker")
+    return w
+
+
+def _fmt_validation(e: Exception) -> str:
+    lines = ["answers.yaml failed validation:"]
+    errors = getattr(e, "errors", None)
+    if callable(errors):
+        for err in e.errors():  # type: ignore[attr-defined]
+            loc = ".".join(str(x) for x in err.get("loc", ()))
+            lines.append(f"  - {loc}: {err.get('msg')}")
+    else:
+        lines.append(f"  - {e}")
+    return "\n".join(lines)
+
+
+def load_icp(icp_path: Path) -> ICP:
+    if not icp_path.is_file():
+        raise InputError(f"icp file not found: {icp_path} (run `leadforge intake` first)")
+    raw = yaml.safe_load(icp_path.read_text(encoding="utf-8")) or {}
+    try:
+        return ICP.model_validate(raw)
+    except Exception as e:  # noqa: BLE001
+        raise InputError(_fmt_validation(e)) from e

@@ -1,0 +1,32 @@
+sequenceDiagram
+    autonumber
+    actor U as Operator
+    participant A as Agent (skill)
+    participant C as leadforge CLI
+    participant G as scraper engine
+    participant W as Business websites
+    participant D as SQLite
+
+    U->>A: "find me leads" (+ intake answers)
+    A->>C: leadforge doctor --fix --json
+    C-->>A: digest: ok (engine installed)
+    A->>C: leadforge intake --answers answers.yaml
+    C-->>A: digest: icp.yaml written
+    A->>C: leadforge run --icp icp.yaml
+    C->>G: scrape listings (conservative pacing)
+    G-->>C: listings
+    C->>D: normalize + upsert (dedupe by place_id)
+    loop each business website (polite, capped)
+        C->>W: GET home/about/team/contact
+        W-->>C: HTML
+        C->>D: contacts + people candidates + evidence
+    end
+    C-->>A: digest: stage=dm_pending (42 to label)
+    A->>C: leadforge dm export --max 60
+    C-->>A: small NDJSON of snippets
+    A->>A: label decision makers in ONE pass
+    A->>C: leadforge dm apply
+    A->>C: leadforge run --resume
+    C->>C: score + export
+    C-->>A: digest: exported (142 leads, sheet path)
+    A-->>U: summary + where the sheet is

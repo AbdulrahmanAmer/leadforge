@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install (editable, dev extras)
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Lint
+        run: python -m ruff check src tests
+
+      # The suite is deliberately offline: no test may hit the live web or need the scraper binary.
+      - name: Test
+        run: python -m pytest -q
+
+      - name: CLI smoke (digest contract)
+        shell: bash
+        run: |
+          python -m leadforge version
+          python -m leadforge --json status
+
+  manifests:
+    name: Validate plugin manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JSON is well-formed
+        run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json \
+                   .codex-plugin/plugin.json .agents/plugins/marketplace.json; do
+            echo "checking $f"
+            python -c "import json,sys; json.load(open('$f'))"
+          done
+      - name: Skill frontmatter is portable (spec fields only)
+        run: python .github/scripts/check_skill_frontmatter.py

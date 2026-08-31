@@ -1,0 +1,36 @@
+BUILD LEADFORGE
+
+You are finishing an internal B2B lead-generation tool that is already a working scaffold. Do not explore
+blindly and do not re-architect anything — the design is decided and documented.
+
+START HERE, IN THIS ORDER:
+1. Read icm/HANDOFF.md          (orientation + invariants + how to work)
+2. Read icm/STATE.md            (what is done vs remaining — your worklist; keep it updated)
+3. Read docs/05-icm-build-plan.md, especially the "One-shot finalize protocol" at the bottom
+4. Read AGENTS.md               (coding rules and red lines)
+
+THEN:
+- Verify the baseline is green before writing code:
+    pip install -e .[dev] && pytest -q && ruff check src tests
+  Expected baseline: 64 passed, 2 xfailed, ruff clean. If it is red, run `leadforge doctor --fix` and
+  re-install before doing anything else.
+- Work the remaining units in the order given in icm/STATE.md. Each has a binding spec in its stub file's
+  docstring plus acceptance criteria in docs/05 and icm/stages/*.md.
+- After each unit: tests green, ruff clean, tick the box in icm/STATE.md, commit with the unit id
+  (e.g. "U3.6: fallback REST discovery provider").
+- The single highest-value step is U8.2 (live end-to-end validation) — it is the only one that touches the
+  real scraper and will reveal field drift in providers/gosom.py GOSOM_FIELD_MAP. Do it on this machine and
+  turn what you learn into a real fixture test.
+
+HARD RULES (do not violate to make a gate pass):
+- Keep the LF_DIGEST contract (docs/06): one digest line per command, no unbounded output, agent never reads
+  leadforge_data/* except a dm export batch.
+- Keep the politeness/compliance invariants (docs/04 §5, docs/07): robots.txt, one in-flight request per
+  host + delay, ICP caps, suppression list, no SMTP probing, no LinkedIn, no login-gated scraping.
+- Never add anti-bot/captcha evasion, fingerprint spoofing, fake accounts, or outreach/sending features.
+  Use the pinned OSS engines as shipped. If a unit seems to need any of that, stop and tell me instead.
+- Country is REQUIRED on every campaign and areas must be specific — never relax those validators; vague
+  locations are what produce garbage lead lists.
+
+Ask me only if something is genuinely ambiguous after reading the docs. Otherwise proceed unit by unit and
+report progress against icm/STATE.md.

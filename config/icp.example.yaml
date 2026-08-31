@@ -1,0 +1,20 @@
+# A compiled ICP as `leadforge intake` produces it (docs/03 §4). Kept as a working example + intake fixture.
+version: 1
+campaign: auto-repair-houston-webdesign
+offer:
+  what: "Website redesign + booking system for auto repair shops"
+  value_prop: "More booked jobs, fewer missed calls"
+  sender: "Striker's agency"
+target:
+  categories: ["auto repair shop", "car repair", "transmission shop"]
+  # country is REQUIRED (ISO2): a bare city name is ambiguous worldwide and would scrape the wrong place
+  geography: { areas: ["Houston, TX"], country: US, grid: auto }
+  size: { min_reviews: 10, max_reviews: null }
+qualify:
+  hard: [franchise_or_chain, no_phone]
+  soft: [website_missing, stale_site, low_rating_high_volume]
+decision_maker:
+  titles_priority: ["Owner", "General Manager", "Service Manager"]
+scoring: { weights_override: {} }
+caps: { max_leads: 200, max_sites: 300, max_tiles: 60 }
+compliance: { region_profile: us }

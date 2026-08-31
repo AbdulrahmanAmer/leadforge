@@ -1,0 +1,11 @@
+flowchart LR
+    S0["Stage 0<br/>Foundations"] --> G0{"G0"} --> S1["Stage 1<br/>Contracts &<br/>Data Model"] --> G1{"G1"} --> S2["Stage 2<br/>Intake & ICP"] --> G2{"G2"}
+    G2 --> S3["Stage 3<br/>Discovery"] --> G3{"G3"} --> S4["Stage 4<br/>Enrichment"] --> G4{"G4"} --> S5["Stage 5<br/>Scoring"] --> G5{"G5"}
+    G5 --> S6["Stage 6<br/>Export"] --> G6{"G6"} --> S7["Stage 7<br/>Harness<br/>Integration"] --> G7{"G7"} --> S8["Stage 8<br/>Hardening &<br/>Release"] --> G8{"G8 · ship"}
+
+    classDef done fill:#C6EFCE,stroke:#2c7a3f,color:#12331d,stroke-width:2px
+    classDef partial fill:#FFEB9C,stroke:#8a6d1a,color:#3d2f05,stroke-width:2px
+    classDef todo fill:#FCE4D6,stroke:#a5502a,color:#3d1a05,stroke-width:2px
+    class S0,S1,S2,S5,S6,S7,G0,G1,G2,G5,G6,G7 done
+    class S3,S4,G3,G4 partial
+    class S8,G8 todo

@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> planned : run created
+    planned --> discovering : discover
+    discovering --> discovered : all queries done/degraded
+    discovered --> enriching : enrich
+    enriching --> enriched : site queue drained
+    enriched --> dm_pending : DM candidates exist
+    enriched --> scoring : --skip-dm or none found
+    dm_pending --> scoring : dm apply received
+    scoring --> scored
+    scored --> exported : sheet written
+    discovering --> failed : no provider usable
+    exported --> [*]
+    note right of dm_pending
+        the ONLY stage that waits on the agent
+    end note
+    note right of discovering
+        checkpoints per query
+        resume skips completed work
+    end note

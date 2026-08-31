@@ -1,0 +1,30 @@
+flowchart TB
+    subgraph S1["① YOU ASK"]
+        U["👤 'Find auto repair shops in Houston, TX (US)<br/>that need a website'"]
+    end
+    subgraph S2["② THE AGENT INTERVIEWS YOU"]
+        A["🤖 Claude Code / Codex asks 8 questions:<br/>offer · categories · country + area · size<br/>disqualifiers · what makes a good fit · who to reach · how many"]
+    end
+    subgraph S3["③ THE ENGINE DOES THE WORK (no AI tokens spent here)"]
+        direction LR
+        C1["🗺️ Scrape<br/>public Maps<br/>listings"] --> C2["🧹 Normalize<br/>clean phone,<br/>address, name"] --> C3["🌐 Crawl each<br/>website politely<br/>for contacts"] --> C4["✅ Validate<br/>emails & phones<br/>into tiers"]
+    end
+    subgraph S4["④ THE AGENT JUDGES"]
+        D["🤖 Reads tiny snippets and picks the real<br/>decision maker for each business"]
+    end
+    subgraph S5["⑤ SCORE & DELIVER"]
+        E["🎯 Every lead scored 0-100 against YOUR criteria,<br/>with the reason written out + a 'likely need' hook"]
+        X["📊 lead_sheet.xlsx + .csv<br/>142 leads · 38 hot"]
+        E --> X
+    end
+    U --> A --> C1
+    C4 --> D --> E
+
+    classDef ask fill:#1F3864,stroke:#0f1e3d,color:#fff,stroke-width:2px
+    classDef agent fill:#C6E0F5,stroke:#1F3864,color:#0f1e3d,stroke-width:2px
+    classDef engine fill:#FFE08A,stroke:#8a6d1a,color:#3d2f05,stroke-width:2px
+    classDef out fill:#C6EFCE,stroke:#2c7a3f,color:#12331d,stroke-width:2px
+    class U ask
+    class A,D agent
+    class C1,C2,C3,C4 engine
+    class E,X out

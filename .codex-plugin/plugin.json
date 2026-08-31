@@ -1,0 +1,12 @@
+{
+  "name": "leadforge",
+  "version": "0.1.0",
+  "description": "Open-source B2B lead generation engine: OSS Google Maps scraping, polite website deep-crawl for contacts and decision makers, ICP scoring, XLSX/CSV export. Heavy lifting in a Python CLI; the agent reads one-line digests and labels decision makers from snippets.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "LeadForge",
+    "shortDescription": "B2B lead generation with OSS scrapers and ICP scoring",
+    "longDescription": "Interview the user about their ideal customer profile, then run a self-bootstrapping Python pipeline that scrapes Google Maps/Business listings, crawls business websites for contacts and decision makers, scores every lead against the ICP, and exports a styled XLSX + CSV backed by SQLite.",
+    "category": "Productivity"
+  }
+}

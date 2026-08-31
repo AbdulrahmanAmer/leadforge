@@ -1,0 +1,37 @@
+# Default scoring rubric (docs/01 §5, docs/03). ICP `scoring.weights_override` merges over `factors.*.weight`.
+version: 1
+tiers: { a_min: 75, b_min: 55 }
+negatives_cap: -40
+
+factors:
+  # Fit (50)
+  industry_match:          { group: fit,          weight: 18 }
+  size_match:              { group: fit,          weight: 12 }
+  geography_match:         { group: fit,          weight: 10 }
+  business_model:          { group: fit,          weight: 10 }
+  # DM reachability (25)
+  dm_identified:           { group: reachability, weight: 12 }
+  verified_direct_contact: { group: reachability, weight: 13 }
+  # Need signals — the intent proxy (15)
+  need_signals:            { group: need,         weight: 15 }
+  # Data confidence (10)
+  data_confidence:         { group: confidence,   weight: 10 }
+
+negatives:
+  franchise_or_chain: -25
+  competitor: -40
+  existing_client: -40
+  out_of_area: -20
+
+hooks:   # signal -> one-line pitch hook; {offer} is replaced by icp.offer.what
+  website_missing: "No website at all — likely needs: {offer}"
+  website_no_ssl: "Site has no HTTPS — easy credibility pitch alongside: {offer}"
+  stale_site: "Website looks abandoned (old copyright/broken pages) — refresh angle for: {offer}"
+  low_rating_high_volume: "Busy but rating is hurting (<=3.9 with 50+ reviews) — reputation/ops angle"
+  few_reviews: "Almost no reviews — visibility/marketing angle"
+  weak_social_presence: "No active social profiles found — presence-building angle"
+  phone_only_booking: "No online booking detected — phone-only operation; automation pitch"
+  hiring: "Actively hiring — growing and likely budgeted"
+  stale_social: "Social profiles look abandoned (no recent posts) — presence/content angle for: {offer}"
+  no_social_presence: "No social profiles linked from their site at all — visibility angle"
+  no_video_presence: "No video/YouTube channel — video marketing angle for: {offer}"

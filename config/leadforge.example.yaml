@@ -1,0 +1,48 @@
+# LeadForge workspace configuration.
+# Copy to ./leadforge.yaml next to where you run `leadforge` and edit what you need.
+# Everything here is optional — these ARE the defaults (env overrides: LEADFORGE_SECTION__KEY=value).
+
+data_dir: leadforge_data          # all state (db, cache, exports, logs, bin) lives here; gitignored
+default_region: US                # ISO2 fallback for phone parsing when a listing has no country
+
+discovery:
+  providers: [gosom]              # order matters; add fallback_rest when U3.6 lands
+  grid_mode: "off"                # off | auto  (auto = gosom -grid-bbox tiling; verify flags live before enabling, see U8.2)
+  grid_cell_km: 3.0
+  depth: 10                       # gosom scroll depth per query
+  concurrency: 2                  # keep low; raise only with proxies
+  lang: en
+  timeout_min: 30                 # per provider batch
+  proxies: []                     # e.g. ["socks5://user:pass@host:port"] — passthrough to the engine
+  email_crawl: false              # gosom -email (slow); we do our own site crawl instead
+  fallback_rest:
+    url: http://localhost:8765
+
+crawl:
+  pages_per_site: 6
+  timeout_s: 15
+  max_text_bytes: 400000
+
+politeness:
+  delay_s: 2.0                    # per-host, +/-30% jitter; 1 request in flight per host
+  workers: 4                      # hosts crawled in parallel
+  user_agent: "LeadForgeBot/0.1 (internal lead research)"
+
+validation:
+  dns_timeout_s: 5.0
+  staleness_days: 90
+
+registry:                         # optional free-registration keys; leave empty to disable (ADR-007)
+  companies_house_key: ""
+  opencorporates_token: ""
+
+social:                           # optional social/video presence signals via Agent-Reach (unit U4.8)
+  enabled: false                  # master switch — nothing runs unless true
+  networks: [youtube, facebook, instagram]   # linkedin is rejected even if you list it (icm/SCOPE.md)
+  max_networks: 3                 # per business, to keep runs cheap and polite
+  stale_months: 6                 # "stale_social" threshold
+  timeout_s: 30
+  max_calls_per_min: 20
+
+export:
+  formats: [xlsx, csv]
