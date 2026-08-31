@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -38,10 +39,31 @@ TARGETS = {
 }
 
 
+def _points_elsewhere(p: Path) -> bool:
+    """True for symlinks AND Windows junctions (is_symlink() misses junctions on py<3.12)."""
+    return os.path.normcase(os.path.realpath(p)) != os.path.normcase(os.path.abspath(p))
+
+
+def _skill_version(d: Path) -> str:
+    try:
+        m = re.search(r'version:\s*"?([0-9][0-9.]*)', (d / "SKILL.md").read_text(encoding="utf-8"))
+        return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
 def link_or_copy(src: Path, dst: Path) -> str:
     if dst.exists() or dst.is_symlink():
-        if dst.is_symlink() or (dst.is_dir() and (dst / "SKILL.md").exists()):
-            return "already installed"
+        if dst.is_symlink() or _points_elsewhere(dst):
+            return "already installed (linked — tracks the repo)"
+        if dst.is_dir() and (dst / "SKILL.md").exists():
+            # a COPY is a frozen snapshot: refresh it when the repo's skill version moved on
+            # (re-running install.py after a repo update used to leave the stale copy forever)
+            if _skill_version(dst) == _skill_version(src):
+                return "already installed"
+            shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+            return f"updated copy -> v{_skill_version(src) or '?'}"
         return "skipped (path exists and is not ours)"
     dst.parent.mkdir(parents=True, exist_ok=True)
     if platform.system() == "Windows":

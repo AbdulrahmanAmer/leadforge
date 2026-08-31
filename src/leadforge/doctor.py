@@ -33,7 +33,14 @@ CORE_IMPORTS = [
     "typer", "pydantic", "yaml", "httpx", "selectolax", "trafilatura",
     "phonenumbers", "email_validator", "dns", "pyap", "tenacity", "openpyxl",
 ]
-OPTIONAL_EXTRAS = {"crawl4ai": "browser", "gliner": "ner", "usaddress": "addressing"}
+OPTIONAL_EXTRAS = {"crawl4ai": "browser", "gliner": "ner", "usaddress": "addressing", "yt_dlp": "social"}
+# extras --fix --full installs, with the concrete packages to fall back on when there is no
+# source checkout to `pip install -e .[extra]` from (non-editable installs live in site-packages)
+QUALITY_EXTRAS: list[tuple[str, str, str | None, list[str]]] = [
+    ("ner", "gliner", None, ["gliner"]),
+    ("browser", "crawl4ai", "crawl4ai-setup", ["crawl4ai"]),
+    ("social", "yt_dlp", None, ["yt-dlp"]),
+]
 
 
 @dataclass
@@ -141,20 +148,25 @@ def gosom_runs(path: Path) -> bool:
 
 # ------------------------------------------------------------------ checks
 def install_quality_extras(rep_add) -> None:
-    """--fix --full: install the enrichment-quality extras ([ner] GLiNER, [browser] crawl4ai)
-    so a fresh machine's first bootstrap yields full-quality sheets, not the heuristic floor."""
+    """--fix --full: install the enrichment-quality extras ([ner] GLiNER, [browser] crawl4ai,
+    [social] yt-dlp) so a fresh machine's first bootstrap yields full-quality sheets, not the
+    heuristic floor."""
     root = _repo_root()
+    editable = (root / "pyproject.toml").is_file()  # non-editable installs have no repo to -e
 
     def _importable_fresh(mod: str) -> bool:
         # a module installed seconds ago is invisible to this process's stale import-path caches;
         # a child interpreter sees the truth
         return subprocess.run([sys.executable, "-c", f"import {mod}"], capture_output=True).returncode == 0
 
-    for extra, probe_mod, post in (("ner", "gliner", None), ("browser", "crawl4ai", "crawl4ai-setup"),
-                                   ("social", "yt_dlp", None)):
+    for extra, probe_mod, post, packages in QUALITY_EXTRAS:
         already = _importable_fresh(probe_mod)
         if not already:
-            proc = subprocess.run([sys.executable, "-m", "pip", "install", "-e", f"{root}[{extra}]"],
+            # editable checkout: install the extra so pins stay authoritative; otherwise install
+            # the concrete packages directly ('pip install -e C:\\Python\\Lib[ner]' was the old
+            # failure mode under a plain `pip install .`)
+            args = ["-e", f"{root}[{extra}]"] if editable else packages
+            proc = subprocess.run([sys.executable, "-m", "pip", "install", *args],
                                   capture_output=True, encoding="utf-8", errors="replace")
             ok = proc.returncode == 0 and _importable_fresh(probe_mod)
         else:
@@ -167,9 +179,11 @@ def install_quality_extras(rep_add) -> None:
                 # browser download can exceed 10 min on slow links — report, don't crash the doctor
                 rep_add(CheckResult(f"extra-{extra}-setup", False, msg=f"{post} timed out",
                                     hint=f"re-run {post} manually (large download)"))
+        fix_hint = (f"pip install -e {root}[{extra}]" if editable
+                    else f"pip install {' '.join(packages)}")
         rep_add(CheckResult(f"extra-{extra}", ok, fixed=ok and not already,
                             msg="installed" if ok else "install failed",
-                            hint="" if ok else f"pip install -e {root}[{extra}]"))
+                            hint="" if ok else fix_hint))
 
 
 def run_doctor(cfg: Config, fix: bool = False, strict: bool = False, full: bool = False) -> DoctorReport:
@@ -184,7 +198,7 @@ def run_doctor(cfg: Config, fix: bool = False, strict: bool = False, full: bool 
 
     missing = [mod for mod in CORE_IMPORTS if not _importable(mod)]
     had_missing = bool(missing)
-    if missing and fix:
+    if missing and fix and (_repo_root() / "pyproject.toml").is_file():
         subprocess.run([sys.executable, "-m", "pip", "install", "-e", str(_repo_root())],
                        capture_output=True, encoding="utf-8", errors="replace")
         missing = [m for m in missing if not _importable(m)]
@@ -240,7 +254,7 @@ def run_doctor(cfg: Config, fix: bool = False, strict: bool = False, full: bool 
 
     extras = [f"{tag}({mod})" for mod, tag in OPTIONAL_EXTRAS.items() if _importable(mod)]
     add(CheckResult("optional-extras", True, msg=", ".join(extras) if extras else
-                    "none installed (fine) — [browser]/[ner]/[addressing] available"))
+                    "none installed (fine) — [browser]/[ner]/[social]/[addressing] available"))
 
     if rep.ok:
         _write_stamp(cfg)
