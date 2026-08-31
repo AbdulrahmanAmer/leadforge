@@ -99,6 +99,24 @@ def test_same_country_alias_never_penalized(conn, sample_icp):
     assert not any(f.factor == "negative:out_of_area" for f in s.factors)
 
 
+def test_chain_and_competitor_matching_is_word_bounded(conn, sample_icp):
+    """v0.1.4: substring matching DQ'd innocents — 'group' in 'Grouper', 'inc' in 'Vincent',
+    competitor 'ace' in 'Palace'."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, name="Grouper & Vincent Auto", name_norm="grouper vincent auto")
+    s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
+    assert not any(f.factor == "negative:franchise_or_chain" for f in s.factors)
+    assert next(f for f in s.factors if f.factor == "business_model").score > 0.3
+
+    _seed_business(conn, id="biz_p", place_id="P2", dedupe_key="pid:P2",
+                   name="Palace Garage", name_norm="palace garage")
+    rows = {r["id"]: r for r in db.all_businesses(conn)}
+    sample_icp.qualify.hard = ["competitor:ace"]
+    assert Scorer(conn, sample_icp, run_id).score_business(rows["biz_p"]).tier != "DQ"
+    sample_icp.qualify.hard = ["competitor:palace"]  # the real competitor still DQs
+    assert Scorer(conn, sample_icp, run_id).score_business(rows["biz_p"]).tier == "DQ"
+
+
 # --- v0.1.2 export resolutions ---------------------------------------------------------------
 def test_export_cells_are_always_resolved(tmp_path, monkeypatch):
     import json as _json

@@ -98,6 +98,9 @@ def test_export_neutralizes_formula_injection_and_control_chars(tmp_path, monkey
     biz_col = [c.value for c in ws[1]].index("Business") + 1
     cells = [ws.cell(row=i, column=biz_col) for i in range(2, 4)]
     assert all(c.data_type != "f" for c in cells)  # no formula cells anywhere
+    web_col = [c.value for c in ws[1]].index("Website") + 1
+    for i in (2, 3):  # both rows have no website: placeholder text must NOT be a hyperlink
+        assert ws.cell(row=i, column=web_col).hyperlink is None
 
 
 def test_tier_d_is_counted_not_dropped(tmp_path, monkeypatch):
@@ -120,6 +123,29 @@ def test_tier_d_is_counted_not_dropped(tmp_path, monkeypatch):
     report = _json.loads(open(next(a for a in arts if a.endswith("report.json")), encoding="utf-8").read())
     assert report["tiers"].get("D") == 1
     assert sum(report["tiers"].values()) == report["total"]
+
+
+def test_stale_flag_and_call_readiness_tell_the_truth(tmp_path, monkeypatch):
+    """v0.1.4: Stale? '' meant fresh AND never-verified AND bad-timestamp; a raw unparsed Maps
+    phone string counted as call-ready."""
+    from leadforge.config import load_config
+    from leadforge.export import export_run
+    from leadforge.models import Business, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="raw", run_id=rid, name="Raw Phone Garage", source="gosom",
+                                      dedupe_key="dk-raw", phone_raw="Call us: O800-CARS"))
+    db.save_score(conn, Score(business_id="raw", run_id=rid, total=60, tier="B",
+                              factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1,
+                                                   points=1, why="w")]))
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["csv"])
+    with open(next(a for a in arts if a.endswith(".csv")), encoding="utf-8-sig") as fh:
+        row = next(iter(csv.DictReader(fh)))
+    assert row["Stale?"] == "never verified"          # no evidence ever collected
+    assert row["Call Readiness"] == "UNVERIFIED PHONE - confirm number"
+    assert row["Phone"] == "Call us: O800-CARS"       # still displayed — honesty, not deletion
 
 
 def test_natural_name_rules():

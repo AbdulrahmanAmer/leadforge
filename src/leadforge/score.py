@@ -1,4 +1,4 @@
-"""Scoring & qualification engine (U5.1-5.2) — docs/01 §5, rubric config/scoring.default.yaml.
+"""Scoring & qualification engine (U5.1-5.2) — docs/01 §5, rubric leadforge/data/scoring.default.yaml.
 
 Pure, deterministic, unit-tested. Each factor returns (score 0..1, why-string); points = score*weight.
 Negatives apply a capped penalty; hard qualifiers -> DQ. Need-hooks synthesized from signals + offer.
@@ -7,8 +7,9 @@ Negatives apply a capped penalty; hard qualifiers -> DQ. Need-hooks synthesized 
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
-from pathlib import Path
+from importlib.resources import files as _pkg_files
 
 import yaml
 
@@ -16,11 +17,16 @@ from leadforge import db
 from leadforge.models import ICP, Score, ScoreFactor
 from leadforge.util import now_iso
 
-_DEFAULT_RUBRIC = Path(__file__).resolve().parents[2] / "config" / "scoring.default.yaml"
+
+def _word_in(needle: str, hay: str) -> bool:
+    """'group' must not match 'Grouper', 'inc' must not match 'Vincent' — whole words only."""
+    return re.search(rf"\b{re.escape(needle)}\b", hay) is not None
 
 
 def load_rubric(icp: ICP) -> dict:
-    rubric = yaml.safe_load(_DEFAULT_RUBRIC.read_text(encoding="utf-8"))
+    # packaged resource, not a repo-relative path: `pip install .` (non-editable) has no repo root
+    rubric = yaml.safe_load((_pkg_files("leadforge") / "data" / "scoring.default.yaml")
+                            .read_text(encoding="utf-8"))
     for factor, weight in icp.scoring.weights_override.items():
         if factor in rubric["factors"]:
             rubric["factors"][factor]["weight"] = weight
@@ -80,7 +86,7 @@ class Scorer:
 
     def _f_business_model(self, b, ctx) -> tuple[float, str]:
         name = (b["name_norm"] or "")
-        chain_hits = [w for w in ("franchise", "group", "inc", "corporation") if w in name]
+        chain_hits = [w for w in ("franchise", "group", "inc", "corporation") if _word_in(w, name)]
         if chain_hits:
             return 0.3, "name suggests a chain/franchise"
         return 0.8, "looks like an independent business"
@@ -173,16 +179,15 @@ class Scorer:
         return hits
 
     def _hard_dq(self, b, ctx) -> str | None:
+        name = b["name_norm"] or ""
         for q in self.icp.qualify.hard:
             if q == "no_phone" and not b["phone_e164"]:
                 return "no_phone"
-            if q == "franchise_or_chain" and any(w in (b["name_norm"] or "") for w in ("franchise", "group")):
+            if q == "franchise_or_chain" and any(_word_in(w, name) for w in ("franchise", "group")):
                 return "franchise_or_chain"
             if q == "no_website_hard" and not b["website"]:
                 return "no_website_hard"
-            if q.startswith("competitor:") and q.split(":", 1)[1].casefold() in (b["name_norm"] or ""):
-                return q
-            if q.startswith("existing_client:") and q.split(":", 1)[1].casefold() in (b["name_norm"] or ""):
+            if q.startswith(("competitor:", "existing_client:")) and _word_in(q.split(":", 1)[1].casefold(), name):
                 return q
         return None
 
@@ -192,7 +197,7 @@ class Scorer:
         neg = self.rubric.get("negatives", {})
         out = []
         name = b["name_norm"] or ""
-        if "franchise" in name or "group" in name:
+        if _word_in("franchise", name) or _word_in("group", name):
             out.append(("franchise_or_chain", neg.get("franchise_or_chain", -25)))
         # out_of_area only on unambiguous evidence: the listing's own country differs from the
         # campaign's. Same-country suburb spillover is graded softly by geography_match instead.

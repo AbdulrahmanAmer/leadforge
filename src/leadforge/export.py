@@ -129,10 +129,13 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     row["Incorporated"] = (regp.get("incorporated") or "")[:4] or "-"
     row["Company Status"] = regp.get("company_status") or "-"
     row["SIC Codes"] = ", ".join(regp.get("sic_codes") or []) or "-"
-    has_phone = bool(row["Phone"])
+    # READY requires a VALIDATED number (parsed e164 or a site-extracted phone) — raw Maps
+    # strings display in the Phone cell but are not call-ready evidence
+    validated_phone = bool(s["phone_e164"]) or any(c["kind"] == "phone" for c in contacts)
     has_dm = row["_has_dm"]
-    row["Call Readiness"] = ("READY - named contact" if has_phone and has_dm
-                             else "READY - ask switchboard" if has_phone
+    row["Call Readiness"] = ("READY - named contact" if validated_phone and has_dm
+                             else "READY - ask switchboard" if validated_phone
+                             else "UNVERIFIED PHONE - confirm number" if row["Phone"]
                              else "NO PHONE - research first")
     meta = {f["factor"]: f for f in factors if f.get("group") == "meta"}
     if "status" in meta:  # account_fit profile -> append WE SCORE account-intel columns
@@ -183,7 +186,7 @@ def export_run(conn: sqlite3.Connection, icp: ICP, run_id: str, out_dir: Path, f
 
 def _write_csv(path: Path, rows: list[dict], columns: list[str] = COLUMNS) -> Path:
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-        w = csv.DictWriter(fh, fieldnames=columns)
+        w = csv.DictWriter(fh, fieldnames=columns, restval="-")  # same blank rule as the XLSX
         w.writeheader()
         for r in rows:
             w.writerow({k: _safe_cell(v if v != "" else "-") for k, v in r.items() if k in columns})
@@ -216,7 +219,9 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
             ws.cell(row=ri, column=tier_col).fill = fill
         for col in (web_col, maps_col):
             cell = ws.cell(row=ri, column=col)
-            if cell.value:
+            # only real URLs get link styling — '-' and 'NONE - no web presence' placeholders
+            # used to render as blue clickable links that opened a relative path named '-'
+            if isinstance(cell.value, str) and cell.value.startswith("http"):
                 cell.hyperlink = cell.value
                 cell.font = Font(color="0563C1", underline="single")
     ws.freeze_panes = "A2"
@@ -224,7 +229,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
     _autosize(ws)
 
     _summary_sheet(wb, rows, icp, run_id)
-    _about_sheet(wb)
+    _about_sheet(wb, icp)
     wb.save(path)
     return path
 
@@ -263,12 +268,17 @@ def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> Non
     ws["A1"].font = Font(bold=True, size=14)
 
 
-def _about_sheet(wb: Workbook) -> None:
+def _about_sheet(wb: Workbook, icp: ICP) -> None:
     ws = wb.create_sheet("About")
     ws.append(["LeadForge — how to read this sheet"])
     ws["A1"].font = Font(bold=True, size=14)
     ws.append([])
-    ws.append(["Tier", "A ≥ 75 (hot) · B 55–74 · C < 55 · DQ = hard-disqualified by your ICP rules"])
+    # the legend must match the rubric that actually graded this workbook (score.py _grade
+    # for account_fit; tiers block of scoring.default.yaml otherwise)
+    if getattr(icp.scoring, "profile", "") == "account_fit":
+        ws.append(["Tier", "A ≥ 80 · B 65–79 · C 50–64 · D < 50 · DQ = hard-disqualified by your ICP rules"])
+    else:
+        ws.append(["Tier", "A ≥ 75 (hot) · B 55–74 · C < 55 · DQ = hard-disqualified by your ICP rules"])
     ws.append(["Score", "0–100, sum of weighted factors; see 'Why This Score' per row for the top drivers"])
     ws.append(["Email Tier", "valid > role > risky > catch_all > unknown (invalid emails are dropped)"])
     ws.append(["DM Conf", "0–1 confidence the agent assigned when labeling the decision maker from site snippets"])
@@ -335,16 +345,17 @@ def _today() -> str:
 
 
 def _stale_flag(verified_iso: str, staleness_days: int) -> str:
-    """'yes' when the newest evidence is older than validation.staleness_days (docs/03 §staleness)."""
+    """'yes' when the newest evidence is older than validation.staleness_days (docs/03 §staleness).
+    Never-verified and unparseable timestamps say so — '-' must only ever mean 'fresh'."""
     if not verified_iso:
-        return ""
+        return "never verified"
     from datetime import datetime, timedelta
     try:
         seen = datetime.fromisoformat(verified_iso.replace("Z", "+00:00"))
         if seen.tzinfo is None:
             seen = seen.replace(tzinfo=UTC)
     except ValueError:
-        return ""
+        return "unknown (bad timestamp)"
     return "yes" if datetime.now(tz=UTC) - seen > timedelta(days=staleness_days) else ""
 
 

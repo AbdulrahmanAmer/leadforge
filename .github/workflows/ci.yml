@@ -46,6 +46,8 @@ jobs:
           python -m pip uninstall -y leadforge
           python -m pip install .
           python -m leadforge version
+          # the packaged rubric must ship in the wheel — score once crashed here (repo-relative path)
+          python -c "from importlib.resources import files; t=(files('leadforge')/'data'/'scoring.default.yaml').read_text(encoding='utf-8'); assert 'factors' in t"
 
   versions:
     name: Version strings agree
