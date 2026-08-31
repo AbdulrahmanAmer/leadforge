@@ -122,3 +122,26 @@ def test_gosom_timeout_salvages_partial_output(tmp_path, monkeypatch):
     monkeypatch.setattr(gosom_mod.subprocess, "run", _timeout)
     listings = prov.fetch(q)
     assert len(listings) == 1 and listings[0].data["title"] == "Partial Shop"
+
+
+def test_gosom_real_fixture_maps_to_business(tmp_path, monkeypatch):
+    """U8.2: real bytes from a live Guildford run must map cleanly through to_business()."""
+    from pathlib import Path
+
+    from leadforge.models import ICP, RawListing
+    from leadforge.normalize import to_business
+    from leadforge.util import now_iso
+    fixture = Path(__file__).parent / "fixtures" / "gosom_sample.ndjson"
+    icp = ICP.model_validate({
+        "campaign": "t", "offer": {"what": "x"},
+        "target": {"categories": ["accounting firm"],
+                   "geography": {"areas": ["Guildford"], "country": "GB"}}})
+    rows = [json.loads(ln) for ln in fixture.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    assert len(rows) == 3
+    for row in rows:
+        biz = to_business(RawListing(provider="gosom", fetched_at=now_iso(), data=row), "run_x", icp, "GB")
+        assert biz is not None
+        assert biz.name and biz.place_id
+        assert biz.phone_e164 and biz.phone_e164.startswith("+44")
+        assert biz.website and biz.website.startswith("http")
+        assert biz.address_city == "Guildford"
