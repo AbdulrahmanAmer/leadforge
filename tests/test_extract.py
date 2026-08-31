@@ -151,3 +151,10 @@ def test_suffix_truncated_email_is_dropped():
     out = extract_emails(html, "info@cmbpartners.co.uk")
     assert "info@cmbpartners.co.uk" in out
     assert "nfo@cmbpartners.co.uk" not in out
+
+
+def test_distinct_suffix_email_from_text_is_kept():
+    from leadforge.enrich.extract import extract_emails
+    # ann@ is a real, distinct address (appears in page text) even though joann@ ends with it
+    out = extract_emails("<p>joann@x.com</p>", "contact ann@x.com or joann@x.com")
+    assert "ann@x.com" in out and "joann@x.com" in out

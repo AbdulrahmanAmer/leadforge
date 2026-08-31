@@ -153,8 +153,13 @@ def install_quality_extras(rep_add) -> None:
         else:
             ok = True
         if ok and post and shutil.which(post):
-            subprocess.run([shutil.which(post)], capture_output=True, encoding="utf-8",
-                           errors="replace", timeout=600)
+            try:
+                subprocess.run([shutil.which(post)], capture_output=True, encoding="utf-8",
+                               errors="replace", timeout=600)
+            except subprocess.TimeoutExpired:
+                # browser download can exceed 10 min on slow links — report, don't crash the doctor
+                rep_add(CheckResult(f"extra-{extra}-setup", False, msg=f"{post} timed out",
+                                    hint=f"re-run {post} manually (large download)"))
         rep_add(CheckResult(f"extra-{extra}", ok, fixed=ok and not already,
                             msg="installed" if ok else "install failed",
                             hint="" if ok else f"pip install -e {root}[{extra}]"))

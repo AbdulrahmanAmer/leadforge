@@ -72,8 +72,9 @@ def decode_cfemail(hexstr: str) -> str | None:
 def extract_emails(html: str, text: str) -> dict[str, str]:
     """-> {email: label} with label role|personal."""
     found: dict[str, str] = {}
+    trusted: set[str] = set()  # came from mailto/cfemail/text/at-dot — cannot be a markup-split artifact
 
-    def _add(raw: str) -> None:
+    def _add(raw: str, trust: bool = True) -> None:
         email = raw.strip().strip(".,;:<>()[]\"'").lower()
         if not EMAIL_RE.fullmatch(email):
             return
@@ -81,6 +82,8 @@ def extract_emails(html: str, text: str) -> dict[str, str]:
             return
         local = email.split("@", 1)[0]
         found.setdefault(email, "role" if local in ROLE_LOCALPARTS else "personal")
+        if trust:
+            trusted.add(email)
 
     tree = HTMLParser(html)
     for a in tree.css('a[href^="mailto:"]'):
@@ -89,15 +92,16 @@ def extract_emails(html: str, text: str) -> dict[str, str]:
         decoded = decode_cfemail(hexstr)
         if decoded:
             _add(decoded)
-    for blob in (html_mod.unescape(html), text):
-        for m in EMAIL_RE.findall(blob):
-            _add(m)
+    for m in EMAIL_RE.findall(html_mod.unescape(html)):
+        _add(m, trust=False)  # raw markup can split a local part ("<b>i</b>nfo@x.com" -> "nfo@x.com")
+    for m in EMAIL_RE.findall(text):
+        _add(m)
     for m in AT_DOT_RE.finditer(text):
         _add(f"{m.group(1)}@{m.group(2)}.{m.group(3)}")
-    # Markup can split a local part mid-word ("<b>i</b>nfo@x.com" -> regex sees "nfo@x.com").
-    # When one found email is a strict suffix of another, the longer one is the real address.
+    # Drop an html-only email when a longer address ends with it (truncation artifact); a trusted
+    # source (mailto/text/...) proves it's a real distinct address (e.g. ann@x.com vs joann@x.com).
     return {e: lab for e, lab in found.items()
-            if not any(o != e and o.endswith(e) for o in found)}
+            if e in trusted or not any(o != e and o.endswith(e) for o in found)}
 
 
 FREEMAIL_DOMAINS = {
