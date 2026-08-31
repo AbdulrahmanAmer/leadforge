@@ -49,6 +49,10 @@ class PolitenessCfg(BaseModel):
 class ValidationCfg(BaseModel):
     dns_timeout_s: float = 5.0
     staleness_days: int = 90
+    # opt-in: propose a LIKELY address for a known decision maker when the domain's own naming
+    # convention is demonstrated by an email already found there. Public evidence + MX only —
+    # never SMTP/RCPT probing (icm/SCOPE.md #5). Exported in its own column, never as a found email.
+    infer_emails: bool = False
 
 
 class RegistryCfg(BaseModel):

@@ -156,3 +156,38 @@ def test_natural_name_rules():
     assert natural_name("SMITH, John, Jr") == "SMITH, John, Jr"       # two commas: don't guess
     assert natural_name(" SMITH ,  Jane ") == "Jane SMITH"
     assert natural_name("") == ""
+
+
+def test_inferred_email_never_masquerades_as_a_found_one(tmp_path, monkeypatch):
+    """v0.2.0 honesty contract: a guess lives in its own column, is labeled as likely, and is
+    NEVER counted in the published-email coverage figure a buyer reads."""
+    import json as _json
+
+    from leadforge.config import load_config
+    from leadforge.export import export_run
+    from leadforge.models import Business, Contact, Person, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="g", run_id=rid, name="Guessed Garage", source="gosom",
+                                      dedupe_key="dk-g", website="https://g.example", domain="g.example"))
+    db.add_person(conn, Person(business_id="g", name="Jane Smith", title="Director",
+                               labeled_by="registry", is_dm=1, dm_confidence=0.9))
+    db.add_contact(conn, Contact(business_id="g", kind="email", value="jane.smith@g.example",
+                                 label="inferred", tier="inferred",
+                                 meta={"pattern": "first.last", "confidence": 0.45,
+                                       "basis": "pattern first.last from bob.jones@g.example"}))
+    db.save_score(conn, Score(business_id="g", run_id=rid, total=60, tier="B",
+                              factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1,
+                                                   points=1, why="w")]))
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["csv"])
+    with open(next(a for a in arts if a.endswith(".csv")), encoding="utf-8-sig") as fh:
+        row = next(iter(csv.DictReader(fh)))
+    assert "jane.smith@g.example" in row["Email (Inferred)"]
+    assert "likely" in row["Email (Inferred)"]           # the cell carries its own caveat
+    assert "jane.smith@g.example" not in row["Email"]    # never leaks into the mail-merge column
+    assert row["Email"] == "site not crawled"            # still says why there is no real address
+    report = _json.loads(open(next(a for a in arts if a.endswith("report.json")), encoding="utf-8").read())
+    assert report["with_email"] == 0                      # a guess is not coverage
+    assert report["with_inferred_email"] == 1             # counted, separately and honestly

@@ -22,7 +22,7 @@ from leadforge.util import natural_name, now_iso
 
 COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
-    "Email", "Email Tier", "Website", "Address", "City", "Region", "Postal", "Country",
+    "Email", "Email Tier", "Email (Inferred)", "Website", "Address", "City", "Region", "Postal", "Country",
     "Rating", "Reviews", "Likely Need (Hook)", "Why This Score", "Maps", "Source", "Verified On", "Stale?",
     "Opening Hours", "Company No", "Incorporated", "Company Status", "SIC Codes", "Call Readiness",
 ]
@@ -41,6 +41,8 @@ _TIER_FILL = {
 }
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
+# kept in sync with validate.TIER_ORDER — a guess ranks below anything actually observed
+_EMAIL_TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown"]
 _REGION_REMINDER = {
     "us": "US/CAN-SPAM: identify yourself, include a physical postal address + working opt-out; honor within 10 business days.",
     "uk": "UK/PECR: corporate subscribers may be emailed B2B; sole traders/individuals need consent. Always give identity + opt-out.",
@@ -82,10 +84,14 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
-    emails = [(c["value"], c["tier"]) for c in contacts if c["kind"] == "email" and c["tier"] != "invalid"]
-    order = {"valid": 0, "role": 1, "risky": 2, "catch_all": 3, "unknown": 4}
-    emails.sort(key=lambda e: order.get(e[1], 9))
+    # 'inferred' addresses are NEVER candidates for the Email column — they get their own,
+    # so a mail-merge over 'Email' can never pick up a guess.
+    emails = [(c["value"], c["tier"]) for c in contacts
+              if c["kind"] == "email" and c["tier"] not in ("invalid", "inferred")]
+    order = {t: i for i, t in enumerate(_EMAIL_TIER_ORDER)}
+    emails.sort(key=lambda e: order.get(e[1], 99))
     best_email = emails[0] if emails else ("", "")
+    inferred = next((c for c in contacts if c["kind"] == "email" and c["tier"] == "inferred"), None)
     factors = json.loads(s["factors_json"])
     top_why = "; ".join(f["why"] for f in sorted(factors, key=lambda f: -f["points"])[:3])
     hooks = json.loads(s["need_hooks_json"])
@@ -116,6 +122,16 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     # Underscore keys are stripped by the writers (they only emit `columns`).
     row["_has_email"] = bool(row["Email"])
     row["_has_dm"] = bool(row["DM Name"])
+    row["_has_inferred"] = inferred is not None
+    if inferred is not None:
+        imeta = json.loads(inferred["meta_json"]) if inferred["meta_json"] else {}
+        conf = imeta.get("confidence")
+        # the cell carries its own caveat: this is a likely address, not an observed one
+        row["Email (Inferred)"] = (f"{inferred['value']} (likely, "
+                                   f"{int(float(conf) * 100)}% — {imeta.get('basis', 'pattern')})"
+                                   if conf else inferred["value"])
+    else:
+        row["Email (Inferred)"] = "not inferred"
     # No unresolved cells: a blank is replaced by WHY it is blank, so callers know what they hold.
     if not row["Email"]:
         row["Email"] = "none published" if crawled else ("no website to crawl" if not row["Website"] else "site not crawled")
@@ -254,7 +270,8 @@ def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> Non
         ("Tier A / B / C / D / DQ",
          f"{tiers['A']} / {tiers['B']} / {tiers['C']} / {tiers['D']} / {tiers['DQ']}"),
         ("With decision maker", f"{with_dm} ({_pct(with_dm, len(rows))})"),
-        ("With email", f"{with_email} ({_pct(with_email, len(rows))})"),
+        ("With email (published)", f"{with_email} ({_pct(with_email, len(rows))})"),
+        ("With inferred email (guess)", str(sum(1 for r in rows if r.get("_has_inferred")))),
         ("", ""),
         ("Top need hooks", ""),
     ]
@@ -281,6 +298,10 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
         ws.append(["Tier", "A ≥ 75 (hot) · B 55–74 · C < 55 · DQ = hard-disqualified by your ICP rules"])
     ws.append(["Score", "0–100, sum of weighted factors; see 'Why This Score' per row for the top drivers"])
     ws.append(["Email Tier", "valid > role > risky > catch_all > unknown (invalid emails are dropped)"])
+    ws.append(["Email (Inferred)", "NOT a published address: the address this domain's own naming "
+                                   "convention implies for the named contact (derived from a real "
+                                   "email already found there). Confirm before use; never counted "
+                                   "in the 'with email' figure."])
     ws.append(["DM Conf", "0–1 confidence the agent assigned when labeling the decision maker from site snippets"])
     ws.append(["Likely Need (Hook)", "auto-suggested outreach angle from detected need signals + your offer"])
     ws.append(["Verified On", "timestamp of the newest evidence for the row; older than your staleness window = re-verify"])
@@ -292,7 +313,8 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
 
 
 def _real_counts(rows: list[dict]) -> tuple[int, int]:
-    """(with_dm, with_email) counting only real data — placeholder cells don't inflate coverage."""
+    """(with_dm, with_email) counting only real data — placeholder cells don't inflate coverage.
+    Inferred addresses are deliberately excluded: they are guesses, counted separately."""
     return (sum(1 for r in rows if r.get("_has_dm")), sum(1 for r in rows if r.get("_has_email")))
 
 
@@ -303,6 +325,7 @@ def _write_report(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
         "tiers": {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "D", "DQ")},
         "with_dm": with_dm,
         "with_email": with_email,
+        "with_inferred_email": sum(1 for r in rows if r.get("_has_inferred")),
     }
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return path

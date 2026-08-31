@@ -85,7 +85,10 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     return "valid", meta
 
 
+# A guess ranks below anything actually observed. Kept in sync with export._EMAIL_TIER_ORDER.
+TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown", "invalid"]
+
+
 def best_email_tier(tiers: list[str]) -> str:
-    order = ["valid", "role", "risky", "catch_all", "unknown", "invalid"]
-    present = [t for t in order if t in tiers]
+    present = [t for t in TIER_ORDER if t in tiers]
     return present[0] if present else "unknown"

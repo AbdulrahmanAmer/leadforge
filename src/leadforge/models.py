@@ -204,7 +204,9 @@ class Contact(BaseModel):
     kind: Literal["email", "phone", "social"]
     value: str
     label: str = "unknown"       # role|personal|unknown ; or social network name
-    tier: Literal["valid", "risky", "role", "catch_all", "unknown", "invalid"] = "unknown"
+    # 'inferred' = derived from the domain's demonstrated naming convention, never observed
+    # published (v0.2.0). Exported in its own column; never counted as a found email.
+    tier: Literal["valid", "risky", "role", "catch_all", "inferred", "unknown", "invalid"] = "unknown"
     verified_at: str = ""
     meta: dict[str, Any] = Field(default_factory=dict)
 

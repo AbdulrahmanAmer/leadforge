@@ -121,15 +121,56 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
 
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
-    """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'validate', 'all'."""
+    """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'infer', 'validate', 'all'."""
     counts = {"sites_crawled": 0, "contacts": 0, "dm_candidates": 0, "needs_browser": 0, "emails_valid": 0}
     if stage in ("all", "site"):
         _crawl_stage(conn, cfg, limit, counts)
     if stage in ("all", "registry"):
         _registry_stage(conn, cfg, counts)
+    if stage in ("all", "infer"):
+        _infer_stage(conn, cfg, counts)
     if stage in ("all", "validate"):
         _validate_stage(conn, cfg, counts)
     return counts
+
+
+def _infer_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
+    """v0.2.0, opt-in (`validation.infer_emails`): propose the DM's likely address when the domain's
+    OWN naming convention is demonstrated by a personal email already found there.
+
+    Runs after the registry stage so registry-auto-picked DMs are covered; re-run
+    `leadforge enrich --stage infer` after `dm apply` to cover agent-labeled DMs too.
+    Public evidence + MX only — never SMTP (icm/SCOPE.md #5).
+    """
+    if not cfg.validation.infer_emails:
+        return
+    from leadforge.enrich.infer_email import infer_email
+    rows = conn.execute(
+        """SELECT b.id, b.domain, p.name dm FROM businesses b
+           JOIN people p ON p.business_id = b.id AND p.is_dm = 1
+           WHERE b.domain IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.business_id = b.id
+                             AND c.kind = 'email' AND c.tier = 'inferred')"""
+    ).fetchall()
+    for bi, b in enumerate(rows):
+        emit_progress("infer", bi + 1, len(rows), b["dm"] or "")
+        known = [c["value"] for c in conn.execute(
+            "SELECT value FROM contacts WHERE business_id=? AND kind='email' AND tier!='invalid'",
+            (b["id"],))]
+        guess = infer_email(b["dm"] or "", b["domain"] or "", known, cfg)
+        if not guess:
+            continue
+        db.add_contact(conn, Contact(business_id=b["id"], kind="email", value=guess["email"],
+                                     label="inferred", tier="inferred", verified_at=now_iso(),
+                                     meta={"pattern": guess["pattern"], "confidence": guess["confidence"],
+                                           "basis": guess["basis"]}))
+        # its own fact: an inferred address has no source URL, so it must never claim 'email_found'
+        db.add_evidence(conn, Evidence(business_id=b["id"], ref_table="contacts", fact="email_inferred",
+                                       url="", snippet=f"{guess['email']} — {guess['basis']} "
+                                                       f"(confidence {guess['confidence']})",
+                                       observed_at=now_iso()))
+        counts["emails_inferred"] = counts.get("emails_inferred", 0) + 1
+    conn.commit()
 
 
 def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:

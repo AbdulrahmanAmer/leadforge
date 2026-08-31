@@ -108,6 +108,8 @@ class Scorer:
             return 0.6, f"{best} email on file"
         if has_phone:
             return 0.4, "phone only, no verified email"
+        if best == "inferred":  # a guess is worth something, but less than a phone you can dial
+            return 0.2, "inferred email only (unconfirmed)"
         return 0.1, "no verified direct contact"
 
     def _f_need_signals(self, b, ctx) -> tuple[float, str]:
@@ -401,7 +403,8 @@ def score_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str, b) -> Sco
     has_direct = _any_mobile(phones)
     linkedin = any(c["kind"] == "social" and c["label"] == "linkedin" for c in contacts)
     contactability = ((30 if dm else 0)
-                      + (30 if email_tier == "valid" else 15 if email_tier == "role" else 0)
+                      + (30 if email_tier == "valid" else 15 if email_tier == "role"
+                         else 8 if email_tier == "inferred" else 0)  # a guess counts least
                       + (25 if has_direct else 0) + (10 if linkedin else 0)
                       + (5 if b["phone_e164"] else 0))
     data_confidence = round(100 * known / considered) if considered else 0
