@@ -18,6 +18,12 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
+from leadforge.util import LOG, EnvError
+
+MAX_RENDERED_PAGES_PER_SITE = 3
+
 
 def is_available() -> bool:
     try:
@@ -27,5 +33,35 @@ def is_available() -> bool:
         return False
 
 
-def fetch_rendered(url: str, cfg) -> str:
-    raise NotImplementedError("U4.5: implement per module docstring spec")
+def fetch_rendered(url: str, cfg, throttle) -> str:
+    """Render one page with a headless browser and return its HTML ("" on failure).
+
+    Caller checks robots (same SiteCrawler._allowed); we wait on the shared throttle so
+    the rendered fetch obeys the same per-host pacing as the static path.
+    """
+    if not is_available():
+        raise EnvError("browser extra not installed — run: pip install -e .[browser] && crawl4ai-setup")
+    throttle.wait(urlsplit(url).netloc)
+    try:
+        import asyncio
+
+        from crawl4ai import AsyncWebCrawler
+
+        async def _run() -> str:
+            async with AsyncWebCrawler(verbose=False) as crawler:
+                res = await crawler.arun(url=url, page_timeout=int(cfg.crawl.timeout_s * 1000))
+                html = getattr(res, "html", "") or ""
+                if html:
+                    return html
+                md = getattr(res, "markdown", "") or ""
+                return _md_to_html(str(md))
+
+        return asyncio.run(_run())
+    except Exception as e:  # noqa: BLE001 — a render failure never kills the run
+        LOG.warning("render failed %s: %s", url, type(e).__name__)
+        return ""
+
+
+def _md_to_html(md: str) -> str:
+    """crawl4ai may return markdown only; wrap it so the SAME extractors still work."""
+    return f"<html><body><pre>{md}</pre></body></html>" if md else ""

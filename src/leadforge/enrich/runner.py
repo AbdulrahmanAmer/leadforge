@@ -32,24 +32,43 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
     crawler = SiteCrawler(cfg, throttle)
     try:
         res = crawler.crawl(b["website"])
+        out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
+               "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok, "pages": len(res.pages)}
+        if not res.ok:
+            return out
+        region = _region_for_business(b, cfg.default_region)
+        for page in res.pages:
+            for email, label in extract_emails(page.html, page.text).items():
+                out["emails"].setdefault(email, {"label": label, "url": page.url})
+            for phone in extract_phones(page.html, page.text, region):
+                if phone not in out["phones"]:
+                    out["phones"].append(phone)
+            for net, url in extract_socials(page.html).items():
+                out["socials"].setdefault(net, url)
+            for cand in extract_people(page.text, page.url):
+                out["people"].append(cand)
+        # U4.5: browser escalation — only when static found nothing and the extra is installed.
+        if res.needs_browser and browser.is_available() and not out["emails"] and not out["people"]:
+            urls = [p.url for p in res.pages[:browser.MAX_RENDERED_PAGES_PER_SITE]] or [b["website"]]
+            rendered_any = False
+            for url in urls:
+                if not crawler._allowed(url):
+                    continue
+                rendered = browser.fetch_rendered(url, cfg, throttle)
+                if not rendered:
+                    continue
+                rendered_any = True
+                text = SiteCrawler.extract_text(rendered)
+                for email, label in extract_emails(rendered, text).items():
+                    out["emails"].setdefault(email, {"label": label, "url": url})
+                for cand in extract_people(text, url):
+                    out["people"].append(cand)
+            if rendered_any:
+                out["needs_browser"] = False
+                out["signals"]["rendered"] = True
+        return out
     finally:
         crawler.close()
-    out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
-           "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok, "pages": len(res.pages)}
-    if not res.ok:
-        return out
-    region = _region_for_business(b, cfg.default_region)
-    for page in res.pages:
-        for email, label in extract_emails(page.html, page.text).items():
-            out["emails"].setdefault(email, {"label": label, "url": page.url})
-        for phone in extract_phones(page.html, page.text, region):
-            if phone not in out["phones"]:
-                out["phones"].append(phone)
-        for net, url in extract_socials(page.html).items():
-            out["socials"].setdefault(net, url)
-        for cand in extract_people(page.text, page.url):
-            out["people"].append(cand)
-    return out
 
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
