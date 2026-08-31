@@ -97,6 +97,28 @@ def test_full_pipeline_offline(cfg, sample_icp, patched, monkeypatch, tmp_path):
     assert any(p["is_dm"] == 1 and p["labeled_by"] == "agent" for p in people)
 
 
+def test_apply_labels_accepts_documented_tsv_variant(cfg, tmp_path):
+    """v0.1.4: dm-labeling.md documents 'biz<TAB>pick<TAB>confidence<TAB>title_override' — apply
+    must accept it, not just NDJSON (an agent following the docs used to get 'bad label line')."""
+    from leadforge.enrich.dm import apply_labels
+    from leadforge.models import Business, Person
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="b1", run_id=rid, name="Acme", source="gosom", dedupe_key="dk1"))
+    db.add_person(conn, Person(business_id="b1", name="Jane Smith", title="Owner"))
+    db.add_person(conn, Person(business_id="b1", name="Bob Jones", title="Mechanic"))
+    # candidate indexes are defined by the same people_for() enumeration the batch export uses
+    people = [p for p in db.people_for(conn, "b1") if p["is_dm"] == 0]
+    jane = next(i for i, p in enumerate(people) if p["name"] == "Jane Smith")
+    labels = tmp_path / "dm_labels.tsv"
+    labels.write_text(f"b1\t{jane}\t0.8\tManaging Director\n", encoding="utf-8")
+    out = apply_labels(conn, labels)
+    assert out["applied"] == 1
+    dm = next(p for p in db.people_for(conn, "b1") if p["is_dm"] == 1)
+    assert dm["name"] == "Jane Smith" and dm["title"] == "Managing Director"
+    assert dm["dm_confidence"] == 0.8
+
+
 def test_resume_is_idempotent(cfg, sample_icp, patched, tmp_path):
     import yaml
     icp_path = tmp_path / "icp.yaml"

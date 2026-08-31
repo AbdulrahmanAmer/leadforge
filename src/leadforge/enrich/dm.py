@@ -53,7 +53,9 @@ def apply_labels(conn: sqlite3.Connection, in_path: Path) -> dict:
         try:
             rec = json.loads(raw)
         except json.JSONDecodeError as e:
-            raise InputError(f"bad label line: {raw[:80]} ({e})") from e
+            rec = _parse_tsv_label(raw)  # documented terse variant (dm-labeling.md); NDJSON canonical
+            if rec is None:
+                raise InputError(f"bad label line: {raw[:80]} ({e})") from e
         biz = rec.get("biz")
         pick = rec.get("pick")
         if biz is None or pick is None:
@@ -74,6 +76,25 @@ def apply_labels(conn: sqlite3.Connection, in_path: Path) -> dict:
         applied += 1
     conn.commit()
     return {"applied": applied, "rejected": rejected, "skipped": skipped}
+
+
+def _parse_tsv_label(raw: str) -> dict | None:
+    """'biz<TAB>pick[<TAB>confidence[<TAB>title_override]]' -> the same dict a JSON line yields."""
+    parts = raw.split("\t")
+    if len(parts) < 2:
+        return None
+    try:
+        rec: dict = {"biz": parts[0].strip(), "pick": int(parts[1])}
+    except ValueError:
+        return None
+    if len(parts) >= 3 and parts[2].strip():
+        try:
+            rec["confidence"] = float(parts[2])
+        except ValueError:
+            return None
+    if len(parts) >= 4 and parts[3].strip():
+        rec["title_override"] = parts[3].strip()
+    return rec
 
 
 def _set_dm(conn: sqlite3.Connection, person_id: int, is_dm: int, confidence: float, title: str | None) -> None:
