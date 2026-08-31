@@ -62,9 +62,21 @@ class Scorer:
         return 1.0, f"{rc} reviews within target band"
 
     def _f_geography_match(self, b, ctx) -> tuple[float, str]:
-        if b["address_city"] or b["address_region"]:
-            return 1.0, f"located in {b['address_city'] or b['address_region']}"
-        return 0.5, "location present but unstructured"
+        areas = [a.strip() for a in (self.icp.target.geography.areas or []) if a.strip()]
+        if not areas:  # bbox/grid campaign: discovery itself is the geographic filter
+            return 1.0, "discovered inside the campaign search area"
+        hay = " ".join(str(b[k] or "") for k in
+                       ("address_city", "address_region", "address_postal", "address_full")).casefold()
+        if not hay.strip():
+            return 0.5, "location present but unstructured"
+        for area in areas:
+            locality = area.split(",")[0].strip()  # "Houston, TX, United States" -> "Houston"
+            if locality and locality.casefold() in hay:
+                return 1.0, f"inside target area ({locality})"
+        where = b["address_city"] or b["address_region"] or "unlisted town"
+        # Maps results spill into surrounding towns; that's a soft miss, not a disqualifier —
+        # the out_of_area penalty only fires on a country-level mismatch (see _negatives).
+        return 0.3, f"address doesn't name a target area (listed: {where})"
 
     def _f_business_model(self, b, ctx) -> tuple[float, str]:
         name = (b["name_norm"] or "")
@@ -174,12 +186,21 @@ class Scorer:
                 return q
         return None
 
+    _COUNTRY_ALIASES = {"uk": "gb", "united kingdom": "gb", "united states": "us", "usa": "us"}
+
     def _negatives(self, b, ctx) -> list[tuple[str, float]]:
         neg = self.rubric.get("negatives", {})
         out = []
         name = b["name_norm"] or ""
         if "franchise" in name or "group" in name:
             out.append(("franchise_or_chain", neg.get("franchise_or_chain", -25)))
+        # out_of_area only on unambiguous evidence: the listing's own country differs from the
+        # campaign's. Same-country suburb spillover is graded softly by geography_match instead.
+        want = (self.icp.target.geography.country or "").strip().casefold()
+        got = (b["address_country"] or "").strip().casefold()
+        want, got = self._COUNTRY_ALIASES.get(want, want), self._COUNTRY_ALIASES.get(got, got)
+        if want and got and want != got:
+            out.append(("out_of_area", neg.get("out_of_area", -20)))
         return out
 
     def _hooks(self, b, ctx) -> list[str]:

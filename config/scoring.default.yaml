@@ -19,9 +19,9 @@ factors:
 
 negatives:
   franchise_or_chain: -25
-  competitor: -40
-  existing_client: -40
-  out_of_area: -20
+  out_of_area: -20   # listing's country differs from the campaign's (suburb spillover is NOT penalized)
+  # competitor / existing_client are HARD disqualifiers, not soft penalties: list them in
+  # icp.qualify.hard as "competitor:<name>" / "existing_client:<name>" (score.py _hard_dq).
 
 hooks:   # signal -> one-line pitch hook; {offer} is replaced by icp.offer.what
   website_missing: "No website at all — likely needs: {offer}"

@@ -66,6 +66,39 @@ def test_every_factor_has_why(conn, sample_icp):
     assert len([f for f in s.factors if f.group != "negative"]) >= 8
 
 
+# --- v0.1.4: geography is actually checked against the ICP ------------------------------------
+def test_geography_match_checks_icp_areas(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn)  # Houston — inside "Houston, TX"
+    s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
+    geo = next(f for f in s.factors if f.factor == "geography_match")
+    assert geo.score == 1.0
+    assert "target area" in geo.why  # the explanation names a check that actually ran
+
+
+def test_geography_mismatch_scores_low_and_says_so(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, address_city="Dallas", address_full="1 Main St, Dallas, TX 75201")
+    s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
+    geo = next(f for f in s.factors if f.factor == "geography_match")
+    assert geo.score < 0.5
+    assert "target" in geo.why
+
+
+def test_wrong_country_gets_out_of_area_penalty(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, address_city="Birmingham", address_country="GB")
+    s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
+    assert any(f.factor == "negative:out_of_area" for f in s.factors)
+
+
+def test_same_country_alias_never_penalized(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, address_country="USA")  # campaign says "US" — same place, different spelling
+    s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
+    assert not any(f.factor == "negative:out_of_area" for f in s.factors)
+
+
 # --- v0.1.2 export resolutions ---------------------------------------------------------------
 def test_export_cells_are_always_resolved(tmp_path, monkeypatch):
     import json as _json
