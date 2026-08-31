@@ -144,12 +144,18 @@ def install_quality_extras(rep_add) -> None:
     """--fix --full: install the enrichment-quality extras ([ner] GLiNER, [browser] crawl4ai)
     so a fresh machine's first bootstrap yields full-quality sheets, not the heuristic floor."""
     root = _repo_root()
+
+    def _importable_fresh(mod: str) -> bool:
+        # a module installed seconds ago is invisible to this process's stale import-path caches;
+        # a child interpreter sees the truth
+        return subprocess.run([sys.executable, "-c", f"import {mod}"], capture_output=True).returncode == 0
+
     for extra, probe_mod, post in (("ner", "gliner", None), ("browser", "crawl4ai", "crawl4ai-setup")):
-        already = _importable(probe_mod)
+        already = _importable_fresh(probe_mod)
         if not already:
             proc = subprocess.run([sys.executable, "-m", "pip", "install", "-e", f"{root}[{extra}]"],
                                   capture_output=True, encoding="utf-8", errors="replace")
-            ok = proc.returncode == 0 and _importable(probe_mod)
+            ok = proc.returncode == 0 and _importable_fresh(probe_mod)
         else:
             ok = True
         if ok and post and shutil.which(post):
