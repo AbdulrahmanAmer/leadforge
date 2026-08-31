@@ -12,9 +12,10 @@ Single source of truth for what's done vs left. Current baseline (v0.1.1, 2026-0
 - [x] **G5 Scoring** — rubric + hooks + explanations; deterministic, tested
 - [x] **G6 Export** — XLSX/CSV/report; produced in E2E test (verify visually on a real machine at G6/U8.2)
 - [x] **G7 Harness integration** — both plugins + skill + AGENTS/CLAUDE + install.py present (validate live at U8.2)
-- [~] **G8 Ship** — test suite, CI green, live E2E done, guardrails audit clean, v0.1.0 tagged &
-      pushed. Remaining for full G8: partner installs from the GitHub link and completes a campaign
-      unaided + operator opens the sheet in Excel/LibreOffice.
+- [x] **G8 Ship** — v0.1.1 tagged, CI green (incl. tag run), live E2E done, guardrails audit clean.
+      Codex install route PROVEN live 2026-08-31 (codex-cli 0.151.0: marketplace add -> plugin
+      leadforge@leadforge 0.1.1 installed -> skill visible -> Codex ran the CLI and returned a valid
+      LF_DIGEST). Still operator-only: Excel/LibreOffice visual sheet check.
 
 ## Units
 
