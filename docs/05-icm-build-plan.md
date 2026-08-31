@@ -140,9 +140,9 @@ DB counts · CSV re-imports losslessly.
 | **U7.4** AGENTS.md / CLAUDE.md | repo instructions for any agent (Codex reads AGENTS.md; CLAUDE.md points to it + Claude specifics) | root | ✅ |
 | **U7.5** User-scope bridge | `install.py`: copy/link skill into `~/.claude/skills` + `~/.agents/skills` (junction/copy on Windows), print per-harness install matrix; `python install.py --check` | `install.py` | ✅ |
 
-**Gate G7:** `claude plugin validate .` passes · fresh Claude Code: `/plugin marketplace add <owner>/leadforge` → `/plugin install
-leadforge@leadforge` → skill listed & triggers on "find b2b leads" · fresh Codex: `codex plugin marketplace add <owner>/leadforge` →
-install via `/plugins` → `$generate-leads` visible; `npx skills add <owner>/leadforge` also lands the skill.
+**Gate G7:** `claude plugin validate .` passes · fresh Claude Code: `/plugin marketplace add AbdulrahmanAmer/leadforge` → `/plugin install
+leadforge@leadforge` → skill listed & triggers on "find b2b leads" · fresh Codex: `codex plugin marketplace add AbdulrahmanAmer/leadforge` →
+install via `/plugins` → `$generate-leads` visible; `npx skills add AbdulrahmanAmer/leadforge` also lands the skill.
 
 ## Stage 8 — Hardening & Release
 

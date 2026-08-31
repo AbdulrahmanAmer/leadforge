@@ -144,8 +144,8 @@ Any failure is a bug; fix it before shipping.
 
 1. Update `CHANGELOG.md` with what landed since the scaffold.
 2. Push to GitHub, then **actually test the install matrix from the repo URL** on the partner's harness:
-   - Claude Code: `/plugin marketplace add <owner>/leadforge` → `/plugin install leadforge@leadforge`
-   - Codex: `codex plugin marketplace add <owner>/leadforge` → install from `/plugins`
+   - Claude Code: `/plugin marketplace add AbdulrahmanAmer/leadforge` → `/plugin install leadforge@leadforge`
+   - Codex: `codex plugin marketplace add AbdulrahmanAmer/leadforge` → install from `/plugins`
    - Then: `leadforge doctor --fix` and one small campaign, without editing any code.
    Fix whatever breaks — **this is the real acceptance test for the whole project.**
 3. `git tag v0.1.0 && git push --tags`.

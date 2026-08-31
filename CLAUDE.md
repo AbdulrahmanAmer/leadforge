@@ -16,7 +16,7 @@ Read `AGENTS.md` — it is the canonical agent guide for this repo (instructions
 
 Claude-specific notes:
 
-- This repo is a Claude Code plugin **and** its own marketplace: `/plugin marketplace add <owner>/leadforge` →
+- This repo is a Claude Code plugin **and** its own marketplace: `/plugin marketplace add AbdulrahmanAmer/leadforge` →
   `/plugin install leadforge@leadforge`. Local dev: `claude --plugin-dir .` and `claude plugin validate .`.
 - The skill is namespaced `/leadforge:generate-leads` and auto-triggers on lead-gen requests via its description.
 - When finalizing the build, follow the one-shot protocol in `docs/05-icm-build-plan.md` exactly; keep `pytest` green after every unit.

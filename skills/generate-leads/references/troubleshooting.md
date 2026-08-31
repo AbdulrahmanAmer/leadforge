@@ -14,6 +14,6 @@ Match the digest warning/error → do the fix → retry ONCE → else report to 
 | dm export: `businesses:0` but user expected DMs | Sites likely list no people (common for tiny SMBs). The sheet still ships with role emails/phones; tell the user DM coverage % from the digest. |
 | export: file locked (Windows) | The XLSX is open in Excel. Ask user to close it, re-run `leadforge export`. |
 | `ok:false` with traceback pointer | Read nothing else; report the digest + log path to the user; suggest `leadforge doctor --strict`. Do NOT paste the log. |
-| Codex marketplace add fails on `.agents/plugins/marketplace.json` | Use `codex plugin marketplace add <owner>/leadforge` (repo-level), or the bridge: `npx skills add <owner>/leadforge` / `python install.py`. |
+| Codex marketplace add fails on `.agents/plugins/marketplace.json` | Use `codex plugin marketplace add AbdulrahmanAmer/leadforge` (repo-level), or the bridge: `npx skills add AbdulrahmanAmer/leadforge` / `python install.py`. |
 
 Smoke test any suspicion cheaply: `leadforge run --icp icp.yaml --limit 10 --json`.

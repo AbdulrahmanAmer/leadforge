@@ -45,9 +45,8 @@ leadforge doctor --fix     # bootstrap runtime deps (downloads pinned scraper bi
 
 | Harness | Commands |
 |---|---|
-| Claude Code | `/plugin marketplace add <owner>/leadforge` → `/plugin install leadforge@leadforge` |
-| Codex | `codex plugin marketplace add <owner>/leadforge` → install "LeadForge" from `/plugins` |
-| Any Agent-Skills harness | `npx skills add <owner>/leadforge` (or `python install.py`) |
+| Claude Code | `/plugin marketplace add AbdulrahmanAmer/leadforge` → `/plugin install leadforge@leadforge` |
+| Codex | `codex plugin marketplace add AbdulrahmanAmer/leadforge` → install "LeadForge" from `/plugins` |
+| Any Agent-Skills harness | `npx skills add AbdulrahmanAmer/leadforge` (or `python install.py`) |
 | Plain CLI | `pip install -e . && leadforge doctor --fix` |
 
-Replace `<owner>` with the GitHub account this repo is pushed to.

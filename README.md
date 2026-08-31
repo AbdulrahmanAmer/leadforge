@@ -22,13 +22,12 @@ the agent **under ~15k tokens** — the pipeline itself processes hundreds of pa
 
 ## Install
 
-Replace `<owner>` with the GitHub account this repo lives under.
 
 | Harness | Commands |
 |---|---|
-| **Claude Code** | `/plugin marketplace add <owner>/leadforge` then `/plugin install leadforge@leadforge` |
-| **Codex** | `codex plugin marketplace add <owner>/leadforge` then install "LeadForge" from `/plugins` |
-| **Any Agent-Skills harness** | `npx skills add <owner>/leadforge` |
+| **Claude Code** | `/plugin marketplace add AbdulrahmanAmer/leadforge` then `/plugin install leadforge@leadforge` |
+| **Codex** | `codex plugin marketplace add AbdulrahmanAmer/leadforge` then install "LeadForge" from `/plugins` |
+| **Any Agent-Skills harness** | `npx skills add AbdulrahmanAmer/leadforge` |
 | **Plain CLI / bridge** | `git clone …` then `python install.py` |
 
 Then, once, in the folder where you want your lead data to live:

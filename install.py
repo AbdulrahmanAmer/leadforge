@@ -92,9 +92,9 @@ def main() -> int:
 
     print(
         "\nPreferred install routes (no bridge needed):\n"
-        "  Claude Code : /plugin marketplace add <owner>/leadforge  →  /plugin install leadforge@leadforge\n"
-        "  Codex       : codex plugin marketplace add <owner>/leadforge  →  install from /plugins\n"
-        "  Any harness : npx skills add <owner>/leadforge\n"
+        "  Claude Code : /plugin marketplace add AbdulrahmanAmer/leadforge  →  /plugin install leadforge@leadforge\n"
+        "  Codex       : codex plugin marketplace add AbdulrahmanAmer/leadforge  →  install from /plugins\n"
+        "  Any harness : npx skills add AbdulrahmanAmer/leadforge\n"
         "Then run: leadforge doctor --fix"
     )
     return 0
