@@ -99,3 +99,26 @@ def test_fallback_rest_non_list_is_degraded(tmp_path, monkeypatch):
                         lambda *a, **k: _FakeResp({"detail": "error"}))
     with pytest.raises(ProviderDegraded):
         prov.fetch(PlannedQuery(text="x", category="", area=""))
+
+
+def test_gosom_timeout_salvages_partial_output(tmp_path, monkeypatch):
+    """A 30m timeout must not discard the listings gosom already wrote to disk."""
+    import subprocess
+
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    prov = GosomProvider(cfg)
+    from leadforge.grid import PlannedQuery
+    from leadforge.providers import gosom as gosom_mod
+    q = PlannedQuery(text="x in y", category="", area="")
+    from leadforge.util import sha1_hex
+    out_path = cfg.cache_dir / f"gosom_{sha1_hex(q.text + str(q.tile), 8)}.json"
+    out_path.write_text('{"title": "Partial Shop", "place_id": "P9"}\n', encoding="utf-8")
+    monkeypatch.setattr(gosom_mod, "gosom_path", lambda cfg: "gosom-fake")
+
+    def _timeout(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="gosom", timeout=1)
+
+    monkeypatch.setattr(gosom_mod.subprocess, "run", _timeout)
+    listings = prov.fetch(q)
+    assert len(listings) == 1 and listings[0].data["title"] == "Partial Shop"

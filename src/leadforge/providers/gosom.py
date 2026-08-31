@@ -44,12 +44,15 @@ class GosomProvider(DiscoveryProvider):
         qfile = out_path.with_suffix(".queries.txt")
         qfile.write_text(query.text + "\n", encoding="utf-8")
 
+        # A small --limit is a smoke test: one results page (~20 listings) is enough; full depth
+        # can run 30+ minutes because gosom visits every place page.
+        depth = min(d.depth, 1) if (limit and limit <= 20) else d.depth
         args = [
             str(gosom_path(self.cfg)),
             "-input", str(qfile),
             "-results", str(out_path),
             "-json",
-            "-depth", str(d.depth),
+            "-depth", str(depth),
             "-c", str(d.concurrency),
             "-lang", d.lang,
             "-exit-on-inactivity", "3m",
@@ -71,6 +74,13 @@ class GosomProvider(DiscoveryProvider):
                 timeout=d.timeout_min * 60, shell=False,
             )
         except subprocess.TimeoutExpired as e:
+            # Salvage whatever gosom already wrote — a timeout after N minutes usually means
+            # dozens of complete listings are sitting in the NDJSON file.
+            salvaged = list(self._parse(out_path))
+            if salvaged:
+                LOG.warning("gosom timeout after %sm on '%s' — salvaged %d listings from partial output",
+                            d.timeout_min, query.text, len(salvaged))
+                return salvaged[:limit] if limit else salvaged
             raise ProviderDegraded(f"gosom timeout after {d.timeout_min}m on '{query.text}'") from e
 
         stderr_tail = (proc.stderr or "")[-2000:].lower()
