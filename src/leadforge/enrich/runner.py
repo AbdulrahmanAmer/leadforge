@@ -42,6 +42,28 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
                "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok, "pages": len(res.pages)}
         if not res.ok:
+            # site refused the plain HTTP client: try a real browser (same as a person opening it);
+            # robots-disallowed sites never reach here (needs_browser stays False for those)
+            if res.needs_browser and browser.is_available():
+                rendered = browser.fetch_rendered(b["website"], cfg, throttle)
+                if rendered:
+                    text = SiteCrawler.extract_text(rendered)
+                    region = _region_for_business(b, cfg.default_region)
+                    people_fn = extract_people_ner if ner_available() else extract_people
+                    for email, label in extract_emails(rendered, text).items():
+                        out["emails"].setdefault(email, {"label": label, "url": b["website"]})
+                    for phone in extract_phones(rendered, text, region):
+                        if phone not in out["phones"]:
+                            out["phones"].append(phone)
+                    for net, url in extract_socials(rendered).items():
+                        out["socials"].setdefault(net, url)
+                    for cand in people_fn(text, b["website"]):
+                        out["people"].append(cand)
+                    out["ok"] = True
+                    out["needs_browser"] = False
+                    out["signals"]["rendered"] = True
+                    out["signals"]["http_blocked"] = True
+                    out["pages"] = 1
             return out
         region = _region_for_business(b, cfg.default_region)
         # U4.7: GLiNER zero-shot people extraction when the [ner] extra is installed, else heuristic.

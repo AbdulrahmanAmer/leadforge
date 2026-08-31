@@ -69,3 +69,42 @@ def test_escalation_respects_robots(monkeypatch, tmp_path):
 def test_rendered_fixture_yields_contact():
     pytest.importorskip("crawl4ai")
     # Live-render acceptance is exercised at U8.2 on a machine with the extra + a JS-only site.
+
+
+def test_http_blocked_site_gets_browser_fallback(monkeypatch, tmp_path):
+    """A site that 403s the plain client is retried with a real browser (like a person opening it)."""
+    from leadforge.config import load_config
+    from leadforge.enrich import runner
+    from leadforge.enrich.crawler import CrawlResult
+
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    blocked = CrawlResult(ok=False, needs_browser=True, error="unreachable to http client")
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: blocked)
+    monkeypatch.setattr(runner.browser, "is_available", lambda: True)
+    monkeypatch.setattr(runner.browser, "fetch_rendered",
+                        lambda url, cfg, throttle: "<html><body>Call 020 7946 0958 or "
+                                                   "<a href='mailto:hi@blocked.example'>hi@blocked.example</a></body></html>")
+    b = {"id": 1, "website": "http://blocked.example", "address_country": "GB", "domain": "blocked.example",
+         "category": "car garage"}
+    out = runner._process_one(cfg, HostThrottle(0), b)
+    assert out["ok"] is True and out["signals"]["http_blocked"] is True
+    assert "hi@blocked.example" in out["emails"]
+
+
+def test_robots_disallowed_site_never_gets_browser(monkeypatch, tmp_path):
+    from leadforge.config import load_config
+    from leadforge.enrich import runner
+    from leadforge.enrich.crawler import CrawlResult
+
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    denied = CrawlResult(ok=False, needs_browser=False, error="robots-disallowed")
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: denied)
+    monkeypatch.setattr(runner.browser, "is_available", lambda: True)
+    monkeypatch.setattr(runner.browser, "fetch_rendered",
+                        lambda *a: pytest.fail("browser used on a robots-disallowed site"))
+    b = {"id": 1, "website": "http://private.example", "address_country": "GB",
+         "domain": "private.example", "category": "car garage"}
+    out = runner._process_one(cfg, HostThrottle(0), b)
+    assert out["ok"] is False

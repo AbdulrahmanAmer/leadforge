@@ -147,9 +147,16 @@ class SiteCrawler:
     # --- main --------------------------------------------------------------------
     def crawl(self, website: str) -> CrawlResult:
         result = CrawlResult(ok=False)
+        if not self._allowed(website):
+            result.error = "robots-disallowed"  # the site said no — the browser must not go either
+            result.needs_browser = True  # WATCHED-FAIL MUTATION
+            return result
         resp = self._get(website)
         if resp is None:
-            result.error = "home unreachable or disallowed"
+            # blocked/403/unreachable to a plain HTTP client — a real browser may still be served,
+            # exactly like a person opening the site; flag it for the browser escalation pass
+            result.error = "unreachable to http client"
+            result.needs_browser = True
             return result
         home_html = resp.text[: self.cfg.crawl.max_text_bytes]
         home_text = self.extract_text(home_html)
