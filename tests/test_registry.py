@@ -39,9 +39,12 @@ def _cfg_with_key(tmp_path, monkeypatch):
 def test_companies_house_maps_active_officers(tmp_path, monkeypatch):
     cfg = _cfg_with_key(tmp_path, monkeypatch)
     reg = CompaniesHouseRegistry(cfg)
-    calls = iter([_Resp(SEARCH), _Resp(OFFICERS)])
+    PROFILE = {"sic_codes": ["45200"], "date_of_creation": "2003-02-01", "company_status": "active"}
+    calls = iter([_Resp(SEARCH), _Resp(PROFILE), _Resp(OFFICERS)])
     monkeypatch.setattr("httpx.get", lambda *a, **k: next(calls))
-    out = reg.lookup(BIZ)
+    out, profile = reg.lookup_with_profile(BIZ)
+    assert profile["company_number"] == "01234567"
+    assert profile["sic_codes"] == ["45200"] and profile["incorporated"] == "2003-02-01"
     assert len(out) == 1  # resigned officer excluded
     person, ev = out[0]
     assert person.name == "Smith, Jane"
@@ -172,3 +175,39 @@ def test_opencorporates_jurisdiction_code(tmp_path, monkeypatch):
     assert reg._jurisdiction_code({"address_country": "GB", "address_region": None}) == "gb"
     assert reg._jurisdiction_code({"address_country": "US", "address_region": "tx"}) == "us_tx"
     assert reg._jurisdiction_code({"address_country": "US", "address_region": "Texas"}) == ""
+
+
+def test_registry_stage_covers_siteless_businesses(tmp_path, monkeypatch):
+    """v0.1.2: businesses with no website must still get registry officers + profile."""
+    from leadforge import db
+    from leadforge.enrich.runner import _registry_stage
+    from leadforge.models import Business, Evidence, Person
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.registry.companies_house_key = "k"
+    conn = db.connect(cfg.db_path)
+    db.upsert_business(conn, Business(id="b1", run_id="r", name="No Site Garage", source="gosom",
+                                      address_country="GB"))  # no website/domain
+    from leadforge.providers import registry as regmod
+
+    def fake_lwp(self, b):
+        person = Person(business_id=b["id"], name="Smith, Jane", title="Director", labeled_by="registry")
+        ev = Evidence(business_id=b["id"], ref_table="people", fact="registry_officer", url="u", snippet="s")
+        return [(person, ev)], {"company_number": "999", "incorporated": "2010-01-01",
+                                "company_status": "active", "legal_name": "NO SITE GARAGE LTD",
+                                "sic_codes": ["45200"]}
+
+    monkeypatch.setattr(regmod.CompaniesHouseRegistry, "lookup_with_profile", fake_lwp)
+    counts = {}
+    _registry_stage(conn, cfg, counts)
+    people = db.people_for(conn, "b1")
+    assert people and people[0]["labeled_by"] == "registry"
+    assert any(p["is_dm"] == 1 for p in people)  # single director auto-picked
+    import json as _json
+    enrich = _json.loads(conn.execute("SELECT enrich_json FROM businesses WHERE id='b1'").fetchone()[0])
+    assert enrich["registry_profile"]["company_number"] == "999"
+    assert enrich["registry_checked"] is True
+    # second pass is a no-op (registry_checked)
+    monkeypatch.setattr(regmod.CompaniesHouseRegistry, "lookup_with_profile",
+                        lambda self, b: pytest.fail("re-looked-up a checked business"))
+    _registry_stage(conn, cfg, {})

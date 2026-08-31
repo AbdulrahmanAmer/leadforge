@@ -64,3 +64,36 @@ def test_every_factor_has_why(conn, sample_icp):
     s = Scorer(conn, sample_icp, run_id).score_business(db.all_businesses(conn)[0])
     assert all(f.why for f in s.factors)
     assert len([f for f in s.factors if f.group != "negative"]) >= 8
+
+
+# --- v0.1.2 export resolutions ---------------------------------------------------------------
+def test_export_cells_are_always_resolved(tmp_path, monkeypatch):
+    import json as _json
+
+    from leadforge import db
+    from leadforge.export import _format_hours, export_run
+    from leadforge.models import ICP, Business, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    from leadforge.config import load_config
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="b1", run_id=rid, name="No Web Garage", source="gosom",
+                                      phone_e164="+441483123456",
+                                      hours={"Monday": ["9 AM-6 PM"], "Sunday": ["Closed"]}))
+    db.save_score(conn, Score(business_id="b1", run_id=rid, total=50, tier="B",
+                              factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1, points=1, why="w")]))
+    icp = ICP.model_validate({"campaign": "t", "offer": {"what": "x"},
+                              "target": {"categories": ["garage"],
+                                         "geography": {"areas": ["Guildford"], "country": "GB"}}})
+    arts = export_run(conn, icp, rid, cfg.exports_dir, ["csv"])
+    import csv
+    row = next(csv.DictReader(open([a for a in arts if a.endswith(".csv")][0], encoding="utf-8-sig")))
+    assert row["Website"].startswith("NONE")
+    assert row["Email"] == "no website to crawl"
+    assert row["DM Name"].startswith("not identified")
+    assert row["Call Readiness"] == "READY - ask switchboard"
+    assert row["Opening Hours"].startswith("Mon 9")
+    assert row["Company No"] == "not looked up"
+    assert _format_hours(None) == "-"
+    assert _format_hours(_json.dumps({})) == "-"

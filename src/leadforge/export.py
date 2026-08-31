@@ -23,6 +23,7 @@ COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
     "Email", "Email Tier", "Website", "Address", "City", "Region", "Postal", "Country",
     "Rating", "Reviews", "Likely Need (Hook)", "Why This Score", "Maps", "Source", "Verified On", "Stale?",
+    "Opening Hours", "Company No", "Incorporated", "Company Status", "SIC Codes", "Call Readiness",
 ]
 # account_fit profile (WE SCORE spec) appends the account-intel columns
 ACCOUNT_COLUMNS = COLUMNS + [
@@ -89,6 +90,27 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
         "Maps": s["maps_url"] or "", "Source": s["source"] or "", "Verified On": verified,
         "Stale?": _stale_flag(verified, staleness_days),
     }
+    enrich_all = json.loads(s["enrich_json"]) if s["enrich_json"] else {}
+    regp = enrich_all.get("registry_profile") or {}
+    crawled = bool(enrich_all.get("crawled_at"))
+    # No unresolved cells: a blank is replaced by WHY it is blank, so callers know what they hold.
+    if not row["Email"]:
+        row["Email"] = "none published" if crawled else ("no website to crawl" if not row["Website"] else "site not crawled")
+        row["Email Tier"] = "-"
+    if not row["Website"]:
+        row["Website"] = "NONE - no web presence (pitch opportunity)"
+    if not row["DM Name"]:
+        row["DM Name"] = "not identified - ask for owner/manager"
+    row["Opening Hours"] = _format_hours(s["hours_json"])
+    row["Company No"] = regp.get("company_number") or ("not matched in registry" if enrich_all.get("registry_checked") else "not looked up")
+    row["Incorporated"] = (regp.get("incorporated") or "")[:4] or "-"
+    row["Company Status"] = regp.get("company_status") or "-"
+    row["SIC Codes"] = ", ".join(regp.get("sic_codes") or []) or "-"
+    has_phone = bool(row["Phone"])
+    has_dm = not row["DM Name"].startswith("not identified")
+    row["Call Readiness"] = ("READY - named contact" if has_phone and has_dm
+                             else "READY - ask switchboard" if has_phone
+                             else "NO PHONE - research first")
     meta = {f["factor"]: f for f in factors if f.get("group") == "meta"}
     if "status" in meta:  # account_fit profile -> append WE SCORE account-intel columns
         enrich = json.loads(s["enrich_json"]) if s["enrich_json"] else {}
@@ -295,3 +317,27 @@ def _stale_flag(verified_iso: str, staleness_days: int) -> str:
     except ValueError:
         return ""
     return "yes" if datetime.now(tz=UTC) - seen > timedelta(days=staleness_days) else ""
+
+
+_DAY_ORDER = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _format_hours(hours_json: str | None) -> str:
+    """'Mon 9AM-6PM | ... | Sun closed' from the listing's hours dict; '-' when unknown."""
+    if not hours_json:
+        return "-"
+    try:
+        hours = json.loads(hours_json)
+    except (TypeError, ValueError):
+        return "-"
+    if not isinstance(hours, dict) or not hours:
+        return "-"
+    parts = []
+    for day in _DAY_ORDER:
+        vals = hours.get(day)
+        if not vals:
+            continue
+        txt = ", ".join(vals) if isinstance(vals, list) else str(vals)
+        txt = txt.replace(" ", " ").replace("–", "-").replace(" ", " ")
+        parts.append(f"{day[:3]} {txt}")
+    return " | ".join(parts) if parts else "-"

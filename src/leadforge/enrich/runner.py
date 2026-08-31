@@ -87,13 +87,57 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
 
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
-    """stage: 'site' (crawl+extract), 'validate' (re-validate emails only), 'all'."""
+    """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'validate', 'all'."""
     counts = {"sites_crawled": 0, "contacts": 0, "dm_candidates": 0, "needs_browser": 0, "emails_valid": 0}
     if stage in ("all", "site"):
         _crawl_stage(conn, cfg, limit, counts)
+    if stage in ("all", "registry"):
+        _registry_stage(conn, cfg, counts)
     if stage in ("all", "validate"):
         _validate_stage(conn, cfg, counts)
     return counts
+
+
+def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
+    """v0.1.2: registry lookup for EVERY business in a covered jurisdiction — including the ones
+    with no website (they never enter the crawl stage, which is where lookups used to happen).
+    Also stores the matched company profile (number, incorporation, status, SIC) for the sheet."""
+    from leadforge.providers.registry import CompaniesHouseRegistry, get_registries
+    registries = get_registries(cfg)
+    if not registries:
+        return
+    rows = conn.execute(
+        """SELECT * FROM businesses b
+           WHERE json_extract(b.enrich_json,'$.registry_checked') IS NULL
+             AND NOT EXISTS (SELECT 1 FROM people p WHERE p.business_id=b.id AND p.labeled_by='registry')"""
+    ).fetchall()
+    for b in rows:
+        country = (b["address_country"] or "").strip().upper()
+        for reg in registries:
+            if country not in reg.jurisdictions():
+                continue
+            profile = None
+            if isinstance(reg, CompaniesHouseRegistry):
+                people, profile = reg.lookup_with_profile(b)
+            else:
+                people = reg.lookup(b)
+            found = []
+            for person, ev in people:
+                found.append(person)
+                db.add_person(conn, person)
+                db.add_evidence(conn, ev)
+                counts["dm_candidates"] = counts.get("dm_candidates", 0) + 1
+            _auto_pick_registry_dm(conn, b, found, counts)
+            enrich_update: dict = {"registry_checked": True}
+            if profile:
+                enrich_update["registry_profile"] = profile
+            db.update_enrich(conn, b["id"], enrich_update)
+            counts["registry_looked_up"] = counts.get("registry_looked_up", 0) + 1
+            if getattr(reg, "disabled", False):
+                LOG.warning("registry %s disabled mid-stage (rate limit); stopping stage", reg.name)
+                conn.commit()
+                return
+    conn.commit()
 
 
 def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict) -> None:
@@ -164,7 +208,8 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
                                            url=p["url"], snippet=f"{net}: last post {p['last_post_at'] or 'unknown'}",
                                            observed_at=now_iso()))
     enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
-              "pages": res["pages"], "needs_browser": res["needs_browser"]}
+              "pages": res["pages"], "needs_browser": res["needs_browser"],
+              "registry_checked": bool(registries)}
     if res.get("profile"):
         enrich["profile"] = res["profile"]
     if social_presence:

@@ -82,9 +82,14 @@ class CompaniesHouseRegistry:
         return {"GB", "UK"}
 
     def lookup(self, business_row) -> list[tuple[Person, Evidence]]:
-        """Never raises; [] on any problem. On 429: back off 60s once, then disable for the run."""
+        people, _profile = self.lookup_with_profile(business_row)
+        return people
+
+    def lookup_with_profile(self, business_row) -> tuple[list[tuple[Person, Evidence]], dict | None]:
+        """Officers + the matched company's registry profile (number, incorporation, status, SIC).
+        Never raises; ([], None) on any problem. On 429: back off 60s once, then disable for the run."""
         if self.disabled or not self.key:
-            return []
+            return [], None
         import httpx
 
         try:
@@ -96,7 +101,7 @@ class CompaniesHouseRegistry:
             if r.status_code == 429:
                 time.sleep(60)
                 self.disabled = True
-                return []
+                return [], None
             r.raise_for_status()
             for item in (r.json().get("items") or []):
                 if not _locality_overlap(item, business_row):
@@ -104,13 +109,28 @@ class CompaniesHouseRegistry:
                 number = item.get("company_number")
                 if not number:
                     continue
+                profile = {"company_number": number,
+                           "incorporated": item.get("date_of_creation") or "",
+                           "company_status": item.get("company_status") or "",
+                           "legal_name": item.get("title") or "", "sic_codes": []}
+                try:
+                    _CH_BUCKET.wait()
+                    rp = httpx.get(f"{CH_BASE}/company/{number}", auth=auth, timeout=15.0)
+                    if rp.status_code == 200:
+                        pj = rp.json()
+                        profile["sic_codes"] = pj.get("sic_codes") or []
+                        profile["incorporated"] = pj.get("date_of_creation") or profile["incorporated"]
+                        profile["company_status"] = pj.get("company_status") or profile["company_status"]
+                except Exception:  # noqa: BLE001 — profile is a bonus, never blocks officers
+                    pass
+                _CH_BUCKET.wait()
                 _CH_BUCKET.wait()
                 ro = httpx.get(f"{CH_BASE}/company/{number}/officers",
                                params={"register_type": "directors"}, auth=auth, timeout=15.0)
                 if ro.status_code == 429:
                     time.sleep(60)
                     self.disabled = True
-                    return []
+                    return [], profile
                 ro.raise_for_status()
                 profile_url = f"https://find-and-update.company-information.service.gov.uk/company/{number}"
                 out = []
@@ -124,10 +144,10 @@ class CompaniesHouseRegistry:
                                   url=profile_url, snippet=f"{role} — appointed {off.get('appointed_on', '?')}",
                                   observed_at=now_iso())
                     out.append((person, ev))
-                return out
+                return out, profile
         except Exception as e:  # noqa: BLE001 — registries must never block the run
             LOG.warning("companies_house lookup failed for %s: %s", business_row["name"], type(e).__name__)
-        return []
+        return [], None
 
 
 class OpenCorporatesRegistry:
