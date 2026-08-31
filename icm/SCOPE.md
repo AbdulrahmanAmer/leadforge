@@ -64,6 +64,10 @@ and say so.
 5. **No SMTP RCPT probing / mailbox enumeration.** Email validity stops at syntax + MX + disposable + role
    classification, reported as tiers. (Also the technically correct choice — catch-all domains make probing
    meaningless and it damages IP reputation.)
+   *Clarification (v0.2.0):* the opt-in `validation.infer_emails` feature does NOT relax this rule. It
+   derives a likely address from public evidence only — a real email already found on that domain plus an
+   MX record — and never contacts a mail server to test whether a mailbox exists. Its output is labeled
+   `inferred`, kept in its own sheet column, and never counted as a found address.
 6. **No special-category personal data.** No health, religion, politics, sexuality, ethnicity, criminal
    history, or anything about private individuals in a non-professional capacity. If an extractor could pick
    such a thing up, drop it rather than storing it.

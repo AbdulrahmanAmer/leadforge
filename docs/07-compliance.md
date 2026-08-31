@@ -20,7 +20,7 @@ counsel for jurisdictions you operate in.
 | Google Maps ToS breach (contract, not criminal — public data per hiQ line) | Accepted, internal | Conservative defaults (`-c 2`, caps), no fake accounts, no redistribution of Google content; optional proxies only for reliability, not evasion escalation |
 | GDPR (named work emails = personal data) | Managed | Legitimate-interest basis for B2B prospecting: keep a short **LIA note per campaign** (template below), provenance stored per contact, suppression honored immediately, `staleness_days` re-verification, data lives only in the operator's `leadforge_data/` |
 | PECR/CAN-SPAM (outreach done by the operator afterwards) | Operator's duty | Export Summary sheet embeds the region-profile reminder (US: opt-out + postal address + honest headers; UK: corporate-subscriber rule; EU: LIA + opt-out) |
-| IP-reputation damage from SMTP probing | Avoided | No SMTP RCPT verification — tiers stop at MX/disposable/role analysis |
+| IP-reputation damage from SMTP probing | Avoided | No SMTP RCPT verification — tiers stop at MX/disposable/role analysis. The opt-in `validation.infer_emails` feature (v0.2.0) also never contacts a mail server: it derives a likely address from a real email already found on that domain + an MX record, exports it in a separate `Email (Inferred)` column labeled "likely", and excludes it from published-email coverage figures |
 | Business-site overload | Avoided | robots.txt, 1 in-flight/host, 2 s+jitter delay, ≤ 6 pages/site, identifying UA |
 
 ## 3. Campaign LIA note (template — 4 lines, stored next to icp.yaml)

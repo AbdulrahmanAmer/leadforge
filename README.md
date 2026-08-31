@@ -63,6 +63,7 @@ leadforge status
 leadforge config set registry.companies_house_key XXX  # read/write one leadforge.yaml value (set|get)
 leadforge export --icp icp.yaml --format xlsx,csv      # re-export the latest run
 leadforge suppress add someone@example.com   # opt-outs, honored everywhere (--kind domain|email|place_id)
+leadforge render-check https://site.example  # diagnose one site: robots -> plain fetch -> browser -> contacts
 ```
 
 Everything lands under `./leadforge_data/` (gitignored): SQLite db, cache, logs, and `exports/<run>/` with the
@@ -71,7 +72,9 @@ XLSX, CSV and report.
 ## What a lead row contains
 
 Score (0–100) and tier (A/B/C/D/DQ) · business name, category · **decision-maker name + title + confidence** ·
-phone (spaced international format) · best email + validity tier · website · split address
+phone (spaced international format) · best **published** email + validity tier · an optional
+**Email (Inferred)** column (opt-in; a likely address derived from the domain's own naming convention,
+always labeled as a guess and never counted as a found email) · website · split address
 (street/city/region/postal/country) · rating and review count · **"Likely Need (Hook)"** — a ready outreach
 angle · **"Why This Score"** — the top factors in plain words · Maps link · source, verified-on date and a
 **Stale?** flag · **Opening Hours** · a registry profile (**Company No, Incorporated, Company Status, SIC

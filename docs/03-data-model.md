@@ -73,7 +73,7 @@ erDiagram
         text kind "email|phone|social"
         text value "canonical: lowercased email / E.164 / url"
         text label "role|personal|unknown ; social network name"
-        text tier "valid|risky|role|catch_all|unknown|invalid"
+        text tier "valid|risky|role|catch_all|inferred|unknown|invalid"
         text verified_at
         text meta_json
     }
@@ -182,7 +182,8 @@ compliance: { region_profile: us }   # us|uk|eu → outreach reminder text in ex
 | Category | businesses.category | ICP-mapped |
 | DM Name / DM Title / DM Conf | people where is_dm=1 | natural "First Last" order; Conf 0–1. Never blank: unlabeled → "not identified - ask for owner/manager" |
 | Phone | phone_e164 | spaced international format ("+44 1483 456363" — survives Excel as text); raw Maps string as fallback |
-| Email / Email Tier | best contact (tier order: valid>role>risky>catch_all>unknown) | never export `invalid`; absent → "none published" / "site not crawled" / "no website to crawl", tier `-` |
+| Email / Email Tier | best PUBLISHED contact (tier order: valid>role>risky>catch_all>unknown) | never export `invalid`; `inferred` is excluded here by design (own column); absent → "none published" / "site not crawled" / "no website to crawl", tier `-` |
+| Email (Inferred) | v0.2.0, opt-in `validation.infer_emails`: the address this domain's own naming convention implies for the named DM, derived from a real email already found on that domain + MX. Never SMTP-probed | rendered as `addr (likely, N% — pattern X from <anchor>)`; excluded from `with_email` coverage (counted as `with_inferred_email`); absent → "not inferred" |
 | Website | businesses.website | hyperlink; absent → "NONE - no web presence (pitch opportunity)" |
 | Address / City / Region / Postal / Country | split fields | sheet-ready |
 | Rating / Reviews | rating, review_count | |

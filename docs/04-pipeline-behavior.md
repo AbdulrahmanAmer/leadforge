@@ -137,6 +137,22 @@ latest run for the same ICP hash; every stage is idempotent (upserts, per-tile /
   never repeat lookups.
 - Heartbeat: the `LF_PROGRESS` stream carries `registry` and `validate` stages alongside `discover`/`enrich` (docs/06).
 
+### 3.4c infer stage (v0.2.0, opt-in — `validation.infer_emails`, default off)
+- Runs after the registry stage (so registry-auto-picked DMs are covered); re-run alone with
+  `leadforge enrich --stage infer` after `dm apply` to cover agent-labeled DMs too.
+- Fires only when **all three** hold: the business has a DM with a usable person name, its domain's **MX confirms it
+  receives mail**, and a **real personal email already found on that same domain** demonstrates the local-part
+  convention (`bob.jones@` → first.last, `b.jones@` → f.last). **No anchor → no guess** — a common pattern is never
+  assumed. Role mailboxes (`info@`), departmental lookalikes (`experienced.hire@`, `new.business@`) and freemail
+  domains are rejected as anchors.
+- **No SMTP, ever** (icm/SCOPE.md #5): evidence is DNS MX + already-crawled emails. Nothing contacts a mail server.
+- Output: a contact with tier `inferred`, its own `email_inferred` evidence (no source URL is claimed), and its own
+  `Email (Inferred)` sheet column reading `addr (likely, N% — pattern X from <anchor>)`. Excluded from `with_email`
+  coverage (reported separately as `with_inferred_email`); scored below any observed address.
+- Segment reality (measured 2026-08-31): trades publish `info@` or nothing — 0 anchors across 709 UK garages;
+  professional-services campaigns do carry `first.last@` conventions. The stage correctly produces nothing where
+  there is no evidence.
+
 ### 3.5 score
 - Load `src/leadforge/data/scoring.default.yaml` (packaged, via importlib.resources) ⊕ `icp.scoring.weights_override`. For each business: evaluate factor functions (pure, unit-tested)
   → points + one-line `why`; sum, clamp 0–100; apply negative rules (cap −40); tier A ≥ 75 / B ≥ 55 / C else / DQ if any hard qualifier

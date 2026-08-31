@@ -70,8 +70,22 @@ labeling and their outreach).
 
 ## Scaling a campaign to 1,000+ leads
 
-One town × one category yields ~100–200 businesses at full depth. To reach 1,000 records, widen the plan
-rather than deepening one query:
+**Why one query can't just "go deeper":** Google Maps stops serving results at roughly 100–120 per search,
+server-side. The scraper already scrolls to the end (`discovery.depth: 10`) — measured live, "auto repair
+shop in Birmingham" returns ~106 listings no matter what. Deepening does nothing; you need *more searches*.
+
+Two ways to widen, and they combine:
+
+1. **More categories × more towns** (below) — always available, no extra setup.
+2. **Grid tiling** — splits ONE town into map cells, each its own search with its own ~120 budget. This is
+   how you exhaust a big city instead of skimming its first 106 results. Opt-in:
+   `leadforge config set discovery.grid_mode auto` (per-campaign: `target.geography.grid: auto`,
+   cell size `discovery.grid_cell_km`, cap `caps.max_tiles`). Always run `leadforge plan` first — the digest
+   reports map cells, total queries and estimated hours before you spend them, and a tiled plan is easily
+   10–60× the queries of a text plan. Tiling needs a geocode (Nominatim) per area, so it adds a network
+   dependency a plain text plan doesn't have.
+
+To reach 1,000 records by widening:
 
 ```yaml
 target:
