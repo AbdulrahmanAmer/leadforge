@@ -114,9 +114,21 @@ def plan(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
     except LeadForgeError as e:
         emit_digest(False, "plan", warnings=[str(e)[:120]])
         raise typer.Exit(e.exit_code) from e
-    counts = plan_counts(queries)
-    _say(ctx, f"queries={counts['queries']} tiles={counts['tiles']} est_max_results={counts['est_max_results']}")
-    warns = ["large plan; consider narrowing"] if counts["queries"] > 80 else []
+    counts = plan_counts(queries, cfg)
+    hours = counts["est_runtime_min"] / 60
+    _say(ctx, f"queries={counts['queries']} tiles={counts['tiles']} "
+              f"est_max_results={counts['est_max_results']} est_runtime~{hours:.1f}h")
+    # a tiled plan can be 60x a text plan; say so in hours before it runs, not after
+    warns = []
+    if counts["est_runtime_min"] > 240:
+        warns.append(f"large plan: ~{counts['queries']} queries, roughly {hours:.1f}h of scraping "
+                     f"(resumable — every query checkpoints)")
+    if counts["est_max_results"] > icp_obj.caps.max_leads * 10:
+        warns.append(f"plan is far larger than caps.max_leads ({icp_obj.caps.max_leads}); discovery "
+                     f"stops at the cap, so later tiles may never run — raise the cap or narrow the plan")
+    if counts["tiles"]:
+        warns.append(f"grid tiling ON: {counts['tiles']} map cells x {len(icp_obj.target.categories)} "
+                     f"categories (each cell gets its own ~120-result budget)")
     emit_digest(True, "plan", counts=counts, warnings=warns, next_="leadforge run --icp " + icp)
 
 

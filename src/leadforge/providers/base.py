@@ -19,6 +19,7 @@ from leadforge.util import ProviderFailed
 
 class DiscoveryProvider(ABC):
     name: str = "base"
+    supports_tiles: bool = False  # True only when fetch() actually constrains search to query.tile
 
     def __init__(self, cfg: Config):
         self.cfg = cfg

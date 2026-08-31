@@ -25,6 +25,9 @@ from leadforge.util import LOG, InputError
 
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _KM_PER_DEG_LAT = 110.574
+_GEOCODE_ATTEMPTS = 3
+# observed live (2026-08-31): a full-depth gosom query runs ~2-35 min; used only for a plan estimate
+_EST_MIN_PER_QUERY = 8.0
 
 # ISO2 -> plain name, used to country-qualify query text (not exhaustive; falls back to the code itself).
 COUNTRY_NAMES = {
@@ -70,21 +73,31 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
     key = f"{country.upper()}|{area.strip().lower()}"
     if key in cache:
         return cache[key]
-    time.sleep(1.0)  # Nominatim usage policy: max 1 req/s
-    try:
-        r = httpx.get(
-            NOMINATIM,
-            params={"q": area, "format": "jsonv2", "limit": 5, "countrycodes": country.lower(),
-                    "addressdetails": 1},
-            headers={"User-Agent": cfg.politeness.user_agent},
-            timeout=15,
-        )
-        r.raise_for_status()
-        rows = r.json()
-    except httpx.HTTPError as e:
+    rows = None
+    last_err: Exception | None = None
+    for attempt in range(_GEOCODE_ATTEMPTS):
+        time.sleep(1.0 * (attempt + 1))  # Nominatim usage policy: max 1 req/s; back off on retries
+        try:
+            r = httpx.get(
+                NOMINATIM,
+                params={"q": area, "format": "jsonv2", "limit": 5, "countrycodes": country.lower(),
+                        "addressdetails": 1},
+                headers={"User-Agent": cfg.politeness.user_agent},
+                timeout=15,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            break
+        except httpx.HTTPError as e:
+            # a transient blip must not kill a multi-hour tiled plan on its first area
+            last_err = e
+            LOG.warning("geocode attempt %d/%d for '%s' failed: %s",
+                        attempt + 1, _GEOCODE_ATTEMPTS, area, type(e).__name__)
+    if rows is None:
         raise InputError(
-            f"could not geocode '{area}' in {country}: {type(e).__name__} — check spelling or set target.geography.bbox"
-        ) from e
+            f"could not geocode '{area}' in {country} after {_GEOCODE_ATTEMPTS} attempts: "
+            f"{type(last_err).__name__} — check spelling/network or set target.geography.bbox"
+        ) from last_err
     if not rows:
         raise InputError(
             f"'{area}' not found in country {country}. Check the spelling, add a state/region "
@@ -170,42 +183,65 @@ def qualify_area(area: str, country: str) -> str:
 
 
 def build_plan(icp: ICP, cfg: Config) -> list[PlannedQuery]:
+    """Ordered so a `caps.max_leads` stop mid-plan can never starve a whole category or area.
+
+    Discovery walks queries in insertion order and breaks the moment the unique-lead cap is hit
+    (pipeline.run_discover). Emitting category-major ("all tiles of category 1, then category 2")
+    meant a capped run could finish having never searched the last category at all. Queries are
+    therefore rotated: tile index first, then area, then category — every category is served in
+    every area before any tile advances.
+    """
     geo = icp.target.geography
     grid_on = cfg.discovery.grid_mode == "auto" and geo.grid == "auto"
-    queries: list[PlannedQuery] = []
-    areas = geo.areas or ["(bbox)"]
+    cats = icp.target.categories
+    # (area_label, query_text_prefix, tiles|None) per area, in ICP order
+    slots: list[tuple[str, str, list[Tile] | None]] = []
 
     if geo.bbox and grid_on:
-        tiles = make_tiles(geo.bbox, cfg.discovery.grid_cell_km, icp.caps.max_tiles)
-        for cat in icp.target.categories:
-            for tile in tiles:
-                queries.append(PlannedQuery(text=f"{cat}", category=cat, area=areas[0], tile=tile))
-        return queries
+        # bbox campaign: the box IS the geography, so the text carries no area at all
+        slots.append(((geo.areas or ["(bbox)"])[0], "", make_tiles(
+            geo.bbox, cfg.discovery.grid_cell_km, icp.caps.max_tiles)))
+    elif geo.bbox and not geo.areas:
+        raise InputError(
+            "this ICP has target.geography.bbox but no areas, and grid tiling is off — a bbox is only "
+            "usable in grid mode. Set discovery.grid_mode: auto in leadforge.yaml "
+            "(leadforge config set discovery.grid_mode auto), or list geography.areas instead."
+        )
+    else:
+        for area in geo.areas:
+            tiles = None
+            if grid_on:
+                g = geocode(area, cfg, geo.country)
+                tiles = make_tiles(g["bbox"], cfg.discovery.grid_cell_km, icp.caps.max_tiles)
+            # country-qualified query text: keeps the scraper in the right country too
+            slots.append((area, f" in {qualify_area(area, geo.country)}", tiles))
 
-    for area in geo.areas:
-        tiles: list[Tile] | None = None
-        if grid_on:
-            g = geocode(area, cfg, geo.country)
-            tiles = make_tiles(g["bbox"], cfg.discovery.grid_cell_km, icp.caps.max_tiles)
-        # country-qualified query text: keeps the scraper in the right country too
-        qtext_area = qualify_area(area, geo.country)
-        for cat in icp.target.categories:
-            if tiles:
-                for tile in tiles:
-                    queries.append(PlannedQuery(text=f"{cat} in {qtext_area}", category=cat, area=area, tile=tile))
-            else:
-                queries.append(PlannedQuery(text=f"{cat} in {qtext_area}", category=cat, area=area))
-    if not queries:
+    if not slots or not cats:
         raise InputError("ICP produced no queries: need target.categories and geography.areas (or bbox)")
+
+    max_tiles = max(len(t) if (t := s[2]) else 1 for s in slots)
+    queries: list[PlannedQuery] = []
+    for ti in range(max_tiles):  # tile-major rotation -> fair to categories AND areas under a cap
+        for area, suffix, tiles in slots:
+            if tiles is not None and ti >= len(tiles):
+                continue
+            if tiles is None and ti > 0:
+                continue
+            tile = tiles[ti] if tiles else None
+            for cat in cats:
+                queries.append(PlannedQuery(text=f"{cat}{suffix}", category=cat, area=area, tile=tile))
     return queries
 
 
-def plan_counts(queries: list[PlannedQuery]) -> dict:
-    tiles = sum(1 for q in queries if q.tile)
+def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
+    """cfg is accepted for signature stability; runtime is estimated from the observed per-query
+    average, which depends on gosom's depth behaviour rather than on any single config value."""
     return {
         "queries": len(queries),
-        "tiles": tiles,
+        "tiles": len({q.tile.bbox for q in queries if q.tile}),  # distinct map cells, not tiled queries
+        "tiled_queries": sum(1 for q in queries if q.tile),
         "est_max_results": len(queries) * 120,  # Google Maps ~120-results-per-query ceiling (docs/01 §2)
+        "est_runtime_min": round(len(queries) * _EST_MIN_PER_QUERY),
     }
 
 

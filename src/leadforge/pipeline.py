@@ -117,6 +117,12 @@ def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str]:
         if not ok:
             warns.append(f"{provider.name}: {reason}")
             continue
+        if pq.tile is not None and not getattr(provider, "supports_tiles", False):
+            # say it out loud: this provider searches the query TEXT only, so a tiled plan silently
+            # loses its per-cell geographic constraint (and with it the point of tiling)
+            msg = f"{provider.name} ignores grid tiles — geo constraint dropped for tiled queries"
+            if msg not in warns:
+                warns.append(msg)
         try:
             return provider.fetch(pq, limit=limit), "done"
         except ProviderDegraded as e:

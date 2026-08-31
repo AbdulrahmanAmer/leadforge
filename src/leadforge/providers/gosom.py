@@ -29,6 +29,7 @@ _COOLDOWN_S = 600
 @register
 class GosomProvider(DiscoveryProvider):
     name = "gosom"
+    supports_tiles = True  # native -grid-bbox/-grid-cell
 
     def available(self) -> tuple[bool, str]:
         path = gosom_path(self.cfg)
