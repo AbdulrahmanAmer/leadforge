@@ -29,12 +29,12 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
 - [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
-- [ ] **U3.7** gosom serve mode (optional) — `providers/gosom.py` — `icm/stages/stage-3-discovery.md`
-- [ ] **U4.5** Browser escalation (optional) — `enrich/browser.py` — `icm/stages/stage-4-enrichment.md`
-- [ ] **U4.6** Registry cross-check (optional) — `providers/registry.py` — `icm/stages/stage-4-enrichment.md`
-- [ ] **U4.7** GLiNER DM upgrade (optional) — `enrich/dm.py` hook — `icm/stages/stage-4-enrichment.md`
-- [ ] **U4.8** Social/video presence via Agent-Reach (optional) — `providers/social.py` — `icm/stages/stage-4-enrichment.md`
-- [ ] **U8.1** Finish test suite — `tests/` — `icm/stages/stage-8-hardening.md`
+- [~] **U3.7** gosom serve mode (optional) — SKIPPED: multi-hour runs not needed yet (stage-3 doc says skip unless needed)
+- [x] **U4.5** Browser escalation — implemented + wiring tests; live render UNPROVEN ([browser] extra not installed here)
+- [x] **U4.6** Registry cross-check — implemented + fixture tests; live key path UNPROVEN (no keys configured)
+- [x] **U4.7** GLiNER DM upgrade — hook + selection rule + tests (skip cleanly without [ner])
+- [x] **U4.8** Social/video presence — implemented (youtube via yt-dlp; others honest 'unknown'), linkedin-exclusion tested
+- [x] **U8.1** Finish test suite — 89 tests: politeness (real server), suppression e2e, digest contract per command, extractor edges
 - [ ] **U8.2** Live E2E validation (needs network + binary) — `icm/stages/stage-8-hardening.md`
 - [ ] **U8.3** CI verify/extend — `.github/workflows/ci.yml` — `icm/stages/stage-8-hardening.md`
 - [ ] **U8.4** Guardrails audit — `icm/stages/stage-8-hardening.md`

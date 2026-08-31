@@ -22,6 +22,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252; this script prints arrows/checkmarks.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 REPO = Path(__file__).resolve().parent
 SKILLS_SRC = REPO / "skills"
 

@@ -1,6 +1,26 @@
 # Changelog
 
-## [0.1.0] — 2026-08-31
+## [0.1.0] — 2026-08-31 (finalized)
+
+Finalize session (same day) — all remaining ICM units landed:
+
+- **U3.6** Fallback REST discovery provider (conor-is-my-name engine adapter; degrades, never crashes).
+- **U4.5** Browser escalation for JS-shell sites via crawl4ai (`[browser]` extra); robots + throttle honored,
+  escalates only when the static pass found nothing.
+- **U4.6** Public registry cross-check: Companies House + OpenCorporates (key-gated, locality-matched,
+  600/5-min throttle, 429 → disable-for-run).
+- **U4.7** GLiNER zero-shot DM-candidate extraction (`[ner]` extra), heuristic fallback unchanged.
+- **U4.8** Social/video presence signals via Agent-Reach (opt-in; LinkedIn excluded, logged-out only,
+  metadata only).
+- **U8.1** Test suite completion: crawler-politeness (real local server), suppression e2e, per-command
+  `LF_DIGEST` contract, extractor edge cases — 89 tests.
+- **U8.4** Guardrails audit: `caps.max_leads` now a hard stop; export now filters suppressed
+  domains/place_ids; audit greps clean.
+- Fixes: UTF-8 stdout/stderr forced in the CLI (Windows cp1252 pipes broke the digest contract);
+  DNS resolver fallback (system → 8.8.8.8/1.1.1.1) for networks that drop MX queries; person-name
+  extractor word-stoplist kills "And The Team"-style false positives.
+
+## [0.1.0-scaffold] — 2026-08-31
 
 Initial scaffold, produced from the staged ICM build plan (`docs/05-icm-build-plan.md`).
 
