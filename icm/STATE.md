@@ -13,7 +13,9 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 - [x] **G5 Scoring** — rubric + hooks + explanations; deterministic, tested
 - [x] **G6 Export** — XLSX/CSV/report; produced in E2E test (verify visually on a real machine at G6/U8.2)
 - [x] **G7 Harness integration** — both plugins + skill + AGENTS/CLAUDE + install.py present (validate live at U8.2)
-- [ ] **G8 Ship** — full test suite, CI green, live E2E, guardrails audit, tag v0.1.0
+- [~] **G8 Ship** — test suite (91), CI green, live E2E done, guardrails audit clean, v0.1.0 tagged &
+      pushed. Remaining for full G8: partner installs from the GitHub link and completes a campaign
+      unaided + operator opens the sheet in Excel/LibreOffice.
 
 ## Units
 
@@ -41,7 +43,9 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
       (operator: open `D:\GainLev\LeadForge\campaign-uk-test\leadforge_data\exports\run_20260831_03433_8ad5\`)
 - [x] **U8.3** CI verified locally (matrix/lint/test/manifests all present); green GH Actions run UNPROVEN until first push
 - [x] **U8.4** Guardrails audit — all 10 items pass (max_leads hard stop + export suppression filter were fixed to pass)
-- [ ] **U8.5** Tag v0.1.0 + verify install matrix + push — `icm/stages/stage-8-hardening.md`
+- [x] **U8.5** Pushed to https://github.com/AbdulrahmanAmer/leadforge (public), tagged v0.1.0, CI run
+      33354980045 green on all 5 jobs (win+ubuntu × py3.11/3.12 + manifests). Partner install from the
+      GitHub link UNPROVEN — that's the final G8 acceptance and needs the partner's machine.
 
 ## Notes / decisions log (append as you go)
 - 2026-08-31 U8.2: gosom full-depth run on 1 query took >30m (visits every place page) — added depth=1 cap
