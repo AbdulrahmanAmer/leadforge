@@ -16,16 +16,37 @@ except Exception:  # noqa: BLE001 — optional dataset; absence just skips the d
     _DISPOSABLE = set()
 
 
+@lru_cache(maxsize=1)
+def get_resolver(fallbacks: tuple[str, ...] = ("8.8.8.8", "1.1.1.1"), probe_timeout: float = 3.0):
+    """System resolver if it can answer MX queries, else a public-nameserver fallback.
+
+    Corporate/VPN resolvers sometimes drop MX queries entirely; without this every email
+    would tier as 'unknown'. Probed once per process, cached.
+    """
+    import dns.resolver
+
+    system = dns.resolver.Resolver()
+    try:
+        system.resolve("gmail.com", "MX", lifetime=probe_timeout)
+        return system
+    except Exception:  # noqa: BLE001 — any failure -> try public fallbacks
+        pass
+    public = dns.resolver.Resolver(configure=False)
+    public.nameservers = list(fallbacks)
+    return public
+
+
 def _mx_exists(domain: str, timeout: float) -> bool | None:
     """True/False if resolvable; None on DNS error (-> tier 'unknown', retryable)."""
     try:
         import dns.resolver
 
+        res = get_resolver()
         try:
-            answers = dns.resolver.resolve(domain, "MX", lifetime=timeout)
+            answers = res.resolve(domain, "MX", lifetime=timeout)
             return len(answers) > 0
         except dns.resolver.NoAnswer:
-            a = dns.resolver.resolve(domain, "A", lifetime=timeout)  # some domains accept mail on A
+            a = res.resolve(domain, "A", lifetime=timeout)  # some domains accept mail on A
             return len(a) > 0
         except (dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
             return False

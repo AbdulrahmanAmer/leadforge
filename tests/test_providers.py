@@ -40,11 +40,62 @@ def test_gosom_available_without_binary(tmp_path, monkeypatch):
     assert ok is False and "doctor" in reason
 
 
-# --- U3.6 acceptance stub (xfail until implemented) ---------------------------------------
+# --- U3.6 fallback REST provider ------------------------------------------------------------
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 
+from leadforge.grid import PlannedQuery  # noqa: E402
+from leadforge.providers.fallback_rest import FallbackRestProvider  # noqa: E402
+from leadforge.util import ProviderDegraded  # noqa: E402
 
-@pytest.mark.xfail(reason="ICM U3.6: fallback_rest not implemented yet", strict=False)
-def test_fallback_rest_parse():
-    from leadforge.providers.fallback_rest import FallbackRestProvider  # noqa: F401
-    raise AssertionError("implement per fallback_rest.py spec + a canned JSON fixture")
+
+class _FakeResp:
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return self._payload
+
+
+def test_fallback_rest_maps_fields(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    prov = FallbackRestProvider(cfg)
+    fake_rows = [{"name": "A Shop", "phone_number": "713-555-0100",
+                  "website": "http://a.com", "reviews": 12, "lat": 29.7, "lng": -95.3}]
+    monkeypatch.setattr("leadforge.providers.fallback_rest.httpx.get",
+                        lambda *a, **k: _FakeResp(fake_rows))
+    out = prov.fetch(PlannedQuery(text="auto repair in Houston", category="", area=""))
+    assert len(out) == 1
+    assert out[0].data["title"] == "A Shop"
+    assert out[0].data["web_site"] == "http://a.com"
+    assert out[0].data["latitude"] == 29.7
+    assert out[0].data["name"] == "A Shop"  # original keys preserved
+
+
+def test_fallback_rest_unreachable_is_degraded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    prov = FallbackRestProvider(cfg)
+
+    def _boom(*a, **k):
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr("leadforge.providers.fallback_rest.httpx.get", _boom)
+    with pytest.raises(ProviderDegraded):
+        prov.fetch(PlannedQuery(text="x", category="", area=""))
+    ok, reason = prov.available()
+    assert ok is False and "not reachable" in reason
+
+
+def test_fallback_rest_non_list_is_degraded(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    prov = FallbackRestProvider(cfg)
+    monkeypatch.setattr("leadforge.providers.fallback_rest.httpx.get",
+                        lambda *a, **k: _FakeResp({"detail": "error"}))
+    with pytest.raises(ProviderDegraded):
+        prov.fetch(PlannedQuery(text="x", category="", area=""))

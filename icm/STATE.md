@@ -28,7 +28,7 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 - [x] U7.1 Claude plugin · U7.2 Codex plugin · U7.3 skill · U7.4 AGENTS/CLAUDE · U7.5 install.py
 
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
-- [ ] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — `icm/stages/stage-3-discovery.md`
+- [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
 - [ ] **U3.7** gosom serve mode (optional) — `providers/gosom.py` — `icm/stages/stage-3-discovery.md`
 - [ ] **U4.5** Browser escalation (optional) — `enrich/browser.py` — `icm/stages/stage-4-enrichment.md`
 - [ ] **U4.6** Registry cross-check (optional) — `providers/registry.py` — `icm/stages/stage-4-enrichment.md`
@@ -42,5 +42,8 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 
 ## Notes / decisions log (append as you go)
 - 2026-08-31 scaffold: gosom FIELD_MAP derived from README, NOT a live run — verify at U8.2 (expect drift).
+- 2026-08-31 finalize: this machine's VPN DNS (10.255.255.x) drops MX queries — added `get_resolver()`
+  fallback (system → 8.8.8.8/1.1.1.1, probed once per process) in `enrich/validate.py`, used by doctor too.
+- 2026-08-31 finalize: CLI now forces UTF-8 stdout/stderr in `main()` (Windows cp1252 pipes broke the digest contract).
 - 2026-08-31 scaffold: `discovery.grid_mode` defaults `off`; gosom `-grid-bbox/-grid-cell` value formats
   need live verification before enabling grid tiling by default (part of U8.2).

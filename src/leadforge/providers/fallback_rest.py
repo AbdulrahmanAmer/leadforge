@@ -19,9 +19,12 @@ An INDEPENDENT selector implementation, so a Google markup change rarely kills b
 
 from __future__ import annotations
 
+import httpx
+
 from leadforge.grid import PlannedQuery
 from leadforge.models import RawListing
 from leadforge.providers.base import DiscoveryProvider, register
+from leadforge.util import ProviderDegraded, now_iso
 
 
 @register
@@ -29,7 +32,43 @@ class FallbackRestProvider(DiscoveryProvider):
     name = "fallback_rest"
 
     def available(self) -> tuple[bool, str]:
-        return False, "U3.6 not implemented yet — see module docstring spec"
+        url = self.cfg.discovery.fallback_rest.url
+        try:
+            r = httpx.get(f"{url}/docs", timeout=3.0)
+        except httpx.HTTPError:
+            return False, f"fallback REST service not reachable at {url} (start its docker container)"
+        if r.status_code < 500:
+            return True, f"rest up at {url}"
+        return False, f"rest unhealthy ({r.status_code})"
 
     def fetch(self, query: PlannedQuery, limit: int | None = None) -> list[RawListing]:
-        raise NotImplementedError("U3.6: implement per module docstring spec")
+        # No geo-tiling in this engine: query.tile is deliberately ignored (text queries only).
+        url = self.cfg.discovery.fallback_rest.url
+        params = {"query": query.text, "max_results": limit or 100}
+        try:
+            r = httpx.get(f"{url}/scrape-get", params=params, timeout=30.0)
+            r.raise_for_status()
+            rows = r.json()
+        except (httpx.HTTPError, ValueError) as e:
+            raise ProviderDegraded(f"fallback_rest failed on '{query.text}': {type(e).__name__}") from e
+        if not isinstance(rows, list):
+            raise ProviderDegraded(f"fallback_rest returned {type(rows).__name__}, expected list")
+        return [RawListing(provider=self.name, fetched_at=now_iso(), data=self._map(row))
+                for row in rows if isinstance(row, dict)]
+
+    @staticmethod
+    def _map(row: dict) -> dict:
+        """Translate this engine's keys into the GOSOM-style keys normalize.py already understands.
+        Keeps every original key too, so nothing is lost if the map is incomplete."""
+        out = dict(row)
+        alias = {
+            "name": "title", "business_name": "title",
+            "website": "web_site", "url": "web_site",
+            "phone_number": "phone",
+            "rating": "review_rating", "reviews": "review_count", "num_reviews": "review_count",
+            "lat": "latitude", "lng": "longitude", "lon": "longitude",
+        }
+        for src, dst in alias.items():
+            if src in row and dst not in out:
+                out[dst] = row[src]
+        return out

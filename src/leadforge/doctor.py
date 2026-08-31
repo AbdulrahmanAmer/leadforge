@@ -196,9 +196,10 @@ def run_doctor(cfg: Config, fix: bool = False, strict: bool = False) -> DoctorRe
         add(CheckResult("network", False, msg=type(e).__name__, hint="check connectivity/proxy"))
 
     try:
-        import dns.resolver
-        dns.resolver.resolve("gmail.com", "MX", lifetime=cfg.validation.dns_timeout_s)
-        add(CheckResult("dns-mx", True, msg="resolver ok"))
+        from leadforge.enrich.validate import get_resolver
+        res = get_resolver()
+        res.resolve("gmail.com", "MX", lifetime=cfg.validation.dns_timeout_s)
+        add(CheckResult("dns-mx", True, msg=f"resolver ok ({', '.join(map(str, res.nameservers[:2]))})"))
     except Exception as e:  # noqa: BLE001 — any resolver failure is the same answer
         add(CheckResult("dns-mx", False, msg=type(e).__name__,
                         hint="email tiers will be 'unknown' until DNS works"))
