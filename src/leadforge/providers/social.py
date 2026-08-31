@@ -106,10 +106,22 @@ def _limiter(cfg) -> _RateLimiter:
     return _LIMITER
 
 
+_PROBE_CACHE: tuple[bool, str] | None = None
+
+
 def is_available(cfg) -> tuple[bool, str]:
-    """Enabled only when cfg.social.enabled AND the agent-reach CLI answers its doctor probe."""
+    """Enabled only when cfg.social.enabled AND the agent-reach CLI answers its doctor probe.
+    The doctor probe is a real subprocess (up to 20s) — cached for the process lifetime."""
     if not cfg.social.enabled:
         return False, "social presence disabled (social.enabled: false)"
+    global _PROBE_CACHE
+    if _PROBE_CACHE is not None:
+        return _PROBE_CACHE
+    _PROBE_CACHE = _probe()
+    return _PROBE_CACHE
+
+
+def _probe() -> tuple[bool, str]:
     exe = shutil.which("agent-reach")
     if not exe:
         return False, "agent-reach CLI not installed (pip install agent-reach)"
