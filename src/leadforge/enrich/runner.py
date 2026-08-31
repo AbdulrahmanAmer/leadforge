@@ -207,6 +207,10 @@ def _auto_pick_registry_dm(conn: sqlite3.Connection, b, registry_people: list[Pe
     individuals = [p for p in registry_people if not _is_corporate_officer(p.name)]
     if len(individuals) != 1:
         return
+    existing_dm = conn.execute("SELECT 1 FROM people WHERE business_id=? AND is_dm=1 LIMIT 1",
+                               (b["id"],)).fetchone()
+    if existing_dm:
+        return  # a DM is already chosen (agent or earlier run) — never create a second one
     dm = individuals[0]
     conn.execute(
         "UPDATE people SET is_dm=1, dm_confidence=0.9, labeled_at=? "

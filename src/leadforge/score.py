@@ -362,14 +362,17 @@ def score_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str, b) -> Sco
 
     total = sum(f.points for f in factors)
 
-    # DQ per spec s11 - only on CONFIRMED negatives, never on unknowns
-    dq = emp is not None and emp < 20
-    dq_reason = f"under 20 employees ({emp})" if dq else ""
+    # DQ per spec s11 - only on CONFIRMED negatives. A self-published headcount is ESTIMATED,
+    # so it heavily downgrades (0 size points + MANUAL_REVIEW) but never disqualifies.
+    emp_state = (prof.get("employee_count") or {}).get("state")
+    dq = emp is not None and emp < 20 and emp_state == "CONFIRMED"
+    dq_reason = f"under 20 employees ({emp}, confirmed)" if dq else ""
+    tiny_estimated = emp is not None and emp < 20 and not dq
 
     # Contactability (separate 0-100; never affects fit)
     email_tier = best_email_tier([c["tier"] for c in contacts if c["kind"] == "email"])
     phones = [c["value"] for c in contacts if c["kind"] == "phone"]
-    has_direct = any(p.startswith(("+447",)) and len(p) > 8 for p in phones)  # mobile heuristic (UK)
+    has_direct = _any_mobile(phones)
     linkedin = any(c["kind"] == "social" and c["label"] == "linkedin" for c in contacts)
     contactability = ((30 if dm else 0)
                       + (30 if email_tier == "valid" else 15 if email_tier == "role" else 0)
@@ -385,18 +388,32 @@ def score_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str, b) -> Sco
                                why=f"{known}/{considered} rubric inputs known"))
     factors.append(ScoreFactor(factor="status", group="meta", weight=0, score=0, points=0,
                                why=_account_status(_grade(total, dq), contactability, industry_match,
-                                                   rng, dq_reason)))
+                                                   rng, dq_reason, tiny_estimated)))
 
     hooks = [t["text"][:120] for t in triggers[:1]]
     return Score(business_id=b["id"], run_id=run_id, total=round(total, 1),
                  tier=_grade(total, dq), factors=factors, need_hooks=hooks, scored_at=now_iso())
 
 
+def _any_mobile(phones: list[str]) -> bool:
+    """Country-agnostic direct/mobile detection via phonenumbers metadata."""
+    import phonenumbers
+    for p in phones:
+        try:
+            n = phonenumbers.parse(p, None)
+            if phonenumbers.number_type(n) in (phonenumbers.PhoneNumberType.MOBILE,
+                                               phonenumbers.PhoneNumberType.FIXED_LINE_OR_MOBILE):
+                return True
+        except phonenumbers.NumberParseException:
+            continue
+    return False
+
+
 def _account_status(grade: str, contactability: int, industry_match: bool, emp_range: str,
-                    dq_reason: str) -> str:
+                    dq_reason: str, tiny_estimated: bool = False) -> str:
     if grade == "DQ":
         return f"DISQUALIFIED: {dq_reason}"
-    if not industry_match or emp_range in ("20-49", ">500") or grade == "C":
+    if tiny_estimated or not industry_match or emp_range in ("20-49", ">500") or grade == "C":
         return "MANUAL_REVIEW"
     if grade in ("A", "B") and contactability >= 60:
         return "READY_FOR_OUTREACH"

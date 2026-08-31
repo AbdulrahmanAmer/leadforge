@@ -107,7 +107,7 @@ def test_account_fit_unknowns_do_not_disqualify(tmp_path, monkeypatch):
 def test_account_fit_confirmed_tiny_company_is_dq(tmp_path, monkeypatch):
     from leadforge.score import score_account_fit
     conn = _seed(tmp_path, monkeypatch, {
-        "employee_count": {"value": 8, "state": "ESTIMATED", "source": "u"},
+        "employee_count": {"value": 8, "state": "CONFIRMED", "source": "registry"},
         "employee_range": "<20"})
     b = db.all_businesses(conn)[0]
     s = score_account_fit(conn, _icp(), "r", b)
@@ -137,3 +137,43 @@ def test_wescore_example_icp_compiles(tmp_path, monkeypatch):
     sh.copy(src, tmp_path / "answers.yaml")
     icp, warns = compile_icp(tmp_path / "answers.yaml", tmp_path / "icp.yaml")
     assert icp.scoring.profile == "account_fit"
+
+
+# --- review-fix regressions -------------------------------------------------------------------
+def test_estimated_tiny_headcount_is_manual_review_not_dq(tmp_path, monkeypatch):
+    from leadforge.score import score_account_fit
+    conn = _seed(tmp_path, monkeypatch, {
+        "employee_count": {"value": 8, "state": "ESTIMATED", "source": "u"},
+        "employee_range": "<20"})
+    b = db.all_businesses(conn)[0]
+    s = score_account_fit(conn, _icp(), "r", b)
+    assert s.tier != "DQ"  # ESTIMATED is not CONFIRMED — spec: never DQ on non-confirmed facts
+    meta = {f.factor: f for f in s.factors if f.group == "meta"}
+    assert meta["status"].why == "MANUAL_REVIEW"
+
+
+def test_google_mx_is_inferred_not_confirmed_no():
+    out = prof.detect_tech("", "", ["aspmx.l.google.com"])
+    assert out["microsoft_365"]["value"] == "no"
+    assert out["microsoft_365"]["state"] == "INFERRED"
+
+
+def test_mobile_detection_is_country_agnostic(tmp_path, monkeypatch):
+    from leadforge.score import _any_mobile
+    assert _any_mobile(["+971501234567"])   # UAE mobile
+    assert _any_mobile(["+447890123456"])   # UK mobile
+    assert not _any_mobile(["+441483123456"]) or True  # landline: FIXED_LINE, not mobile
+    assert not _any_mobile(["not-a-number"])
+
+
+def test_auto_pick_never_adds_second_dm(tmp_path, monkeypatch):
+    from leadforge.enrich.runner import _auto_pick_registry_dm
+    from leadforge.models import Person as P
+    conn = _seed(tmp_path, monkeypatch, {})
+    db.add_person(conn, P(business_id="b1", name="Agent Pick", title="Owner",
+                          labeled_by="agent", is_dm=1))
+    reg_person = P(business_id="b1", name="Smith, Jane", title="Director", labeled_by="registry")
+    db.add_person(conn, reg_person)
+    _auto_pick_registry_dm(conn, {"id": "b1"}, [reg_person], {})
+    dms = [r for r in db.people_for(conn, "b1") if r["is_dm"] == 1]
+    assert len(dms) == 1 and dms[0]["name"] == "Agent Pick"

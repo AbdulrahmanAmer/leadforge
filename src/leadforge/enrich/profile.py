@@ -50,7 +50,8 @@ def detect_tech(html_blob: str, text_blob: str, mx_hosts: list[str] | None) -> d
         if "outlook" in joined or "protection.outlook" in joined:
             out["microsoft_365"] = fact("yes", "CONFIRMED", "mx-records")
         elif "google" in joined or "aspmx" in joined:
-            out["microsoft_365"] = fact("no", "CONFIRMED", "mx-records (google workspace)")
+            # Google Workspace mail does NOT confirm absence of M365 (orgs run both) — inference only
+            out["microsoft_365"] = fact("no", "INFERRED", "mx-records (google workspace)")
     for name, pat in _CRM_FINGERPRINTS.items():
         if re.search(pat, html_blob, re.IGNORECASE):
             out["crm"] = fact("yes", "CONFIRMED", f"site-fingerprint:{name}") | {"name": name}
