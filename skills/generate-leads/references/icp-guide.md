@@ -67,3 +67,29 @@ labeling and their outreach).
   low_rating_high_volume]; dm: ["Practice Manager","Owner","Office Manager"].
 - **Commercial realtor → growing SMBs:** categories: ["coworking space","gym","daycare"]; soft: [hiring]; hard: [franchise_or_chain];
   dm: ["Owner","Founder","Managing Director"].
+
+## Scaling a campaign to 1,000+ leads
+
+One town × one category yields ~100–200 businesses at full depth. To reach 1,000 records, widen the plan
+rather than deepening one query:
+
+```yaml
+target:
+  categories: ["accounting firm", "bookkeeping service", "tax consultant"]   # 3–5 variants
+  geography:
+    country: GB
+    areas: ["Guildford", "Woking", "Farnham", "Godalming", "Camberley", "Basingstoke"]  # 6–10 towns
+caps: { max_leads: 1000, max_sites: 1200, max_tiles: 60 }
+```
+
+What to expect and set:
+- **Runtime**: discovery is the slow stage — each full-depth query visits every place page (~20–35 min per
+  query). 18 queries ≈ several hours. Run it and walk away: every query checkpoints, `--resume` continues
+  after any interruption, and a timeout salvages the listings already scraped.
+- **`discovery.timeout_min: 45`** in `leadforge.yaml` for full-depth runs (default 30 truncates the
+  biggest queries; salvage keeps what was scraped either way).
+- **Enrichment** of ~1,000 sites takes ~1–2 h at the default politeness settings. Do not lower
+  `politeness.delay_s` below 2.0 to go faster — slower is the compliant way to scale.
+- **DM labeling** arrives in batches of ≤60; expect ~15–20 batches for 1,000 leads. Label a batch whenever
+  one is ready (`dm export` → `dm apply`) — the pipeline waits at the DM gate, nothing is lost.
+- If runs get rate-limited (degraded queries pile up), pause and resume hours later; never work around it.
