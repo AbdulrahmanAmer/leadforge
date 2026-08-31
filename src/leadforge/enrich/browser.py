@@ -18,11 +18,15 @@
 
 from __future__ import annotations
 
+import threading
 from urllib.parse import urlsplit
 
 from leadforge.util import LOG, EnvError
 
 MAX_RENDERED_PAGES_PER_SITE = 3
+# at most 2 concurrent Chromium instances regardless of politeness.workers — renders are the
+# heavyweight exception, not the norm
+_RENDER_GATE = threading.Semaphore(2)
 
 
 def is_available() -> bool:
@@ -60,13 +64,20 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
         async def _run() -> str:
             async with AsyncWebCrawler(**kwargs) as crawler:
                 res = await crawler.arun(url=url, page_timeout=int(cfg.crawl.timeout_s * 1000))
+                # a failed/4xx+ render is not contact data: without this gate, a parked-domain or
+                # 404 page became ok=True and its registrar/ad phone entered the call sheet
+                status = getattr(res, "status_code", None)
+                if getattr(res, "success", True) is False or (isinstance(status, int) and status >= 400):
+                    LOG.info("render rejected %s: success=%s status=%s", url, getattr(res, "success", None), status)
+                    return ""
                 html = getattr(res, "html", "") or ""
                 if html:
                     return html
                 md = getattr(res, "markdown", "") or ""
                 return _md_to_html(str(md))
 
-        return asyncio.run(_run())
+        with _RENDER_GATE:
+            return asyncio.run(_run())
     except Exception as e:  # noqa: BLE001 — a render failure never kills the run
         LOG.warning("render failed %s: %s", url, type(e).__name__)
         return ""

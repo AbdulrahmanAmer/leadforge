@@ -15,9 +15,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     robots = b""
     page_status = 200  # non-robots paths: set 403 to fake a WAF block
 
+    robots_status = 200
+
     def do_GET(self):  # noqa: N802 — http.server API
         type(self).requests.append(self.path)
         if self.path == "/robots.txt":
+            if type(self).robots_status != 200:
+                self.send_response(type(self).robots_status)
+                self.end_headers()
+                return
             body = self.robots
         elif self.path.endswith(".xml"):
             self.send_response(404)
@@ -46,6 +52,7 @@ def server():
         robots = b""
         home_html = _Handler.home_html
         page_status = 200
+        robots_status = 200
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -111,6 +118,35 @@ def test_crawl_of_blocked_home_flags_browser(tmp_path, monkeypatch, server):
         crawler.close()
     assert res.ok is False
     assert res.needs_browser is True
+
+
+def test_crawl_of_dead_home_does_not_flag_browser(tmp_path, monkeypatch, server):
+    """404/timeouts/PDFs gain nothing from Chromium — only block-shaped statuses escalate."""
+    base, handler = server
+    handler.page_status = 404
+    cfg, crawler = _crawler(tmp_path, monkeypatch)
+    try:
+        res = crawler.crawl(base)
+    finally:
+        crawler.close()
+    assert res.ok is False
+    assert res.needs_browser is False
+    assert "404" in res.error
+
+
+def test_unreachable_robots_is_treated_as_disallow(tmp_path, monkeypatch, server):
+    """RFC 9309 §2.3.1.4: a 5xx robots.txt means assume complete disallow — and a site whose
+    robots policy was never readable must not be browser-rendered either."""
+    base, handler = server
+    handler.robots_status = 503
+    cfg, crawler = _crawler(tmp_path, monkeypatch)
+    try:
+        res = crawler.crawl(base)
+    finally:
+        crawler.close()
+    assert res.ok is False and res.error == "robots-disallowed"
+    assert res.needs_browser is False
+    assert all(p == "/robots.txt" for p in handler.requests)
 
 
 def test_pages_per_site_cap(tmp_path, monkeypatch, server):

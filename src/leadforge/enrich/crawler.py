@@ -65,9 +65,15 @@ class SiteCrawler:
         try:
             self.throttle.wait(host)
             resp = self.client.get(urljoin(base, "/robots.txt"))
-            rp.parse(resp.text.splitlines() if resp.status_code == 200 else [])
+            if resp.status_code == 200:
+                rp.parse(resp.text.splitlines())
+            elif resp.status_code >= 500:
+                # RFC 9309 §2.3.1.4: an UNREACHABLE robots.txt means assume complete disallow
+                rp.parse(["User-agent: *", "Disallow: /"])
+            else:
+                rp.parse([])  # 4xx = 'unavailable' -> no robots published -> allow
         except httpx.HTTPError:
-            rp.parse([])  # unreachable robots -> default allow, stay polite regardless
+            rp.parse(["User-agent: *", "Disallow: /"])  # transport failure = unreachable = disallow
         self._robots[host] = rp
         return rp
 
@@ -76,21 +82,30 @@ class SiteCrawler:
         return rp.can_fetch(self.cfg.politeness.user_agent, url) and rp.can_fetch("*", url)
 
     # --- fetch -------------------------------------------------------------------
+    # A None from _get has four distinct causes; last_failure records which, so crawl() can
+    # decide whether a real browser could plausibly do better (only for block-shaped statuses).
+    _BLOCK_STATUSES = {401, 403, 405, 406, 429, 503}
+
     def _get(self, url: str) -> httpx.Response | None:
+        self.last_failure: str | None = None
         if not self._allowed(url):
             LOG.info("robots disallow: %s", url)
+            self.last_failure = "robots"
             return None
         self.throttle.wait(urlsplit(url).netloc)
         try:
             resp = self.client.get(url)
             if resp.status_code >= 400:
+                self.last_failure = f"status:{resp.status_code}"
                 return None
             ctype = resp.headers.get("content-type", "")
             if "html" not in ctype and "text" not in ctype:
+                self.last_failure = "non-html"
                 return None
             return resp
         except httpx.HTTPError as e:
             LOG.debug("fetch failed %s: %s", url, type(e).__name__)
+            self.last_failure = f"transport:{type(e).__name__}"
             return None
 
     # --- text extraction ---------------------------------------------------------
@@ -152,10 +167,13 @@ class SiteCrawler:
             return result
         resp = self._get(website)
         if resp is None:
-            # blocked/403/unreachable to a plain HTTP client — a real browser may still be served,
-            # exactly like a person opening the site; flag it for the browser escalation pass
-            result.error = "unreachable to http client"
-            result.needs_browser = True
+            cause = getattr(self, "last_failure", None) or "unknown"
+            result.error = f"home unreachable ({cause})"
+            # Only a block-shaped refusal (WAF/bot wall) earns the rendered-browser retry — a
+            # person's browser might still be served. Dead DNS, 404s, PDFs and timeouts get
+            # nothing from Chromium and would just burn minutes per site.
+            status = int(cause.split(":", 1)[1]) if cause.startswith("status:") else None
+            result.needs_browser = status in self._BLOCK_STATUSES
             return result
         home_html = resp.text[: self.cfg.crawl.max_text_bytes]
         home_text = self.extract_text(home_html)
@@ -173,15 +191,23 @@ class SiteCrawler:
             html = sub.text[: self.cfg.crawl.max_text_bytes]
             result.pages.append(Page(str(sub.url), html, self.extract_text(html)))
 
-        blob = "\n".join(p.html for p in result.pages)
+        result.signals.update(self.compute_signals(result.pages, self.cfg.crawl.stale_after_years))
+        result.ok = True
+        return result
+
+    @staticmethod
+    def compute_signals(pages: list[Page], stale_after_years: int) -> dict:
+        """Content-derived signals; shared by the static path and the rendered-browser fallback,
+        so a rescued site scores on the same evidence as a normally crawled one."""
+        blob = "\n".join(p.html for p in pages)
+        signals: dict = {}
         years = [int(y) for y in re.findall(r"(?:©|&copy;|copyright)\D{0,20}(20\d{2})", blob, re.IGNORECASE)]
         if years:
             latest = max(years)
-            result.signals["copyright_year"] = latest
-            result.signals["stale_site"] = latest < _CURRENT_YEAR - self.cfg.crawl.stale_after_years
-        result.signals["careers"] = any(re.search(r"/(careers?|jobs?)\b", p.url) for p in result.pages)
-        result.signals["booking_hint"] = bool(
+            signals["copyright_year"] = latest
+            signals["stale_site"] = latest < _CURRENT_YEAR - stale_after_years
+        signals["careers"] = any(re.search(r"/(careers?|jobs?)\b", p.url) for p in pages)
+        signals["booking_hint"] = bool(
             re.search(r"(book (now|online)|schedule (an )?appointment|calendly|acuity|squarespace-scheduling)", blob, re.IGNORECASE)
         )
-        result.ok = True
-        return result
+        return signals

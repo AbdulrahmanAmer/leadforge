@@ -197,10 +197,14 @@ def upsert_business(conn: sqlite3.Connection, biz: Business) -> tuple[str, bool]
     return existing["id"], False
 
 
-def businesses_for_enrich(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+def businesses_for_enrich(conn: sqlite3.Connection, limit: int,
+                          retry_needs_browser: bool = False) -> list[sqlite3.Row]:
+    """Uncrawled sites; with retry_needs_browser (browser extra now available), also the sites an
+    earlier pass marked needs_browser — otherwise 'pip install .[browser] and re-run' is a no-op."""
+    browser_clause = " OR json_extract(enrich_json,'$.needs_browser') = 1" if retry_needs_browser else ""
     return conn.execute(
-        """SELECT * FROM businesses WHERE domain IS NOT NULL
-           AND json_extract(enrich_json,'$.crawled_at') IS NULL
+        f"""SELECT * FROM businesses WHERE domain IS NOT NULL
+           AND (json_extract(enrich_json,'$.crawled_at') IS NULL{browser_clause})
            AND domain NOT IN (SELECT value FROM suppression WHERE kind='domain')
            ORDER BY (category IS NULL), review_count DESC LIMIT ?""",
         (limit,),

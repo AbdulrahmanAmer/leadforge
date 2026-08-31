@@ -56,3 +56,13 @@ def test_run_lifecycle(conn):
     assert row["stage"] == "discovering"
     import json
     assert json.loads(row["stats_json"])["businesses"] == 5
+
+
+def test_needs_browser_sites_requeue_only_when_browser_available(conn):
+    """v0.1.4: a needs_browser site was permanently marked crawled — installing the [browser]
+    extra and re-running enrich (the digest's own advice) silently skipped it."""
+    db.upsert_business(conn, _biz(website="https://blocked.example", domain="blocked.example"))
+    db.update_enrich(conn, "biz_1", {"crawled_at": "2026-08-31T00:00:00Z", "needs_browser": True})
+    assert db.businesses_for_enrich(conn, 10) == []                              # no extra: skip
+    retry = db.businesses_for_enrich(conn, 10, retry_needs_browser=True)         # extra: retry
+    assert [r["id"] for r in retry] == ["biz_1"]

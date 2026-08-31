@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from leadforge import db
 from leadforge.config import Config
 from leadforge.enrich import browser
-from leadforge.enrich.crawler import SiteCrawler
+from leadforge.enrich.crawler import Page, SiteCrawler
 from leadforge.enrich.extract import (
     extract_emails,
     extract_people,
@@ -40,14 +40,17 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
     try:
         res = crawler.crawl(b["website"])
         out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
-               "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok, "pages": len(res.pages)}
+               "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok,
+               "pages": len(res.pages), "error": res.error}
         if not res.ok:
             # site refused the plain HTTP client: try a real browser (same as a person opening it);
             # robots-disallowed sites never reach here (needs_browser stays False for those)
             if res.needs_browser and browser.is_available():
                 rendered = browser.fetch_rendered(b["website"], cfg, throttle)
                 if rendered:
+                    rendered = rendered[: cfg.crawl.max_text_bytes]  # same bound as the static path
                     text = SiteCrawler.extract_text(rendered)
+                    page = Page(b["website"], rendered, text)
                     region = _region_for_business(b, cfg.default_region)
                     people_fn = extract_people_ner if ner_available() else extract_people
                     for email, label in extract_emails(rendered, text).items():
@@ -59,8 +62,17 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                         out["socials"].setdefault(net, url)
                     for cand in people_fn(text, b["website"]):
                         out["people"].append(cand)
+                    # a rescued site scores on the same evidence as a crawled one: signals + profile
+                    # (without these, phone_only_booking mis-fired and WE SCORE columns came out empty)
+                    out["signals"].update(SiteCrawler.compute_signals([page], cfg.crawl.stale_after_years))
+                    from leadforge.enrich.profile import build_profile
+                    try:
+                        out["profile"] = build_profile([page], b["domain"], b["category"])
+                    except Exception as e:  # noqa: BLE001 — profiling is additive, never blocks
+                        LOG.warning("profile build failed for %s: %s", b["id"], type(e).__name__)
                     out["ok"] = True
                     out["needs_browser"] = False
+                    out["error"] = ""
                     out["signals"]["rendered"] = True
                     out["signals"]["http_blocked"] = True
                     out["pages"] = 1
@@ -133,8 +145,8 @@ def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
            WHERE json_extract(b.enrich_json,'$.registry_checked') IS NULL
              AND NOT EXISTS (SELECT 1 FROM people p WHERE p.business_id=b.id AND p.labeled_by='registry')"""
     ).fetchall()
+    emit_progress("registry", 0, len(rows), "starting")
     for bi, b in enumerate(rows):
-        emit_progress("registry", bi + 1, len(rows), b["name"] or "")
         country = (b["address_country"] or "").strip().upper()
         for reg in registries:
             if country not in reg.jurisdictions():
@@ -160,15 +172,18 @@ def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
                 LOG.warning("registry %s disabled mid-stage (rate limit); stopping stage", reg.name)
                 conn.commit()
                 return
+        emit_progress("registry", bi + 1, len(rows), b["name"] or "")  # after the lookup, not before
     conn.commit()
 
 
 def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict) -> None:
-    queue = db.businesses_for_enrich(conn, limit)
+    browser_ok = browser.is_available()
+    # with the browser extra present, sites an earlier pass flagged needs_browser get their retry —
+    # otherwise the digest's 'pip install .[browser]' advice was a silent no-op on re-run
+    queue = db.businesses_for_enrich(conn, limit, retry_needs_browser=browser_ok)
     if not queue:
         return
     throttle = HostThrottle(cfg.politeness.delay_s)
-    browser_ok = browser.is_available()
     from leadforge.providers.registry import get_registries
     registries = get_registries(cfg)  # once per run so a 429 disable sticks for the whole batch
     from leadforge.providers import social
@@ -196,7 +211,8 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
 
 def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
              registries: list | None = None, social_ok: bool = False) -> None:
-    counts["sites_crawled"] += 1
+    if res["ok"]:  # a 0-page failure is not a crawled site — the digest count stays honest
+        counts["sites_crawled"] += 1
     bid = b["id"]
     from leadforge.enrich.extract import email_matches_business
     for email, meta in res["emails"].items():
@@ -236,6 +252,8 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
     enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
               "pages": res["pages"], "needs_browser": res["needs_browser"],
               "registry_checked": bool(registries)}
+    if res.get("error"):
+        enrich["error"] = res["error"]  # WHY the crawl failed (robots-disallowed / unreachable cause)
     if res.get("profile"):
         enrich["profile"] = res["profile"]
     if social_presence:
@@ -292,7 +310,8 @@ def _auto_pick_registry_dm(conn: sqlite3.Connection, b, registry_people: list[Pe
 
 def _validate_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
     rows = conn.execute("SELECT * FROM contacts WHERE kind='email' AND tier IN ('unknown','')").fetchall()
-    for c in rows:
+    for ci, c in enumerate(rows):
+        emit_progress("validate", ci + 1, len(rows), c["value"])  # a 700-email DNS tail is minutes
         tier, vmeta = validate_email(c["value"], c["label"], cfg)
         conn.execute("UPDATE contacts SET tier=?, verified_at=?, meta_json=? WHERE id=?",
                      (tier, now_iso(), _json(vmeta), c["id"]))
