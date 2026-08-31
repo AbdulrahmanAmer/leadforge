@@ -283,7 +283,10 @@ def save_score(conn: sqlite3.Connection, s: Score) -> None:
 def scores_for_run(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
     return conn.execute(
         """SELECT s.*, b.* FROM scores s JOIN businesses b ON b.id=s.business_id
-           WHERE s.run_id=? ORDER BY s.total DESC""",
+           WHERE s.run_id=?
+             AND (b.domain IS NULL OR b.domain NOT IN (SELECT value FROM suppression))
+             AND (b.place_id IS NULL OR b.place_id NOT IN (SELECT value FROM suppression))
+           ORDER BY s.total DESC""",
         (run_id,),
     ).fetchall()
 

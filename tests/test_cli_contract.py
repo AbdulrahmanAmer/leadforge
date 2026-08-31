@@ -78,3 +78,86 @@ def test_plan_digest(tmp_path):
     _run(["--json", "intake", "--answers", "answers.yaml"], tmp_path)
     d = _digest(_run(["--json", "plan", "--icp", "icp.yaml"], tmp_path).stdout)
     assert d["cmd"] == "plan" and d["counts"]["queries"] >= 1
+
+
+# --- U8.1: every command emits exactly one valid LF_DIGEST line (in-process, offline) --------
+import pytest  # noqa: E402
+from typer.testing import CliRunner  # noqa: E402
+
+from leadforge.cli import app  # noqa: E402
+from leadforge.models import RawListing  # noqa: E402
+from leadforge.util import now_iso  # noqa: E402
+
+REQUIRED_KEYS = {"ok", "cmd", "run", "counts", "warnings", "artifacts", "next"}
+
+
+@pytest.fixture
+def offline(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda cfg: None)
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.available", lambda self: (True, "mock"))
+    monkeypatch.setattr("leadforge.providers.gosom.GosomProvider.fetch", lambda self, q, limit=None: [
+        RawListing(provider="gosom", fetched_at=now_iso(), data={
+            "title": "Gamma Garage", "address": "3 C St, Houston, TX 77003", "phone": "713-555-0300",
+            "web_site": "http://gamma-garage.test", "review_rating": "4.1", "review_count": "15",
+            "place_id": "PID_GAMMA"})])
+    from leadforge.enrich.crawler import CrawlResult, Page, SiteCrawler
+    monkeypatch.setattr(SiteCrawler, "crawl", lambda self, website: CrawlResult(
+        ok=True, pages=[Page(website, "<html><body>Owner Gail Gamma. "
+                                      "<a href='mailto:gail@gamma-garage.test'>mail</a></body></html>",
+                             "Owner Gail Gamma. gail@gamma-garage.test")],
+        signals={"https": True}))
+    monkeypatch.setattr("leadforge.enrich.runner.validate_email", lambda e, lab, cfg: ("valid", {}))
+    (tmp_path / "answers.yaml").write_text(
+        "campaign: t\noffer:\n  what: Web redesign\n"
+        "target:\n  categories: [auto repair shop]\n"
+        "  geography:\n    country: US\n    areas: ['Houston, TX']\n", encoding="utf-8")
+    return CliRunner()
+
+
+def _invoke_digest(runner, args):
+    res = runner.invoke(app, ["--json", *args])
+    assert res.exit_code == 0, f"{args} exited {res.exit_code}: {res.output[-500:]}"
+    lines = [ln for ln in res.output.splitlines() if ln.startswith("LF_DIGEST ")]
+    assert len(lines) == 1, f"{args}: expected exactly one digest line, got {len(lines)}"
+    d = json.loads(lines[0][len("LF_DIGEST "):])
+    assert REQUIRED_KEYS <= set(d), f"{args}: digest missing {REQUIRED_KEYS - set(d)}"
+    return d
+
+
+def test_every_command_digest_contract(offline):
+    runner = offline
+    assert _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])["cmd"] == "intake"
+    assert _invoke_digest(runner, ["plan", "--icp", "icp.yaml"])["cmd"] == "plan"
+    assert _invoke_digest(runner, ["discover", "--icp", "icp.yaml", "--limit", "5"])["cmd"] == "discover"
+    assert _invoke_digest(runner, ["enrich", "--limit", "5"])["cmd"] == "enrich"
+    assert _invoke_digest(runner, ["dm", "export", "--max", "5"])["cmd"] == "dm export"
+    d = _invoke_digest(runner, ["score", "--icp", "icp.yaml"])
+    assert d["cmd"] == "score"
+    assert _invoke_digest(runner, ["export", "--icp", "icp.yaml"])["cmd"] == "export"
+    assert _invoke_digest(runner, ["status"])["cmd"] == "status"
+    assert _invoke_digest(runner, ["suppress", "add", "domain:spam.test"])["cmd"] == "suppress"
+    assert _invoke_digest(runner, ["suppress", "list"])["cmd"] == "suppress"
+
+
+def test_run_command_digest_contract(offline):
+    runner = offline
+    _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
+    d = _invoke_digest(runner, ["run", "--icp", "icp.yaml", "--limit", "5"])
+    assert d["cmd"] == "run" and d["run"]
+
+
+def test_dm_apply_digest_contract(offline, tmp_path):
+    runner = offline
+    _invoke_digest(runner, ["intake", "--answers", "answers.yaml"])
+    _invoke_digest(runner, ["run", "--icp", "icp.yaml", "--limit", "5"])
+    from leadforge import db
+    from leadforge.config import load_config
+    conn = db.connect(load_config(tmp_path).db_path)
+    pending = db.dm_pending(conn, 5)
+    conn.close()
+    if pending:
+        (tmp_path / "dm_labels.ndjson").write_text(
+            json.dumps({"biz": pending[0]["id"], "pick": 0, "confidence": 0.9}) + "\n", encoding="utf-8")
+        d = _invoke_digest(runner, ["dm", "apply", "--in", "dm_labels.ndjson"])
+        assert d["cmd"] == "dm apply"

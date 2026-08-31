@@ -36,6 +36,12 @@ NAME_STOPWORDS = {
     "our team", "the team", "contact us", "about us", "read more", "learn more", "get in", "call us",
     "monday friday", "customer service", "quality service", "family owned",
 }
+# Single tokens that never appear in a real person's name — kills "And The Team", "Best Prices ..."
+NAME_WORD_STOPLIST = {
+    "and", "the", "our", "your", "best", "prices", "price", "guaranteed", "team", "quality",
+    "service", "services", "meet", "welcome", "about", "contact", "call", "today", "free",
+    "estimate", "estimates", "shop", "auto", "repair", "hours", "open", "book", "now",
+}
 
 
 @dataclass
@@ -130,6 +136,7 @@ def _first_name(zone: str, prefer_end: bool) -> tuple[str, int] | None:
         if m.group(1).casefold() not in NAME_STOPWORDS
         and len(m.group(1).split()) >= 2
         and not TITLE_RE.search(m.group(1))  # never let a title phrase pose as a name
+        and not any(w.casefold() in NAME_WORD_STOPLIST for w in m.group(1).split())
     ]
     if not matches:
         return None

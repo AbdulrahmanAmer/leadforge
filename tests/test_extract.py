@@ -73,3 +73,38 @@ def test_gliner_path_matches_heuristic_quality():
 def test_ner_available_is_bool():
     from leadforge.enrich.extract import ner_available
     assert ner_available() in (True, False)
+
+
+# --- U8.1 extractor edge cases ---------------------------------------------------------------
+def test_html_entity_encoded_email():
+    from leadforge.enrich.extract import extract_emails
+    html = "<p>Write to &#109;ail&#64;x.com for info</p>"
+    text = "Write to mail@x.com for info"
+    out = extract_emails(html, text)
+    assert "mail@x.com" in out
+
+
+def test_two_cfemail_spans_on_one_page():
+    from leadforge.enrich.extract import decode_cfemail, extract_emails
+    # cfemail encoding: first byte is the XOR key
+    def enc(addr, key=0x42):
+        return f"{key:02x}" + "".join(f"{ord(c) ^ key:02x}" for c in addr)
+    a, b = enc("one@shop.test"), enc("two@shop.test")
+    assert decode_cfemail(a) == "one@shop.test"
+    html = (f'<span class="__cf_email__" data-cfemail="{a}"></span>'
+            f'<span class="__cf_email__" data-cfemail="{b}"></span>')
+    out = extract_emails(html, "")
+    assert "one@shop.test" in out and "two@shop.test" in out
+
+
+def test_uk_phone_with_gb_region():
+    from leadforge.enrich.extract import extract_phones
+    text = "Call us on 020 7946 0958 today"
+    out = extract_phones("", text, "GB")
+    assert any(p.startswith("+44") for p in out)
+
+
+def test_stopword_name_yields_no_candidate():
+    from leadforge.enrich.extract import extract_people
+    text = "Our Owner And The Team are here to help."
+    assert extract_people(text, "http://x") == []
