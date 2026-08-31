@@ -1,6 +1,6 @@
 {
   "name": "leadforge",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Open-source B2B lead generation engine: OSS Google Maps scraping, polite website deep-crawl for contacts and decision makers, ICP scoring, XLSX/CSV export. Heavy lifting in a Python CLI; the agent reads one-line digests and labels decision makers from snippets.",
   "skills": "./skills/",
   "interface": {

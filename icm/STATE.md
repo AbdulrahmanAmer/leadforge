@@ -1,6 +1,6 @@
 # Build State Tracker
 
-Single source of truth for what's done vs left. Current baseline (v0.1.1, 2026-08-31): **121 passed, 0 skipped locally with all extras (1 browser-render skip without them)**, ruff clean.
+Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-08-31): **134 passed, 0 failed locally with all extras**, ruff clean.
 
 ## Stage gates
 
@@ -70,3 +70,22 @@ Single source of truth for what's done vs left. Current baseline (v0.1.1, 2026-0
   + version-consistency job; doctor extras probe fixed (child interpreter)
 - Deferred to v0.2: serve mode, grid tiling verification, real FB/IG probes, fallback_rest docker proof,
   claude plugin validate in CI, TSV dm format reconciliation (NDJSON canonical)
+
+## v0.1.2 / v0.1.3 (2026-08-31 — shipped as commits, never tagged; see CHANGELOG retro entries)
+- Call-ready sheets (registry covers site-less businesses, CH profile columns, Call Readiness),
+  max_leads counts unique leads, LF_PROGRESS heartbeat + progress bar v2, `leadforge watch`,
+  zero-blank-cell rule, sheet auto-open, headed browser debug mode.
+- LESSON: all five version strings stayed at 0.1.1 through both — the CI versions job only checked
+  they agreed with each other. v0.1.4 anchors the job to the pushed tag.
+
+## v0.1.4 (2026-08-31, this session)
+- Browser fallback for HTTP-blocked sites (403 to httpx -> rendered browser retry; robots-disallowed
+  never escalates; watched-fail verified).
+- Honest coverage stats: Summary/report.json count only real DM/email values, never zero-blank-cell
+  placeholders (live 709-run had reported with_dm=709 with 330 placeholder cells).
+- Registry DM names naturalized: 'SURNAME, Given Names' -> 'Given Names Surname' at ingestion and
+  at export (heals existing DBs on re-export).
+- CI: `claude plugin validate` job added (deferred item closed); version job tag-anchored.
+- Live-run ops note (2026-08-31): the "leaked gosom" after the 709-lead autorepair run was NOT a
+  watchdog failure — an idle no-args gosom web-UI instance had been double-clicked in Explorer
+  (parent explorer.exe, 0.6s CPU). Watchdog behaved correctly all run.

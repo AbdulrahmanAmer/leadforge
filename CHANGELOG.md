@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.1.4] — 2026-08-31
+
+### Added
+- **Browser fallback for HTTP-blocked sites**: a site that 403s/refuses the plain HTTP client is
+  retried with a real rendered browser (same as a person opening it) before enrichment gives up;
+  robots-disallowed sites never escalate. New signals: `rendered`, `http_blocked`.
+- CI: `claude plugin validate` job (closes the v0.1.1 deferred item); the version-consistency job
+  now anchors against the pushed release tag, so five stale-but-agreeing strings can't ship again
+  (exactly how 0.1.2/0.1.3 went out self-reporting 0.1.1).
+
+### Fixed
+- **Coverage stats counted placeholders as data**: the live 709-lead run reported `with_dm=709` /
+  `with_email=709` while 330 DM cells and 541 email cells held zero-blank-cell placeholder text.
+  Summary sheet + report.json now count only real values; the sheet itself keeps every cell resolved.
+- **Registry DM names were reversed**: Companies House/OpenCorporates list officers as
+  "SURNAME, Given Names" and sheets showed "Murphy, Sean Vincent". `natural_name()` flips
+  person-shaped comma names at ingestion (new runs) and at export (re-exports of existing DBs heal
+  too); corporate commas ("Acme Widgets, Inc") and two-comma names pass through untouched.
+- Version identity drift: pyproject/__init__/both plugin manifests/skill frontmatter all said 0.1.1
+  while v0.1.3 code shipped; all five now read 0.1.4.
+
+## [0.1.3] — 2026-08-31 (retro entry — commits 4c87029/fa4db04/7b0b2d2 were never tagged)
+- Progress heartbeat: `LF_PROGRESS` JSON lines for agents + live single-line stderr bar (%, ETA,
+  stage history) across discover/enrich/registry; machine lines only when piped.
+- `leadforge watch` + auto progress window for headless runs; sheet auto-open after export;
+  headed-browser debug mode (no stealth flags).
+- Zero-blank-cell export rule: every cell resolved with the reason it would have been blank.
+
+## [0.1.2] — 2026-08-31 (retro entry — commits cdbb1d8/051ad0a were never tagged)
+- Call-ready sheets: registry stage covers site-less businesses; Companies House profile columns
+  (number / incorporation / status / SIC codes), opening hours, Call Readiness column.
+- fix(discover): `caps.max_leads` counts unique leads, not raw listings — cross-category duplicates
+  no longer consume the cap (the live 1000-cap run had stopped at 709).
+
 ## [0.1.1] — 2026-08-31
 
 ### Added
