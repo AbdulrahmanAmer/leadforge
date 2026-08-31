@@ -98,10 +98,19 @@ def extract_emails(html: str, text: str) -> dict[str, str]:
         _add(m)
     for m in AT_DOT_RE.finditer(text):
         _add(f"{m.group(1)}@{m.group(2)}.{m.group(3)}")
-    # Drop an html-only email when a longer address ends with it (truncation artifact); a trusted
-    # source (mailto/text/...) proves it's a real distinct address (e.g. ann@x.com vs joann@x.com).
-    return {e: lab for e, lab in found.items()
-            if e in trusted or not any(o != e and o.endswith(e) for o in found)}
+    # Truncation artifacts: drop an email when a longer address ends with it AND either (a) the short
+    # one was seen only in raw markup, or (b) the longer one is a role address ("info@" -> "nfo@" can
+    # surface in extracted text too). A trusted distinct pair like ann@/joann@ (both personal) survives.
+    def _artifact(e: str) -> bool:
+        for o in found:
+            if o != e and o.endswith(e):
+                if e not in trusted:
+                    return True
+                if o.split("@", 1)[0] in ROLE_LOCALPARTS:
+                    return True
+        return False
+
+    return {e: lab for e, lab in found.items() if not _artifact(e)}
 
 
 FREEMAIL_DOMAINS = {

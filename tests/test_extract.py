@@ -158,3 +158,11 @@ def test_distinct_suffix_email_from_text_is_kept():
     # ann@ is a real, distinct address (appears in page text) even though joann@ ends with it
     out = extract_emails("<p>joann@x.com</p>", "contact ann@x.com or joann@x.com")
     assert "ann@x.com" in out and "joann@x.com" in out
+
+
+def test_role_email_truncation_in_text_is_dropped():
+    from leadforge.enrich.extract import extract_emails
+    # "nfo@" leaked into the extracted text too — the longer role address proves it's an artifact
+    out = extract_emails("<p>info@cmbpartners.co.uk</p>", "nfo@cmbpartners.co.uk info@cmbpartners.co.uk")
+    assert "info@cmbpartners.co.uk" in out
+    assert "nfo@cmbpartners.co.uk" not in out
