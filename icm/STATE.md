@@ -35,12 +35,20 @@ scaffolding session on 2026-08-31: **45 passed, 1 xfailed**, ruff clean.
 - [x] **U4.7** GLiNER DM upgrade — hook + selection rule + tests (skip cleanly without [ner])
 - [x] **U4.8** Social/video presence — implemented (youtube via yt-dlp; others honest 'unknown'), linkedin-exclusion tested
 - [x] **U8.1** Finish test suite — 89 tests: politeness (real server), suppression e2e, digest contract per command, extractor edges
-- [ ] **U8.2** Live E2E validation (needs network + binary) — `icm/stages/stage-8-hardening.md`
-- [ ] **U8.3** CI verify/extend — `.github/workflows/ci.yml` — `icm/stages/stage-8-hardening.md`
-- [ ] **U8.4** Guardrails audit — `icm/stages/stage-8-hardening.md`
+- [x] **U8.2** Live E2E validation — real UK campaign (accounting firms, Guildford): 15/15 businesses with
+      phone-or-website, 0 dup place_id, DM loop round-tripped (5 applied, 5 rejected), XLSX/CSV exported;
+      real fixture committed. NO field drift in GOSOM_FIELD_MAP. Excel/LibreOffice VISUAL check UNPROVEN
+      (operator: open `D:\GainLev\LeadForge\campaign-uk-test\leadforge_data\exports\run_20260831_03433_8ad5\`)
+- [x] **U8.3** CI verified locally (matrix/lint/test/manifests all present); green GH Actions run UNPROVEN until first push
+- [x] **U8.4** Guardrails audit — all 10 items pass (max_leads hard stop + export suppression filter were fixed to pass)
 - [ ] **U8.5** Tag v0.1.0 + verify install matrix + push — `icm/stages/stage-8-hardening.md`
 
 ## Notes / decisions log (append as you go)
+- 2026-08-31 U8.2: gosom full-depth run on 1 query took >30m (visits every place page) — added depth=1 cap
+  for --limit ≤20 smoke runs and partial-NDJSON salvage on timeout (both tested).
+- 2026-08-31 U8.2 known quality item: email regex can extract junk like `str@egy.in` from page text that
+  passes syntax+MX; consider a domain-vs-business-site affinity check later. Also gosom sometimes lists a
+  different site than the business name suggests (listing data, not our bug).
 - 2026-08-31 scaffold: gosom FIELD_MAP derived from README, NOT a live run — verify at U8.2 (expect drift).
 - 2026-08-31 finalize: this machine's VPN DNS (10.255.255.x) drops MX queries — added `get_resolver()`
   fallback (system → 8.8.8.8/1.1.1.1, probed once per process) in `enrich/validate.py`, used by doctor too.
