@@ -69,19 +69,122 @@ CONFIG (add to config.py + leadforge.example.yaml, all defaults OFF/conservative
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+
+from leadforge.util import LOG
+
 EXCLUDED_NETWORKS = frozenset({"linkedin"})  # boundary 1 — enforced, not advisory
 
 
+class _RateLimiter:
+    def __init__(self, per_min: int):
+        self.per_min = per_min
+        self._stamps: list[float] = []
+        self._lock = threading.Lock()
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            self._stamps = [t for t in self._stamps if now - t < 60.0]
+            if len(self._stamps) >= self.per_min:
+                time.sleep(max(0.0, 60.0 - (now - self._stamps[0])))
+            self._stamps.append(time.monotonic())
+
+
+_LIMITER: _RateLimiter | None = None
+
+
+def _limiter(cfg) -> _RateLimiter:
+    global _LIMITER
+    if _LIMITER is None:
+        _LIMITER = _RateLimiter(cfg.social.max_calls_per_min)
+    return _LIMITER
+
+
 def is_available(cfg) -> tuple[bool, str]:
-    return False, "U4.8 not implemented yet — see module docstring spec"
+    """Enabled only when cfg.social.enabled AND the agent-reach CLI answers its doctor probe."""
+    if not cfg.social.enabled:
+        return False, "social presence disabled (social.enabled: false)"
+    exe = shutil.which("agent-reach")
+    if not exe:
+        return False, "agent-reach CLI not installed (pip install agent-reach)"
+    try:
+        proc = subprocess.run([exe, "doctor", "--json"], capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=20, shell=False)
+        report = json.loads(proc.stdout or "{}")
+        ok = [k for k, v in report.items() if isinstance(v, dict) and v.get("status") == "ok"]
+        if ok:
+            return True, f"agent-reach backends ok: {', '.join(sorted(ok))}"
+        return False, "agent-reach installed but no backend reports ok (run: agent-reach doctor)"
+    except Exception as e:  # noqa: BLE001 — availability probe must never raise
+        return False, f"agent-reach doctor failed: {type(e).__name__}"
+
+
+def _youtube_presence(url: str, timeout: float) -> dict:
+    """Channel metadata via yt-dlp (agent-reach's youtube backend). Public, logged-out, metadata only."""
+    exe = shutil.which("yt-dlp")
+    if not exe:
+        return {"url": url, "exists": True, "last_post_at": None, "followers": None, "status": "unknown"}
+    proc = subprocess.run(
+        [exe, "--dump-single-json", "--flat-playlist", "--playlist-items", "1", "--no-warnings", url],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=timeout, shell=False)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {"url": url, "exists": False, "last_post_at": None, "followers": None, "status": "error"}
+    data = json.loads(proc.stdout)
+    followers = data.get("channel_follower_count")
+    last = None
+    entries = data.get("entries") or []
+    if entries:
+        ts = entries[0].get("timestamp") or entries[0].get("release_timestamp")
+        if ts:
+            last = datetime.fromtimestamp(ts, tz=UTC).date().isoformat()
+        elif entries[0].get("upload_date"):
+            d = entries[0]["upload_date"]
+            last = f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    return {"url": url, "exists": True, "last_post_at": last, "followers": followers, "status": "ok"}
 
 
 def presence(social_links: dict[str, str], cfg) -> dict:
-    raise NotImplementedError("U4.8: implement per module docstring spec")
+    """{network: {url, exists, last_post_at, followers, status}} for the business's own linked profiles.
+
+    Logged-out public metadata only. Networks without a logged-out backend are recorded 'unknown' —
+    the link's existence is still a fact (the site publishes it).
+    """
+    out: dict[str, dict] = {}
+    links = filter_networks(social_links)
+    wanted = [n for n in cfg.social.networks if n in links][: cfg.social.max_networks]
+    for net in wanted:
+        url = links[net]
+        try:
+            _limiter(cfg).wait()
+            if net == "youtube":
+                out[net] = _youtube_presence(url, cfg.social.timeout_s)
+            else:
+                out[net] = {"url": url, "exists": True, "last_post_at": None,
+                            "followers": None, "status": "unknown"}
+        except Exception as e:  # noqa: BLE001 — never blocks the run
+            LOG.warning("social presence failed for %s: %s", net, type(e).__name__)
+            out[net] = {"url": url, "exists": False, "last_post_at": None, "followers": None, "status": "error"}
+    return out
 
 
 def to_signals(presence_map: dict, cfg) -> list[str]:
-    raise NotImplementedError("U4.8: implement per module docstring spec")
+    signals: list[str] = []
+    if not presence_map:
+        return ["no_social_presence"]
+    if "youtube" not in presence_map:
+        signals.append("no_video_presence")
+    dates = [p["last_post_at"] for p in presence_map.values() if p.get("last_post_at")]
+    if dates:
+        newest = max(datetime.fromisoformat(d).replace(tzinfo=UTC) for d in dates)
+        stale_cutoff = datetime.now(tz=UTC) - timedelta(days=30 * cfg.social.stale_months)
+        signals.append("stale_social" if newest < stale_cutoff else "active_social")
+    return signals
 
 
 def filter_networks(social_links: dict[str, str]) -> dict[str, str]:

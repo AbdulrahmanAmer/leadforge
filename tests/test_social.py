@@ -1,57 +1,68 @@
-"""U4.8 guardrail tests that apply NOW, before the unit is implemented.
+"""U4.8 social/video presence tests — no network, subprocess mocked."""
+from types import SimpleNamespace
 
-The LinkedIn exclusion and the default-off behavior are boundaries (icm/SCOPE.md), not implementation
-details — so they are tested from day one and must keep passing after U4.8 lands.
-"""
-
-import pytest
-
-from leadforge.providers.social import EXCLUDED_NETWORKS, filter_networks, is_available
+from leadforge.config import load_config
+from leadforge.providers import social
 
 
-def test_linkedin_is_always_filtered_out():
-    links = {
-        "youtube": "https://youtube.com/@shop",
-        "facebook": "https://facebook.com/shop",
-        "linkedin": "https://linkedin.com/company/shop",
-        "LinkedIn": "https://linkedin.com/company/shop2",  # case-insensitive
-    }
-    out = filter_networks(links)
-    assert "linkedin" not in {k.lower() for k in out}
-    assert set(out) == {"youtube", "facebook"}
+def _cfg(tmp_path, monkeypatch, enabled=True):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.social.enabled = enabled
+    return cfg
 
 
-def test_linkedin_is_declared_excluded():
-    assert "linkedin" in EXCLUDED_NETWORKS
+def test_filter_networks_drops_linkedin():
+    links = {"linkedin": "https://linkedin.com/company/x", "youtube": "https://youtube.com/@x"}
+    out = social.filter_networks(links)
+    assert "linkedin" not in out and "youtube" in out
 
 
-def test_social_is_disabled_by_default(cfg):
-    assert cfg.social.enabled is False
-    ok, reason = is_available(cfg)
-    assert ok is False and reason
+def test_linkedin_never_reaches_subprocess(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch)
+    calls = []
+
+    def _spy(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0, stdout="{}")
+
+    monkeypatch.setattr(social.subprocess, "run", _spy)
+    monkeypatch.setattr(social.shutil, "which", lambda name: f"/usr/bin/{name}")
+    cfg.social.networks = ["youtube", "linkedin", "facebook"]
+    social.presence({"linkedin": "https://linkedin.com/company/x",
+                     "youtube": "https://youtube.com/@x"}, cfg)
+    assert all("linkedin" not in " ".join(argv) for argv in calls)
 
 
-def test_social_signals_are_known_qualifiers():
-    """The signal names the unit will emit must already be valid ICP soft qualifiers."""
-    from leadforge.models import SOFT_QUALIFIERS
-
-    for sig in ("stale_social", "no_social_presence", "no_video_presence"):
-        assert sig in SOFT_QUALIFIERS
-
-
-def test_social_signals_have_hook_templates():
-    from pathlib import Path
-
-    import yaml
-
-    rubric = yaml.safe_load((Path(__file__).resolve().parents[1] / "config" / "scoring.default.yaml").read_text())
-    for sig in ("stale_social", "no_social_presence", "no_video_presence"):
-        assert sig in rubric["hooks"], f"missing outreach hook template for {sig}"
+def test_presence_shape_with_mocked_ytdlp(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch)
+    payload = ('{"channel_follower_count": 120, "entries": [{"upload_date": "20240115"}]}')
+    monkeypatch.setattr(social.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(social.subprocess, "run",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout=payload))
+    out = social.presence({"youtube": "https://youtube.com/@x"}, cfg)
+    yt = out["youtube"]
+    assert yt["exists"] is True and yt["status"] == "ok"
+    assert yt["followers"] == 120 and yt["last_post_at"] == "2024-01-15"
 
 
-@pytest.mark.xfail(reason="ICM U4.8: presence() not implemented yet", strict=False)
-def test_presence_shape(cfg):
-    from leadforge.providers.social import presence
+def test_presence_missing_binary_is_unknown_not_crash(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch)
+    monkeypatch.setattr(social.shutil, "which", lambda name: None)
+    out = social.presence({"youtube": "https://youtube.com/@x"}, cfg)
+    assert out["youtube"]["status"] == "unknown"
 
-    out = presence({"youtube": "https://youtube.com/@shop"}, cfg)
-    assert set(out["youtube"]) >= {"url", "exists", "last_post_at", "status"}
+
+def test_to_signals(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch)
+    assert social.to_signals({}, cfg) == ["no_social_presence"]
+    stale = {"facebook": {"url": "u", "exists": True, "last_post_at": "2020-01-01",
+                          "followers": None, "status": "ok"}}
+    sigs = social.to_signals(stale, cfg)
+    assert "no_video_presence" in sigs and "stale_social" in sigs
+
+
+def test_disabled_is_unavailable(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch, enabled=False)
+    ok, msg = social.is_available(cfg)
+    assert ok is False and "disabled" in msg

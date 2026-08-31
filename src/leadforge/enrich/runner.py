@@ -98,6 +98,10 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
     browser_ok = browser.is_available()
     from leadforge.providers.registry import get_registries
     registries = get_registries(cfg)  # once per run so a 429 disable sticks for the whole batch
+    from leadforge.providers import social
+    social_ok, social_msg = social.is_available(cfg)
+    if cfg.social.enabled and not social_ok:
+        LOG.info("social presence skipped: %s", social_msg)
     with ThreadPoolExecutor(max_workers=cfg.politeness.workers) as pool:
         futures = {pool.submit(_process_one, cfg, throttle, b): b for b in queue}
         for fut in as_completed(futures):
@@ -108,14 +112,14 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
                 LOG.warning("enrich failed for %s: %s", b["id"], e)
                 db.update_enrich(conn, b["id"], {"crawled_at": now_iso(), "error": str(e)[:200]})
                 continue
-            _persist(conn, cfg, b, res, counts, registries)
+            _persist(conn, cfg, b, res, counts, registries, social_ok)
             if res["needs_browser"] and not browser_ok:
                 counts["needs_browser"] += 1
     conn.commit()
 
 
 def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
-             registries: list | None = None) -> None:
+             registries: list | None = None, social_ok: bool = False) -> None:
     counts["sites_crawled"] += 1
     bid = b["id"]
     for email, meta in res["emails"].items():
@@ -140,8 +144,20 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
                                        url=cand.source_url, snippet=f"{cand.name} — {cand.title}", observed_at=now_iso()))
         counts["dm_candidates"] += 1
     _registry_cross_check(conn, b, counts, registries or [])
-    enrich ={"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
+    social_presence: dict = {}
+    if social_ok:
+        from leadforge.providers import social
+        social_presence = social.presence(res["socials"], cfg)
+        for sig in social.to_signals(social_presence, cfg):
+            res["signals"][sig] = True
+        for net, p in social_presence.items():
+            db.add_evidence(conn, Evidence(business_id=bid, ref_table="businesses", fact="social_presence",
+                                           url=p["url"], snippet=f"{net}: last post {p['last_post_at'] or 'unknown'}",
+                                           observed_at=now_iso()))
+    enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
               "pages": res["pages"], "needs_browser": res["needs_browser"]}
+    if social_presence:
+        enrich["social_presence"] = social_presence
     db.update_enrich(conn, bid, enrich)
 
 
