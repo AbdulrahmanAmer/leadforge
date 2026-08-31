@@ -42,8 +42,9 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     pending = db.pending_queries(conn, run_id)
     from leadforge.grid import PlannedQuery
 
+    hard_cap = min(limit, icp.caps.max_leads) if limit else icp.caps.max_leads
     for q in pending:
-        if limit and processed >= limit:
+        if processed >= hard_cap:
             break
         pq = PlannedQuery(text=q["query_text"], category="", area="",
                           tile=_tile_from_json(q["tile_json"]))
@@ -61,14 +62,14 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             _bid, created = db.upsert_business(conn, biz)
             per_query_new += int(created)
             processed += 1
-            if limit and processed >= limit:
+            if processed >= hard_cap:
                 break
         new_count += per_query_new
         db.finish_query(conn, q["id"], status, len(listings))
 
     total_biz = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
     still_pending = len(db.pending_queries(conn, run_id))
-    if still_pending == 0 or (limit and processed >= limit):
+    if still_pending == 0 or processed >= hard_cap:
         db.set_stage(conn, run_id, "discovered", businesses=total_biz)
     if degraded:
         warns.append(f"{degraded} queries degraded (captcha/timeout); rerun with --resume later")
