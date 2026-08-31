@@ -167,7 +167,7 @@ qualify:
 decision_maker:
   titles_priority: ["Owner", "General Manager", "Service Manager"]
 scoring:
-  weights_override: {}        # see config/scoring.default.yaml
+  weights_override: {}        # see src/leadforge/data/scoring.default.yaml (packaged rubric)
 caps: { max_leads: 200, max_sites: 300, max_tiles: 60 }
 compliance: { region_profile: us }   # us|uk|eu → outreach reminder text in export
 ```
@@ -177,19 +177,33 @@ compliance: { region_profile: us }   # us|uk|eu → outreach reminder text in ex
 | Col | Source | Notes |
 |---|---|---|
 | Score | scores.total | number, 0 dp |
-| Tier | scores.tier | A/B/C/DQ, conditional fill |
+| Tier | scores.tier | A/B/C/D/DQ, conditional fill |
 | Business | businesses.name | |
 | Category | businesses.category | ICP-mapped |
-| DM Name / DM Title / DM Conf | people where is_dm=1 | blank if unlabeled; Conf 0–1 |
-| Phone | phone_e164 | E.164 + national format in tooltip comment |
-| Email / Email Tier | best contact (tier order: valid>role>risky>unknown) | never export `invalid` |
-| Website | businesses.website | hyperlink |
+| DM Name / DM Title / DM Conf | people where is_dm=1 | natural "First Last" order; Conf 0–1. Never blank: unlabeled → "not identified - ask for owner/manager" |
+| Phone | phone_e164 | spaced international format ("+44 1483 456363" — survives Excel as text); raw Maps string as fallback |
+| Email / Email Tier | best contact (tier order: valid>role>risky>catch_all>unknown) | never export `invalid`; absent → "none published" / "site not crawled" / "no website to crawl", tier `-` |
+| Website | businesses.website | hyperlink; absent → "NONE - no web presence (pitch opportunity)" |
 | Address / City / Region / Postal / Country | split fields | sheet-ready |
 | Rating / Reviews | rating, review_count | |
 | Likely Need (Hook) | scores.need_hooks_json[0] | one line, human-ready |
 | Why This Score | top 3 factors_json "why" joined | audit trail |
 | Maps | maps_url | hyperlink |
-| Source / Verified On | evidence roll-up | provenance |
+| Source | businesses.source | which engine discovered it (gosom = Google Maps) |
+| Verified On | evidence roll-up | timestamp of the newest evidence for the row |
+| Stale? | Verified On vs `validation.staleness_days` | `-` fresh; `yes` stale; `never verified`; `unknown (bad timestamp)` |
+| Opening Hours | businesses.hours_json | "Mon 9AM-6PM \| … \| Sun closed" from the listing; `-` when unknown |
+| Company No | enrich_json.registry_profile | official registry number; else "not matched in registry" / "not looked up" |
+| Incorporated | enrich_json.registry_profile | incorporation year; `-` unknown |
+| Company Status | enrich_json.registry_profile | e.g. active / dissolved; `-` unknown |
+| SIC Codes | enrich_json.registry_profile | comma-separated; `-` unknown |
+| Call Readiness | derived at export | `READY - named contact` (validated phone + DM) / `READY - ask switchboard` (validated phone, no DM) / `UNVERIFIED PHONE - confirm number` (only a raw unparsed number) / `NO PHONE - research first` |
+
+**Zero blank cells:** a cell is never empty — placeholder text says why it would have been; anything still empty is
+written as `-`. Summary/report coverage stats count only real data, never placeholders. With
+`scoring: {profile: account_fit}` the sheet appends 14 account-intel columns: Employees, Employee Range, Revenue,
+Departments, Microsoft 365, CRM, ERP, Other Systems, Trigger, Trigger Strength, LinkedIn, Contactability,
+Data Confidence, Status.
 
 **Summary sheet:** run config, counts per stage, tier histogram, degradations/warnings, top hooks ranked, compliance reminder for the
 chosen region profile. **About sheet:** column dictionary + tier semantics (so the sheet explains itself to the partner).

@@ -198,7 +198,7 @@ YouTube, Facebook, Instagram, X, Reddit, RSS, GitHub, web search. Zero API fees.
 ### What is already wired for you (do not re-plumb)
 - `SocialCfg` in `config.py` + the `social:` block in `config/leadforge.example.yaml` (all defaults off).
 - Signal names in `models.py::SOFT_QUALIFIERS`: `stale_social`, `no_social_presence`, `no_video_presence`.
-- Hook templates for those three in `config/scoring.default.yaml`.
+- Hook templates for those three in `src/leadforge/data/scoring.default.yaml`.
 - `score.py::_need_hits` already reads them from `enrich_json["signals"]`.
 
 So your job is only: implement `is_available` / `presence` / `to_signals` per the docstring, and call them

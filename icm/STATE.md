@@ -1,6 +1,6 @@
 # Build State Tracker
 
-Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-08-31): **134 passed, 0 failed locally with all extras**, ruff clean.
+Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-08-31): **155 passed, 0 failed locally with all extras**, ruff clean.
 
 ## Stage gates
 
@@ -31,8 +31,10 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
 
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
 - [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
-- [~] **U3.7** gosom serve mode — DEFERRED to v0.2 (multi-hour runs handled by resume + stall watchdog instead)
-- [x] **U4.5** Browser escalation — implemented + wiring tests; live render UNPROVEN ([browser] extra not installed here)
+- [x] **U3.7** gosom serve mode — CLOSED BY DESIGN (multi-hour runs handled by resume + stall watchdog instead)
+- [x] **U4.5** Browser escalation — implemented + wiring tests; crawl4ai IS installed on this machine
+      (2026-08-31); v0.1.4 added the HTTP-blocked fallback + render rejection + signal parity.
+      Live render against a real JS-only site remains UNPROVEN (no live blocked-site run yet).
 - [x] **U4.6** Registry cross-check — implemented + fixture tests; Companies House LIVE-PROVEN (18 real directors, Guildford campaign); OpenCorporates fixture-tested
 - [x] **U4.7** GLiNER DM upgrade — hook + selection rule + tests (skip cleanly without [ner])
 - [x] **U4.8** Social/video presence — implemented (youtube via yt-dlp; others honest 'unknown'), linkedin-exclusion tested
@@ -78,14 +80,22 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
 - LESSON: all five version strings stayed at 0.1.1 through both — the CI versions job only checked
   they agreed with each other. v0.1.4 anchors the job to the pushed tag.
 
-## v0.1.4 (2026-08-31, this session)
-- Browser fallback for HTTP-blocked sites (403 to httpx -> rendered browser retry; robots-disallowed
-  never escalates; watched-fail verified).
-- Honest coverage stats: Summary/report.json count only real DM/email values, never zero-blank-cell
-  placeholders (live 709-run had reported with_dm=709 with 330 placeholder cells).
-- Registry DM names naturalized: 'SURNAME, Given Names' -> 'Given Names Surname' at ingestion and
-  at export (heals existing DBs on re-export).
-- CI: `claude plugin validate` job added (deferred item closed); version job tag-anchored.
+## v0.1.4 (2026-08-31, finish-for-good session — full detail in CHANGELOG [0.1.4])
+- 34-agent adversarial audit (5 dimensions, every serious finding independently verified REAL);
+  all confirmed findings fixed. Suite grew 121 -> 155 tests, ruff clean throughout.
+- Headlines: browser fallback for HTTP-blocked sites (block-shaped statuses only, robots red line
+  pinned by crawl()-level tests); honest coverage stats + natural DM names; geography actually
+  scored + out_of_area implemented; word-bounded chain/competitor matching; resume un-wedged
+  (stage 'enriching'), config set un-bricked, LF_DIGEST contract on all failure paths; Excel
+  formula-injection + IllegalCharacterError fixes; -grid-bbox lat-first (was wrong-continent);
+  TSV dm labels; rubric packaged into the wheel; doctor/social extras truth; version 0.1.4
+  everywhere + tag-anchored CI + `claude plugin validate` job.
+- INCIDENT (recorded per Rule 3): an audit agent injected a watched-fail robots-bypass mutation
+  into the SHARED working tree; commit ff07dc6 captured it mid-experiment; corrected in 8489570
+  before any push. Lesson: mutation experiments only in isolated worktrees.
+- Deferred list after this session: grid tiling LIVE run (flag contract now verified offline),
+  real FB/IG probes (ToS — deliberately excluded), fallback_rest docker proof (no docker here).
+  Serve mode closed by design. plugin-validate-in-CI and TSV reconciliation SHIPPED.
 - Live-run ops note (2026-08-31): the "leaked gosom" after the 709-lead autorepair run was NOT a
   watchdog failure — an idle no-args gosom web-UI instance had been double-clicked in Explorer
   (parent explorer.exe, 0.6s CPU). Watchdog behaved correctly all run.

@@ -2,24 +2,63 @@
 
 ## [0.1.4] — 2026-08-31
 
+Finish-for-good release: a 34-agent adversarial audit over the whole tool, every confirmed
+finding fixed. 155 tests, ruff clean.
+
 ### Added
-- **Browser fallback for HTTP-blocked sites**: a site that 403s/refuses the plain HTTP client is
-  retried with a real rendered browser (same as a person opening it) before enrichment gives up;
-  robots-disallowed sites never escalate. New signals: `rendered`, `http_blocked`.
-- CI: `claude plugin validate` job (closes the v0.1.1 deferred item); the version-consistency job
-  now anchors against the pushed release tag, so five stale-but-agreeing strings can't ship again
-  (exactly how 0.1.2/0.1.3 went out self-reporting 0.1.1).
+- **Browser fallback for HTTP-blocked sites**: a block-shaped refusal to the plain HTTP client
+  (401/403/405/406/429/503 — not 404s, dead DNS, or PDFs) is retried once with a real rendered
+  browser, like a person opening the site. Robots-disallowed sites never escalate; an unreadable
+  (5xx) robots.txt counts as complete disallow per RFC 9309; failed/4xx renders are rejected so
+  parked-domain phones can't enter the sheet; at most 2 concurrent Chromium instances; rendered
+  pages produce the same content signals + WE SCORE profile as static crawls. Sites flagged
+  `needs_browser` re-enter the enrich queue automatically once the `[browser]` extra is installed.
+- `suppress --kind domain|email|place_id` (place_id was documented but unreachable);
+  `enrich --stage registry` documented + validated; validate-stage progress heartbeat
+  (700-email DNS tails no longer trip watch's silence timeout).
+- CI: `claude plugin validate` job; the version-consistency job anchors against the pushed release
+  tag (exactly how 0.1.2/0.1.3 went out self-reporting 0.1.1); the non-editable install step
+  asserts the packaged scoring rubric ships in the wheel.
 
 ### Fixed
 - **Coverage stats counted placeholders as data**: the live 709-lead run reported `with_dm=709` /
   `with_email=709` while 330 DM cells and 541 email cells held zero-blank-cell placeholder text.
-  Summary sheet + report.json now count only real values; the sheet itself keeps every cell resolved.
-- **Registry DM names were reversed**: Companies House/OpenCorporates list officers as
-  "SURNAME, Given Names" and sheets showed "Murphy, Sean Vincent". `natural_name()` flips
-  person-shaped comma names at ingestion (new runs) and at export (re-exports of existing DBs heal
-  too); corporate commas ("Acme Widgets, Inc") and two-comma names pass through untouched.
-- Version identity drift: pyproject/__init__/both plugin manifests/skill frontmatter all said 0.1.1
-  while v0.1.3 code shipped; all five now read 0.1.4.
+  Summary sheet + report.json now count only real values; the sheet keeps every cell resolved.
+- **Registry DM names were reversed** ("Murphy, Sean Vincent"): natural order at ingestion AND at
+  export (re-exports of existing DBs heal); corporate commas and two-comma names pass through.
+- **Geography was effectively unscored**: `geography_match` gave full credit to any structured city
+  without ever reading `icp.target.geography`; it now matches the campaign areas (soft 0.3 for
+  same-country spillover towns), and the advertised-but-dead `out_of_area` penalty (-20) fires on
+  country-level mismatch. Dead `competitor`/`existing_client` soft-penalty config removed (their
+  real implementation is the `icp.qualify.hard` DQ path, now documented in the rubric).
+- **Substring name matching DQ'd innocents** ('group' in "Grouper", 'inc' in "Vincent", competitor
+  'ace' in "Palace Garage") — all four match sites are now word-bounded.
+- **`run --resume` after a kill mid-enrich no-opped forever** (stage 'enriching' matched no dispatch
+  block); **`config set` with a bad value bricked every command** (wrote before validating — now
+  validates first, and a hand-broken leadforge.yaml degrades to a clean digest with `config set`
+  still usable to repair); **degraded discovery queries are actually retried** by `--resume` (until
+  the DM gate) as the digest always claimed; score/export/dm export/enrich emit a digest on every
+  failure path, with a catch-all in main() so the LF_DIGEST contract holds even on crashes.
+- **Excel safety**: scraped strings starting with '='/'@' neutralized (formula injection, XLSX +
+  CSV); control chars stripped (openpyxl IllegalCharacterError killed the export at the end of a
+  run); tier D counted in Summary/report (account_fit rows vanished from stats); placeholder
+  Website/Maps text no longer styled as clickable links; `Stale?` distinguishes fresh /
+  "never verified" / "unknown (bad timestamp)"; a raw unparsed Maps phone string is
+  "UNVERIFIED PHONE - confirm number", not call-ready; both writers share one blank-cell rule;
+  About-sheet tier legend matches the profile that graded the workbook.
+- **Grid mode would have scraped the wrong continent**: `-grid-bbox` was emitted lng-first;
+  gosom v1.17.4 wants lat-first (verified against the real binary). Flag contract now pinned by
+  test; grid_mode stays off by default until a live tiled run.
+- `dm apply` accepts the documented TSV label variant (agents following dm-labeling.md got
+  "bad label line"); scoring rubric packaged into the wheel (`pip install .` shipped a score
+  command that crashed on a repo-relative path); doctor reports the [social] extra truthfully and
+  installs extras correctly under non-editable installs; install.py refreshes stale skill copies;
+  version identity drift healed (all five strings + tag = 0.1.4).
+- Headless `run` popped two progress windows; the auto window ignored `--data-dir`; `watch` went
+  blank/false-timed-out after feed truncation and ETA lied when attached mid-run — all fixed.
+- Dev-process note, recorded plainly: an audit agent's watched-fail mutation (a robots-bypass) was
+  captured by an intermediate local commit and removed before any push; the robots-never-escalates
+  invariant is now pinned by crawl()-level tests against a real local server.
 
 ## [0.1.3] — 2026-08-31 (retro entry — commits 4c87029/fa4db04/7b0b2d2 were never tagged)
 - Progress heartbeat: `LF_PROGRESS` JSON lines for agents + live single-line stderr bar (%, ETA,

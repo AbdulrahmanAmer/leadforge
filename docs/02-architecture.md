@@ -88,7 +88,7 @@ flowchart LR
 | `enrich/extract.py` | Emails (mailto/regex/cfemail/at-dot), phones, socials, copyright-year staleness, person+title candidate snippets | Every fact → `Evidence(url, ts, snippet)` |
 | `enrich/validate.py` | Email tiers (syntax→MX→disposable→role), phone validity, site liveness | Tiers, never booleans |
 | `enrich/dm.py` | DM candidate store; `dm export` NDJSON snippets for the agent; `dm apply` labels back | Snippets ≤ 300 chars; batch caps |
-| `score.py` | Rubric from `config/scoring.default.yaml` ⊕ ICP overrides; per-factor explanations; "likely need" hook synthesis | Deterministic, unit-tested |
+| `score.py` | Rubric from packaged `src/leadforge/data/scoring.default.yaml` ⊕ ICP overrides; per-factor explanations; "likely need" hook synthesis | Deterministic, unit-tested |
 | `export.py` | Styled XLSX (Leads + Summary + About sheets), CSV mirror, JSON run report | Column dictionary in `docs/03-data-model.md` §5 |
 
 ## 3. Tech stack & rationale

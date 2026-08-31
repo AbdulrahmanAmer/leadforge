@@ -160,6 +160,8 @@ def enrich(
         # a typo used to be a silent zero-work success — an agent read that as "nothing left"
         emit_digest(False, "enrich", warnings=[f"unknown --stage '{stage}' (all|site|registry|validate)"])
         raise typer.Exit(2)
+    from leadforge.util import set_progress_file
+    set_progress_file(cfg.data_path / "progress.jsonl")  # standalone enrich feeds `leadforge watch` too
     conn = db.connect(cfg.db_path)
     run = db.latest_run(conn)
     # site budget: explicit --limit wins, else the campaign's cap, else a safe default

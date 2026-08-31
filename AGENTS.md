@@ -14,6 +14,7 @@ The same instructions are pasteable from `icm/PROMPT.txt`.
 - The user-facing behavior lives in the skill: `skills/generate-leads/SKILL.md`. If the user wants leads, follow that skill.
 - The engine is the `leadforge` Python CLI (`src/leadforge/`). **Never scrape or crawl the web yourself for this task — the CLI does it.**
 - **Token contract (`docs/06-token-contract.md`):** every command ends with one `LF_DIGEST {json}` line — read that line, ignore the rest.
+  Piped runs also emit bounded `LF_PROGRESS {json}` heartbeat lines (stage/done/total/msg) on stdout — safe to read for progress; details in docs/06.
   Never `cat` anything under `leadforge_data/` (db, cache, exports are unbounded). The only pipeline file you read is a `dm export` batch.
 - Environment problems are the CLI's job: run `leadforge doctor --fix --json` before diagnosing anything by hand.
 

@@ -112,7 +112,7 @@ per-host delay honored (timing test); `dm export` → hand-label → `dm apply` 
 
 | Unit | Deliverable | Files | Status |
 |---|---|---|---|
-| **U5.1** Rubric engine | factor functions (fit/reachability/need/confidence/negatives) per docs/01 §5, weights from `config/scoring.default.yaml` ⊕ ICP override; per-factor `why`; tiers; DQ on hard qualifiers | `src/leadforge/score.py` | ✅ |
+| **U5.1** Rubric engine | factor functions (fit/reachability/need/confidence/negatives) per docs/01 §5, weights from `src/leadforge/data/scoring.default.yaml` ⊕ ICP override; per-factor `why`; tiers; DQ on hard qualifiers | `src/leadforge/score.py` | ✅ |
 | **U5.2** Need-hook synthesis | rule table signal→hook line (offer-aware templates from ICP.offer) | `score.py` | ✅ |
 | **U5.3** Scoring tests | golden cases incl. weight overrides + negative caps | `tests/test_score.py` | ✅ |
 

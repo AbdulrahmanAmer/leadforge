@@ -33,7 +33,7 @@ the agent **under ~15k tokens** — the pipeline itself processes hundreds of pa
 Then, once, in the folder where you want your lead data to live:
 
 ```bash
-leadforge doctor --fix --full  # installs deps, pinned scraper binary, AND the quality extras (GLiNER NER + crawl4ai browser)
+leadforge doctor --fix --full  # installs deps, pinned scraper binary, AND the quality extras (GLiNER NER + crawl4ai browser + yt-dlp)
 ```
 
 Requires **Python 3.11+**. No compiler needed — every default dependency is a pure-python wheel.
@@ -55,11 +55,14 @@ hands back a sheet.
 leadforge intake --answers answers.yaml   # compile + validate your ICP -> icp.yaml
 leadforge plan   --icp icp.yaml           # see the query plan before spending time
 leadforge run    --icp icp.yaml           # discover -> enrich -> (pause for DM labeling) -> score -> export
+leadforge watch                           # live progress bar for the run in this workspace (second terminal)
 leadforge dm export --max 60              # snippets for the agent to label
 leadforge dm apply --in dm_labels.ndjson
 leadforge run    --icp icp.yaml --resume  # score + export
 leadforge status
-leadforge suppress add someone@example.com   # opt-outs, honored everywhere
+leadforge config set registry.companies_house_key XXX  # read/write one leadforge.yaml value (set|get)
+leadforge export --icp icp.yaml --format xlsx,csv      # re-export the latest run
+leadforge suppress add someone@example.com   # opt-outs, honored everywhere (--kind domain|email|place_id)
 ```
 
 Everything lands under `./leadforge_data/` (gitignored): SQLite db, cache, logs, and `exports/<run>/` with the
@@ -67,10 +70,16 @@ XLSX, CSV and report.
 
 ## What a lead row contains
 
-Score (0–100) and tier (A/B/C/DQ) · business name, category · **decision-maker name + title + confidence** ·
-phone in E.164 · best email + validity tier · website · split address (street/city/region/postal/country) ·
-rating and review count · **"Likely Need (Hook)"** — a ready outreach angle · **"Why This Score"** — the top
-factors in plain words · Maps link · source and verified-on date.
+Score (0–100) and tier (A/B/C/D/DQ) · business name, category · **decision-maker name + title + confidence** ·
+phone (spaced international format) · best email + validity tier · website · split address
+(street/city/region/postal/country) · rating and review count · **"Likely Need (Hook)"** — a ready outreach
+angle · **"Why This Score"** — the top factors in plain words · Maps link · source, verified-on date and a
+**Stale?** flag · **Opening Hours** · a registry profile (**Company No, Incorporated, Company Status, SIC
+Codes**) · and **Call Readiness** — whether the row is safe to dial right now. With
+`scoring: {profile: account_fit}` the sheet appends 14 account-intel columns (Employees, Employee Range,
+Revenue, Departments, Microsoft 365, CRM, ERP, Other Systems, Trigger, Trigger Strength, LinkedIn,
+Contactability, Data Confidence, Status). **A cell is never empty** — a would-be blank says why it is blank
+("none published", "not matched in registry", …).
 
 The workbook also carries a **Summary** tab (counts, tier split, top hooks, compliance reminder for your region)
 and an **About** tab that explains the columns — so your partner can read it without asking you.
@@ -105,18 +114,23 @@ See [`docs/07-compliance.md`](docs/07-compliance.md) for the practical GDPR/PECR
 
 ## Status
 
-**v0.1.1 — shipped and live-validated.** Every ICM unit is implemented and tested; live end-to-end runs
-(real Google Maps scraping, site enrichment, Companies House officer cross-check, scored XLSX export)
-have been completed on Windows. Deferred to v0.2: gosom serve mode, geo grid tiling, real Facebook/
-Instagram presence probes (see `icm/STATE.md`).
+**v0.1.4 — shipped and live-validated** with a 709-lead UK auto-repair campaign (2026-08-31). Every ICM unit
+is implemented and tested. Since v0.1.1: a **registry stage** that covers site-less businesses and adds a
+Companies House profile (company number, incorporation, status, SIC codes); a **Call Readiness** column;
+`LF_PROGRESS` heartbeat lines + a live progress bar and `leadforge watch`; and a **browser fallback** for sites
+that bot-wall the plain HTTP client (robots.txt is always honored — disallowed sites never escalate).
+Deferred to v0.2: a grid-tiling live run and real Facebook/Instagram presence probes. gosom serve mode is
+closed by design (resume + a stall watchdog cover it). Previously deferred, shipped in 0.1.4:
+`claude plugin validate` in CI, TSV dm reconciliation, grid bbox flag-format verification (see `icm/STATE.md`).
 
 ```bash
 pip install -e .[dev] && pytest -q && ruff check src tests   # suite must be fully green (no xfails)
 ```
 
-Optional extras (installed automatically by `leadforge doctor --fix --full`): `.[browser]` (JS-rendered
-sites), `.[ner]` (local zero-shot name/title extraction), `.[social]` (yt-dlp presence probe),
-`.[addressing]` (better US address splitting).
+Optional extras: `.[browser]` (JS-rendered + bot-walled sites), `.[ner]` (local zero-shot name/title
+extraction) and `.[social]` (yt-dlp presence probe) are installed automatically by
+`leadforge doctor --fix --full`; `.[addressing]` (better US address splitting) is available but manual —
+`pip install -e .[addressing]`.
 
 ## License
 

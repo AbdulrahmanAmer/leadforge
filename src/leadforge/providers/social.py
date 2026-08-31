@@ -53,7 +53,7 @@ WIRING
   `presence(...)` then `to_signals(...)` and merge the result into the business's `enrich_json` under
   `"social_presence"` and add the signal names into `enrich_json["signals"]`.
 - `score.py::_need_hits`: the new signals are already honored generically — add them to SOFT_QUALIFIERS in
-  models.py and to the `hooks:` table in config/scoring.default.yaml (both already have entries prepared).
+  models.py and to the `hooks:` table in leadforge/data/scoring.default.yaml (both already have entries prepared).
 - Evidence: one `Evidence(fact="social_presence", url=<profile url>, snippet="<network>: last post <date>")`
   per network checked, so the sheet's provenance stays honest.
 
