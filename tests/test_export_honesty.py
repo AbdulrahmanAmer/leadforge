@@ -67,6 +67,61 @@ def test_sheet_stays_fully_resolved_and_private_keys_stay_private(tmp_path, monk
     assert bare["Email"] == "no website to crawl"
 
 
+def test_export_neutralizes_formula_injection_and_control_chars(tmp_path, monkeypatch):
+    """A scraped business name must never execute in the operator's Excel, and control chars
+    must not crash openpyxl at the very end of a long run."""
+    from openpyxl import load_workbook
+
+    from leadforge.config import load_config
+    from leadforge.export import export_run
+    from leadforge.models import Business, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="evil", run_id=rid, source="gosom", dedupe_key="dk-evil",
+                                      name='=HYPERLINK("http://evil.example","click")'))
+    db.upsert_business(conn, Business(id="ctrl", run_id=rid, source="gosom", dedupe_key="dk-ctrl",
+                                      name="Null\x00 Garage\x07"))
+    for bid in ("evil", "ctrl"):
+        db.save_score(conn, Score(business_id=bid, run_id=rid, total=60, tier="B",
+                                  factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1,
+                                                       points=1, why="w")]))
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["xlsx", "csv"])  # must not raise
+    with open(next(a for a in arts if a.endswith(".csv")), encoding="utf-8-sig") as fh:
+        rows = list(csv.DictReader(fh))
+    evil = next(r for r in rows if "HYPERLINK" in r["Business"])
+    assert evil["Business"].startswith("'=")  # neutralized, not live
+    ctrl = next(r for r in rows if "Garage" in r["Business"])
+    assert ctrl["Business"] == "Null Garage"
+    ws = load_workbook(next(a for a in arts if a.endswith(".xlsx")))["Leads"]
+    biz_col = [c.value for c in ws[1]].index("Business") + 1
+    cells = [ws.cell(row=i, column=biz_col) for i in range(2, 4)]
+    assert all(c.data_type != "f" for c in cells)  # no formula cells anywhere
+
+
+def test_tier_d_is_counted_not_dropped(tmp_path, monkeypatch):
+    """account_fit grades A-D; Summary/report used to enumerate only A/B/C/DQ, silently losing D."""
+    import json as _json
+
+    from leadforge.config import load_config
+    from leadforge.export import export_run
+    from leadforge.models import Business, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="d1", run_id=rid, name="Grade D Garage", source="gosom",
+                                      dedupe_key="dk-d1"))
+    db.save_score(conn, Score(business_id="d1", run_id=rid, total=30, tier="D",
+                              factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1,
+                                                   points=1, why="w")]))
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["csv"])
+    report = _json.loads(open(next(a for a in arts if a.endswith("report.json")), encoding="utf-8").read())
+    assert report["tiers"].get("D") == 1
+    assert sum(report["tiers"].values()) == report["total"]
+
+
 def test_natural_name_rules():
     assert natural_name("Murphy, Sean Vincent") == "Sean Vincent Murphy"
     assert natural_name("MURPHY, Sean") == "Sean MURPHY"              # casing is the caller's job

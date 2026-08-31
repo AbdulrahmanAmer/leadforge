@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +46,23 @@ _REGION_REMINDER = {
     "uk": "UK/PECR: corporate subscribers may be emailed B2B; sole traders/individuals need consent. Always give identity + opt-out.",
     "eu": "EU/GDPR: legitimate-interest basis; keep the campaign LIA note; honor objections immediately; store source per contact.",
 }
+
+
+# chars openpyxl refuses (IllegalCharacterError) — scraped text can contain them
+_ILLEGAL_XLSX_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _safe_cell(v):
+    """Excel hardening for scraped strings: strip control chars openpyxl crashes on, and neutralize
+    leading formula triggers so a hostile business name can't execute in the operator's Excel.
+    '+' and '-' are deliberately left alone — spaced phone display and '-' placeholders are
+    verified text-safe, and neither starts a formula when a cell contains further spaces."""
+    if not isinstance(v, str):
+        return v
+    v = _ILLEGAL_XLSX_RE.sub("", v)
+    if v[:1] in ("=", "@"):
+        v = "'" + v
+    return v
 
 
 def _display_phone(e164: str | None) -> str:
@@ -168,7 +186,7 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str] = COLUMNS) -> Pa
         w = csv.DictWriter(fh, fieldnames=columns)
         w.writeheader()
         for r in rows:
-            w.writerow({k: (v if v != "" else "-") for k, v in r.items() if k in columns})
+            w.writerow({k: _safe_cell(v if v != "" else "-") for k, v in r.items() if k in columns})
     return path
 
 
@@ -184,7 +202,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
         c.font = _HEADER_FONT
         c.alignment = Alignment(vertical="center")
     for r in rows:
-        ws.append([(r.get(c, '') if r.get(c, '') != '' else '-') for c in columns])
+        ws.append([_safe_cell(r.get(c, '') if r.get(c, '') != '' else '-') for c in columns])
     # styling: tier fill, hyperlinks, zebra, widths
     tier_col = columns.index("Tier") + 1
     web_col = columns.index("Website") + 1
@@ -213,7 +231,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
 
 def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> None:
     ws = wb.create_sheet("Summary")
-    tiers = {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "DQ")}
+    tiers = {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "D", "DQ")}
     hook_counts: dict[str, int] = {}
     for r in rows:
         if r["Likely Need (Hook)"]:
@@ -228,7 +246,8 @@ def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> Non
         ("Generated", now_iso()),
         ("", ""),
         ("Total leads", len(rows)),
-        ("Tier A / B / C / DQ", f"{tiers['A']} / {tiers['B']} / {tiers['C']} / {tiers['DQ']}"),
+        ("Tier A / B / C / D / DQ",
+         f"{tiers['A']} / {tiers['B']} / {tiers['C']} / {tiers['D']} / {tiers['DQ']}"),
         ("With decision maker", f"{with_dm} ({_pct(with_dm, len(rows))})"),
         ("With email", f"{with_email} ({_pct(with_email, len(rows))})"),
         ("", ""),
@@ -271,7 +290,7 @@ def _write_report(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
     with_dm, with_email = _real_counts(rows)
     report = {
         "run": run_id, "campaign": icp.campaign, "generated": now_iso(), "total": len(rows),
-        "tiers": {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "DQ")},
+        "tiers": {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "D", "DQ")},
         "with_dm": with_dm,
         "with_email": with_email,
     }
