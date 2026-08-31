@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.2.0] — 2026-08-31
+
+The coverage release: break the per-query result ceiling, rescue bot-walled sites, and propose
+contacts where none are published — each one measured on live data, none of them relaxing a red line.
+192 tests, ruff clean.
+
+### Added
+- **Grid tiling, live-proven.** Google Maps serves ~100–120 results per search *server-side* — the
+  scraper already scrolls to the end, so deepening does nothing. Tiling splits one town into map
+  cells, each with its own budget. Measured: 4 tiled queries on `auto repair shop` in Birmingham
+  found **107 businesses that the entire 709-lead, 3-category, 5-city campaign had missed**
+  (Birmingham 221 → 310, +40%), with **0 duplicate place_ids** after the cross-tile merge.
+  Still opt-in (`discovery.grid_mode: auto`) because tiling adds a geocode per area and multiplies
+  query count; `leadforge plan` now reports map cells, queries and estimated hours before you spend
+  them.
+- **`leadforge render-check <url>`** — diagnose the bot-wall fallback on one site (robots → plain
+  fetch → rendered fetch → contacts) in a single digest. It proved the fallback live:
+  `shamsautos.com` 403s the plain client, renders in a real browser, and yields an email the static
+  path lost. Two robots-disallowed sites were refused without a single page fetch.
+- **Inferred emails** (opt-in `validation.infer_emails`, default off): when a business has a named
+  decision maker, an MX-confirmed domain, and a *real personal email already found on that domain*,
+  the address that domain's own convention implies is proposed — in its own `Email (Inferred)`
+  column, labeled `likely, N% — pattern X from <anchor>`, excluded from published-email coverage,
+  and scored below anything observed. **No anchor, no guess.** Measured honestly: this fires on
+  0 of 709 UK garages (trades publish `info@` or nothing) and does have anchors in professional-
+  services campaigns. Red line intact — no SMTP, no RCPT probing, ever (SCOPE #5 clarified, not
+  relaxed).
+
+### Fixed
+- **Category/area starvation under the lead cap**: `build_plan` emitted category-major, so a run
+  that hit `caps.max_leads` could finish having never searched the last category. Queries now
+  rotate tile-major — every category, in every area, before any tile advances.
+- `geocode` retries transient network errors (3 attempts, backing off) instead of killing a
+  multi-hour tiled plan on its first area; a bbox-only ICP with grid off now names the switch that
+  would make it usable instead of raising a generic "no queries".
+- A tiled query falling through to a provider that ignores tiles now warns that the geographic
+  constraint was dropped, instead of silently scraping ungridded.
+- `plan_counts` reports **distinct map cells** (it counted tiled queries before) plus tiled-query
+  count and an estimated runtime.
+
 ## [0.1.4] — 2026-08-31
 
 Finish-for-good release: a 34-agent adversarial audit over the whole tool, every confirmed

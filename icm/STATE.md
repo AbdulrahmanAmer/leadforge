@@ -32,6 +32,14 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
 ### Remaining (STUB or TO-BUILD — specs in stub docstrings + docs/05 + icm/stages/)
 - [x] **U3.6** Fallback REST provider — `providers/fallback_rest.py` — degraded path verified live; up-path (docker container) UNPROVEN on this machine (no docker)
 - [x] **U3.7** gosom serve mode — CLOSED BY DESIGN (multi-hour runs handled by resume + stall watchdog instead)
+- [x] **Grid tiling — LIVE-PROVEN 2026-08-31 (v0.2.0)**, closing the stage-8 §4 gate. Birmingham,
+      `auto repair shop`, 4 tiles (cell grown to ~10km to fit `max_tiles: 4`): tiles returned
+      110 / 100 / 20 / 20 = 250 raw listings, **107 businesses NEW to a DB that already held the
+      full 709-lead 3-category x 5-city campaign**. Birmingham coverage 221 -> 310 (+40%) from ONE
+      category in ONE city. 0 degraded queries, **0 duplicate place_ids** after the cross-tile merge.
+      Proves the ~106/query ceiling is server-side and that tiling defeats it. Default stays
+      `grid_mode: off` (tiling needs a Nominatim geocode per area and multiplies query count);
+      enable per workspace with `leadforge config set discovery.grid_mode auto`.
 - [x] **U4.5** Browser escalation — **LIVE-PROVEN 2026-08-31 (v0.2.0)** via `leadforge render-check`
       against 7 real Birmingham sites: `shamsautos.com` 403s the plain client, renders in a real
       browser, and yields 1 email the static path lost — the fallback's whole purpose, demonstrated
