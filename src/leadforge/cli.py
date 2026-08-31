@@ -44,13 +44,14 @@ def _say(ctx: typer.Context, *lines: str) -> None:
 
 # ----------------------------------------------------------------------------- doctor
 @app.command()
-def doctor(ctx: typer.Context, fix: bool = typer.Option(False, "--fix"), strict: bool = typer.Option(False, "--strict")):
+def doctor(ctx: typer.Context, fix: bool = typer.Option(False, "--fix"), strict: bool = typer.Option(False, "--strict"),
+           full: bool = typer.Option(False, "--full", help="with --fix: also install the quality extras ([ner] GLiNER + [browser] crawl4ai)")):
     """Verify and (with --fix) install the runtime environment + pinned scraper binary."""
     from leadforge.doctor import run_doctor
 
     cfg = _cfg(ctx)
     try:
-        rep = run_doctor(cfg, fix=fix, strict=strict)
+        rep = run_doctor(cfg, fix=fix, strict=strict, full=full)
     except LeadForgeError as e:
         emit_digest(False, "doctor", warnings=[str(e)[:120]], next_="fix the reported item then re-run")
         raise typer.Exit(e.exit_code) from e

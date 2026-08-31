@@ -39,6 +39,19 @@ _REGION_REMINDER = {
 }
 
 
+def _display_phone(e164: str | None) -> str:
+    """"+44 1483 456363", not "+441483456363": Excel coerces a leading-+ digit run to a number
+    (4.41483E+11); the spaced international format survives as text in both XLSX and CSV."""
+    if not e164:
+        return ""
+    try:
+        import phonenumbers
+        return phonenumbers.format_number(phonenumbers.parse(e164, None),
+                                          phonenumbers.PhoneNumberFormat.INTERNATIONAL)
+    except Exception:  # noqa: BLE001 — display formatting must never lose the number
+        return e164
+
+
 def _row_for(conn: sqlite3.Connection, s) -> dict:
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
@@ -58,7 +71,9 @@ def _row_for(conn: sqlite3.Connection, s) -> dict:
         "Score": round(s["total"]), "Tier": s["tier"], "Business": s["name"], "Category": s["category"] or "",
         "DM Name": dm["name"] if dm else "", "DM Title": dm["title"] if dm else "",
         "DM Conf": round(dm["dm_confidence"], 2) if dm else "",
-        "Phone": s["phone_e164"] or s["phone_raw"] or "", "Email": best_email[0], "Email Tier": best_email[1],
+        "Phone": _display_phone(s["phone_e164"]) or s["phone_raw"]
+                 or _display_phone(next((c["value"] for c in contacts if c["kind"] == "phone"), None)),
+        "Email": best_email[0], "Email Tier": best_email[1],
         "Website": s["website"] or "", "Address": s["address_street"] or s["address_full"] or "",
         "City": s["address_city"] or "", "Region": s["address_region"] or "", "Postal": s["address_postal"] or "",
         "Country": s["address_country"] or "", "Rating": s["rating"] if s["rating"] is not None else "",
@@ -109,7 +124,9 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
     tier_col = COLUMNS.index("Tier") + 1
     web_col = COLUMNS.index("Website") + 1
     maps_col = COLUMNS.index("Maps") + 1
+    phone_col = COLUMNS.index("Phone") + 1
     for ri in range(2, len(rows) + 2):
+        ws.cell(row=ri, column=phone_col).number_format = "@"  # text — never scientific notation
         tier = ws.cell(row=ri, column=tier_col).value
         fill = _TIER_FILL.get(tier)
         if fill:

@@ -14,8 +14,11 @@ import phonenumbers
 from selectolax.parser import HTMLParser
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+# Deliberate obfuscation only: "[at]"/"(at)"/" at " + "[dot]"/"(dot)"/" dot ". A bare "@" or "."
+# is already a plain email (EMAIL_RE) — matching it here split ordinary words ("strategy.in" -> str@egy.in).
 AT_DOT_RE = re.compile(
-    r"([A-Za-z0-9._%+\-]+)\s*(?:\[|\()?\s*(?:at|@)\s*(?:\]|\))?\s*([A-Za-z0-9\-]+)\s*(?:\[|\()?\s*(?:dot|\.)\s*(?:\]|\))?\s*([A-Za-z]{2,})",
+    r"\b([A-Za-z0-9._%+\-]+)\s*(?:\[\s*at\s*\]|\(\s*at\s*\)|\sat\s)\s*([A-Za-z0-9\-]+)"
+    r"\s*(?:\[\s*dot\s*\]|\(\s*dot\s*\)|\sdot\s)\s*([A-Za-z]{2,})\b",
     re.IGNORECASE,
 )
 CFEMAIL_RE = re.compile(r'data-cfemail="([0-9a-fA-F]+)"')
@@ -31,7 +34,9 @@ TITLE_WORDS = (
     "supervisor", "head of", "chief", "proprietor", "geschäftsführer", "inhaber",
 )
 TITLE_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in TITLE_WORDS) + r")\b", re.IGNORECASE)
-NAME_RE = re.compile(r"\b([A-Z][a-z]{1,15}(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-z]{1,20}){1,2})\b")
+# [ \t] only between name words: a newline between two capitalized words is a layout boundary,
+# not a name ("Max Sherwin\nMax is..." must yield "Max Sherwin", never "Sherwin\nMax").
+NAME_RE = re.compile(r"\b([A-Z][a-z]{1,15}(?:[ \t]+[A-Z]\.)?(?:[ \t]+[A-Z][a-z]{1,20}){1,2})\b")
 NAME_STOPWORDS = {
     "our team", "the team", "contact us", "about us", "read more", "learn more", "get in", "call us",
     "monday friday", "customer service", "quality service", "family owned",
@@ -90,6 +95,23 @@ def extract_emails(html: str, text: str) -> dict[str, str]:
     for m in AT_DOT_RE.finditer(text):
         _add(f"{m.group(1)}@{m.group(2)}.{m.group(3)}")
     return found
+
+
+FREEMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "hotmail.co.uk", "yahoo.com",
+    "yahoo.co.uk", "icloud.com", "aol.com", "btinternet.com", "live.com", "live.co.uk",
+    "protonmail.com", "proton.me", "mail.com", "me.com", "msn.com",
+}
+
+
+def email_matches_business(email: str, business_domain: str | None) -> bool:
+    """An email found on a business's own site is theirs only if its domain is the site's domain
+    (any subdomain) or a personal freemail box. Anything else is a testimonial/client/widget email."""
+    if not business_domain:
+        return True  # nothing to compare against; keep and let validation tier it
+    dom = email.rsplit("@", 1)[-1].lower().removeprefix("www.")
+    biz = business_domain.lower().removeprefix("www.")
+    return dom == biz or dom.endswith("." + biz) or biz.endswith("." + dom) or dom in FREEMAIL_DOMAINS
 
 
 def extract_phones(html: str, text: str, region: str) -> list[str]:
@@ -194,17 +216,24 @@ def _gliner_model():
 def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
     """GLiNER path — same return type and caps as extract_people(); caller falls back when unavailable."""
     model = _gliner_model()
-    ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.5)
+    # 0.4 keeps short titles like "Owner" (scores ~0.45) that 0.5 drops.
+    ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.4)
     names = [e for e in ents if e["label"] == "person name"]
     titles = [e for e in ents if e["label"] == "job title"]
+
+    def _gap(t, n):
+        # character gap between the two spans (0 when adjacent/overlapping)
+        return max(t["start"] - n["end"], n["start"] - t["end"], 0)
+
     out: list[PersonCandidate] = []
     seen: set[str] = set()
     for n in names:
         key = n["text"].casefold()
         if key in seen:
             continue
-        near = [t for t in titles if abs(t["start"] - n["end"]) <= 80 or abs(n["start"] - t["end"]) <= 80]
-        title = min(near, key=lambda t: min(abs(t["start"] - n["end"]), abs(n["start"] - t["end"])))["text"] if near else ""
+        # a title belongs to a name only when nearly adjacent — 40 chars, not a whole sentence away
+        near = [t for t in titles if _gap(t, n) <= 40]
+        title = min(near, key=lambda t: _gap(t, n))["text"] if near else ""
         seen.add(key)
         snip_start = max(0, n["start"] - 140)
         snippet = re.sub(r"\s+", " ", text[snip_start : snip_start + 300]).strip()

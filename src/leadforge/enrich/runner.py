@@ -122,7 +122,10 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
              registries: list | None = None, social_ok: bool = False) -> None:
     counts["sites_crawled"] += 1
     bid = b["id"]
+    from leadforge.enrich.extract import email_matches_business
     for email, meta in res["emails"].items():
+        if not email_matches_business(email, b["domain"]):
+            continue  # testimonial/client/widget email from someone else's domain
         tier, vmeta = validate_email(email, meta["label"], cfg)
         if tier == "valid":
             counts["emails_valid"] += 1

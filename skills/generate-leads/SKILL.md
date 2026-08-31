@@ -26,7 +26,7 @@ interview → launch → adjudicate decision makers → deliver.
 Run from the repo/workspace directory the user chose (any folder works; state lives in `./leadforge_data/`).
 
 ```bash
-leadforge doctor --fix --json   # installs missing deps + pinned scraper binary; safe to run every time
+leadforge doctor --fix --full --json  # first-time setup: deps, scraper binary, quality extras (NER+browser); safe to re-run
 ```
 
 If `leadforge` isn't on PATH: `pip install -e <repo-root>` first (repo-root = directory containing `pyproject.toml`; on install failure

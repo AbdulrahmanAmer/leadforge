@@ -140,9 +140,31 @@ def gosom_runs(path: Path) -> bool:
 
 
 # ------------------------------------------------------------------ checks
-def run_doctor(cfg: Config, fix: bool = False, strict: bool = False) -> DoctorReport:
+def install_quality_extras(rep_add) -> None:
+    """--fix --full: install the enrichment-quality extras ([ner] GLiNER, [browser] crawl4ai)
+    so a fresh machine's first bootstrap yields full-quality sheets, not the heuristic floor."""
+    root = _repo_root()
+    for extra, probe_mod, post in (("ner", "gliner", None), ("browser", "crawl4ai", "crawl4ai-setup")):
+        already = _importable(probe_mod)
+        if not already:
+            proc = subprocess.run([sys.executable, "-m", "pip", "install", "-e", f"{root}[{extra}]"],
+                                  capture_output=True, encoding="utf-8", errors="replace")
+            ok = proc.returncode == 0 and _importable(probe_mod)
+        else:
+            ok = True
+        if ok and post and shutil.which(post):
+            subprocess.run([shutil.which(post)], capture_output=True, encoding="utf-8",
+                           errors="replace", timeout=600)
+        rep_add(CheckResult(f"extra-{extra}", ok, fixed=ok and not already,
+                            msg="installed" if ok else "install failed",
+                            hint="" if ok else f"pip install -e {root}[{extra}]"))
+
+
+def run_doctor(cfg: Config, fix: bool = False, strict: bool = False, full: bool = False) -> DoctorReport:
     rep = DoctorReport()
     add = rep.results.append
+    if fix and full:
+        install_quality_extras(add)
 
     ver = sys.version_info
     add(CheckResult("python>=3.11", ver >= (3, 11), msg=f"{ver.major}.{ver.minor}.{ver.micro}",

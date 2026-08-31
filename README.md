@@ -33,7 +33,7 @@ the agent **under ~15k tokens** — the pipeline itself processes hundreds of pa
 Then, once, in the folder where you want your lead data to live:
 
 ```bash
-leadforge doctor --fix     # installs missing Python deps + downloads the pinned scraper binary for your OS
+leadforge doctor --fix --full  # installs deps, pinned scraper binary, AND the quality extras (GLiNER NER + crawl4ai browser)
 ```
 
 Requires **Python 3.11+**. No compiler needed — every default dependency is a pure-python wheel.

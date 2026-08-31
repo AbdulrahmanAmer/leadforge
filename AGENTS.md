@@ -23,7 +23,7 @@ The same instructions are pasteable from `icm/PROMPT.txt`.
 pip install -e .[dev]      # install (never needs a compiler; pure-python wheels)
 pytest -q                  # test suite — must stay green
 ruff check src tests       # lint
-leadforge doctor --fix     # bootstrap runtime deps (downloads pinned scraper binary)
+leadforge doctor --fix --full  # bootstrap EVERYTHING: runtime deps, pinned scraper binary, quality extras (NER + browser)
 ```
 
 ## Working on the codebase
@@ -48,5 +48,5 @@ leadforge doctor --fix     # bootstrap runtime deps (downloads pinned scraper bi
 | Claude Code | `/plugin marketplace add AbdulrahmanAmer/leadforge` → `/plugin install leadforge@leadforge` |
 | Codex | `codex plugin marketplace add AbdulrahmanAmer/leadforge` → install "LeadForge" from `/plugins` |
 | Any Agent-Skills harness | `npx skills add AbdulrahmanAmer/leadforge` (or `python install.py`) |
-| Plain CLI | `pip install -e . && leadforge doctor --fix` |
+| Plain CLI | `pip install -e . && leadforge doctor --fix --full` |
 

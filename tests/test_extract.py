@@ -108,3 +108,38 @@ def test_stopword_name_yields_no_candidate():
     from leadforge.enrich.extract import extract_people
     text = "Our Owner And The Team are here to help."
     assert extract_people(text, "http://x") == []
+
+
+# --- sheet-quality fixes (found in the first live UK run) ------------------------------------
+def test_at_dot_does_not_split_ordinary_words():
+    from leadforge.enrich.extract import extract_emails
+    text = "Our webstrategy.info page and the tool at gov site. See strategy.in detail."
+    out = extract_emails("", text)
+    assert out == {}, f"junk extracted: {out}"
+
+
+def test_at_dot_still_decodes_real_obfuscation():
+    from leadforge.enrich.extract import extract_emails
+    out = extract_emails("", "reach me: jane [at] acme-books [dot] co")
+    assert "jane@acme-books.co" in out
+    out2 = extract_emails("", "write to bob at acmebooks dot com for help")
+    assert "bob@acmebooks.com" in out2
+
+
+def test_person_name_never_crosses_newline():
+    from leadforge.enrich.extract import extract_people
+    text = "decided to set up a business. Max Sherwin\nMax is the other founding director."
+    people = extract_people(text, "http://x")
+    assert people and people[0].name == "Max Sherwin"
+    assert "\n" not in people[0].name
+
+
+def test_email_matches_business():
+    from leadforge.enrich.extract import email_matches_business
+    assert email_matches_business("info@acme.co.uk", "acme.co.uk")
+    assert email_matches_business("bob@mail.acme.co.uk", "acme.co.uk")
+    assert email_matches_business("owner@gmail.com", "acme.co.uk")  # freemail ok
+    assert not email_matches_business("str@egy.in", "whittingtons.net")
+    assert not email_matches_business("tool@gov.uk", "bluetickaccountants.com")
+    assert not email_matches_business("client@othersite.com", "acme.co.uk")
+    assert email_matches_business("x@anything.com", None)  # no domain to compare

@@ -93,14 +93,14 @@ def main() -> int:
         if r.returncode != 0:
             print("! pip install failed — install manually: pip install -e .")
         else:
-            print("ok. next: leadforge doctor --fix")
+            print("ok. next: leadforge doctor --fix --full")
 
     print(
         "\nPreferred install routes (no bridge needed):\n"
         "  Claude Code : /plugin marketplace add AbdulrahmanAmer/leadforge  →  /plugin install leadforge@leadforge\n"
         "  Codex       : codex plugin marketplace add AbdulrahmanAmer/leadforge  →  install from /plugins\n"
         "  Any harness : npx skills add AbdulrahmanAmer/leadforge\n"
-        "Then run: leadforge doctor --fix"
+        "Then run: leadforge doctor --fix --full"
     )
     return 0
 
