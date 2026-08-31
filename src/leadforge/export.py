@@ -163,7 +163,7 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str] = COLUMNS) -> Pa
         w = csv.DictWriter(fh, fieldnames=columns)
         w.writeheader()
         for r in rows:
-            w.writerow(r)
+            w.writerow({k: (v if v != "" else "-") for k, v in r.items() if k in columns})
     return path
 
 
@@ -179,7 +179,7 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
         c.font = _HEADER_FONT
         c.alignment = Alignment(vertical="center")
     for r in rows:
-        ws.append([r.get(c, '') for c in columns])
+        ws.append([(r.get(c, '') if r.get(c, '') != '' else '-') for c in columns])
     # styling: tier fill, hyperlinks, zebra, widths
     tier_col = columns.index("Tier") + 1
     web_col = columns.index("Website") + 1

@@ -154,27 +154,66 @@ def social_network(url: str) -> str | None:
 
 
 # --- progress heartbeat (v0.1.3) -------------------------------------------------------------
-# Long stages used to be silent for hours. Two bounded channels, safe under the token contract:
-#  - stdout: one `LF_PROGRESS {json}` line per unit of work (agents may read or ignore; docs/06)
-#  - stderr: an in-place progress bar, only when stderr is an interactive terminal (humans)
+# Two mutually exclusive channels, chosen by where output is going:
+#  - agent/pipe (stdout not a TTY): bounded `LF_PROGRESS {json}` lines on stdout (docs/06)
+#  - human terminal (stderr a TTY): ONE in-place animated bar with %, ETA and live status;
+#    each finished stage collapses to a permanent one-line summary above the bar (the history).
+_PROG = {"stage": None, "start": 0.0, "spin": 0}
+_SPINNER = "|/-\\"
+_CLEAR = "\r\x1b[2K"
+
+
+def _fmt_secs(sec: float) -> str:
+    sec = int(sec)
+    if sec >= 3600:
+        return f"{sec // 3600}h{(sec % 3600) // 60:02d}m"
+    if sec >= 60:
+        return f"{sec // 60}m{sec % 60:02d}s"
+    return f"{sec}s"
+
+
 def emit_progress(stage: str, done: int, total: int | None, msg: str = "") -> None:
     import json as _json
     import sys as _sys
+    import time as _time
 
-    payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
-    print("LF_PROGRESS " + _json.dumps(payload, ensure_ascii=False), flush=True)
     try:
-        if _sys.stderr.isatty():
-            if total:
-                width = 24
-                filled = max(0, min(width, round(width * done / total)))
-                bar = "#" * filled + "-" * (width - filled)
-                line = f"[{bar}] {done}/{total} {stage}" + (f" · {msg[:60]}" if msg else "")
-            else:
-                line = f"[{stage}] {done} done" + (f" · {msg[:60]}" if msg else "")
-            _sys.stderr.write("\r" + line.ljust(100)[:100])
-            if total and done >= total:
-                _sys.stderr.write("\n")
-            _sys.stderr.flush()
+        human = _sys.stderr.isatty()
+    except Exception:  # noqa: BLE001
+        human = False
+
+    if not human:
+        payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
+        print("LF_PROGRESS " + _json.dumps(payload, ensure_ascii=False), flush=True)
+        return
+
+    try:
+        now = _time.monotonic()
+        if _PROG["stage"] != stage:
+            if _PROG["stage"] is not None:  # previous stage becomes a permanent history line
+                _sys.stderr.write(_CLEAR + f"\x1b[32m[done]\x1b[0m {_PROG['stage']} "
+                                  f"({_fmt_secs(now - _PROG['start'])})\n")
+            _PROG.update(stage=stage, start=now)
+        _PROG["spin"] = (_PROG["spin"] + 1) % len(_SPINNER)
+        spin = _SPINNER[_PROG["spin"]]
+        elapsed = now - _PROG["start"]
+        if total:
+            pct = min(100, round(100 * done / max(1, total)))
+            width = 22
+            filled = min(width, round(width * done / max(1, total)))
+            bar = "\x1b[36m" + "█" * filled + "\x1b[90m" + "░" * (width - filled) + "\x1b[0m"
+            eta = f" ~{_fmt_secs(elapsed / done * (total - done))} left" if 0 < done < total else ""
+            line = (f"{spin} \x1b[1m{stage}\x1b[0m {bar} {pct:3d}% ({done}/{total})"
+                    f"  {msg[:46]}  {_fmt_secs(elapsed)}{eta}")
+        else:
+            line = f"{spin} \x1b[1m{stage}\x1b[0m  {done} done  {msg[:56]}  {_fmt_secs(elapsed)}"
+        _sys.stderr.write(_CLEAR + line)
+        if total and done >= total:
+            _sys.stderr.write(_CLEAR + f"\x1b[32m[done]\x1b[0m {stage} {total}/{total} "
+                              f"({_fmt_secs(elapsed)})\n")
+            _PROG["stage"] = None
+        _sys.stderr.flush()
     except Exception:  # noqa: BLE001 — a broken terminal must never break the pipeline
         pass
+
+
