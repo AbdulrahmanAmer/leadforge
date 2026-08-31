@@ -1,0 +1,77 @@
+"""v0.1.4: summary/report stats count only REAL data — placeholder cells are for humans on the
+phone, not for coverage metrics (live 709-run reported with_dm=709 when 330 were placeholders) —
+and registry 'SURNAME, Given Names' officers read naturally on the sheet."""
+import csv
+import json
+
+from leadforge import db
+from leadforge.util import natural_name
+
+
+def _minimal_icp():
+    from leadforge.models import ICP
+    return ICP.model_validate({"campaign": "t", "offer": {"what": "x"},
+                               "target": {"categories": ["garage"],
+                                          "geography": {"areas": ["Guildford"], "country": "GB"}}})
+
+
+def _seeded_run(tmp_path, monkeypatch):
+    """Two scored businesses: one with a real registry DM + valid email, one with nothing."""
+    from leadforge.config import load_config
+    from leadforge.models import Business, Contact, Person, Score, ScoreFactor
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    rid = db.create_run(conn, "icp.yaml", "h")
+    db.upsert_business(conn, Business(id="real", run_id=rid, name="Real Garage", source="gosom",
+                                      website="https://real.example", phone_e164="+441483123456",
+                                      dedupe_key="dk-real"))
+    db.upsert_business(conn, Business(id="bare", run_id=rid, name="Bare Garage", source="gosom",
+                                      dedupe_key="dk-bare"))
+    db.add_person(conn, Person(business_id="real", name="Murphy, Sean Vincent", title="Director",
+                               labeled_by="registry", is_dm=1, dm_confidence=0.9))
+    db.add_contact(conn, Contact(business_id="real", kind="email", value="sean@real.example",
+                                 label="direct", tier="valid"))
+    for bid in ("real", "bare"):
+        db.save_score(conn, Score(business_id=bid, run_id=rid, total=60, tier="B",
+                                  factors=[ScoreFactor(factor="x", group="fit", weight=1, score=1,
+                                                       points=1, why="w")]))
+    return cfg, conn, rid
+
+
+def test_report_counts_only_real_dm_and_email(tmp_path, monkeypatch):
+    from leadforge.export import export_run
+    cfg, conn, rid = _seeded_run(tmp_path, monkeypatch)
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["csv"])
+    report_path = next(a for a in arts if a.endswith("report.json"))
+    report = json.loads(open(report_path, encoding="utf-8").read())
+    assert report["total"] == 2
+    assert report["with_dm"] == 1      # the "not identified" placeholder row must not count
+    assert report["with_email"] == 1   # nor "no website to crawl"
+
+
+def test_sheet_stays_fully_resolved_and_private_keys_stay_private(tmp_path, monkeypatch):
+    from leadforge.export import export_run
+    cfg, conn, rid = _seeded_run(tmp_path, monkeypatch)
+    arts = export_run(conn, _minimal_icp(), rid, cfg.exports_dir, ["csv"])
+    csv_path = next(a for a in arts if a.endswith(".csv"))
+    with open(csv_path, encoding="utf-8-sig") as fh:
+        rdr = csv.DictReader(fh)
+        rows = list(rdr)
+        assert not [k for k in rdr.fieldnames if k.startswith("_")]  # honesty flags never exported
+    named = next(r for r in rows if r["Business"] == "Real Garage")
+    assert named["DM Name"] == "Sean Vincent Murphy"  # natural order on the sheet, even from old DBs
+    assert named["Call Readiness"] == "READY - named contact"
+    bare = next(r for r in rows if r["Business"] == "Bare Garage")
+    assert bare["DM Name"].startswith("not identified")  # zero-blank-cell rule unchanged
+    assert bare["Email"] == "no website to crawl"
+
+
+def test_natural_name_rules():
+    assert natural_name("Murphy, Sean Vincent") == "Sean Vincent Murphy"
+    assert natural_name("MURPHY, Sean") == "Sean MURPHY"              # casing is the caller's job
+    assert natural_name("Jane Smith") == "Jane Smith"                 # already natural
+    assert natural_name("Acme Widgets, Inc") == "Acme Widgets, Inc"   # corporate comma stays
+    assert natural_name("SMITH, John, Jr") == "SMITH, John, Jr"       # two commas: don't guess
+    assert natural_name(" SMITH ,  Jane ") == "Jane SMITH"
+    assert natural_name("") == ""

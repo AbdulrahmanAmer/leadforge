@@ -47,7 +47,7 @@ def test_companies_house_maps_active_officers(tmp_path, monkeypatch):
     assert profile["sic_codes"] == ["45200"] and profile["incorporated"] == "2003-02-01"
     assert len(out) == 1  # resigned officer excluded
     person, ev = out[0]
-    assert person.name == "Smith, Jane"
+    assert person.name == "Jane Smith"  # 'SMITH, Jane' registry order flipped for the call sheet
     assert person.title == "Director"
     assert person.labeled_by == "registry" and person.is_dm == 0
     assert ev.fact == "registry_officer" and "01234567" in ev.url

@@ -30,7 +30,7 @@ import threading
 import time
 
 from leadforge.models import Evidence, Person
-from leadforge.util import LOG, now_iso
+from leadforge.util import LOG, natural_name, now_iso
 
 CH_BASE = "https://api.company-information.service.gov.uk"
 OC_BASE = "https://api.opencorporates.com/v0.4"
@@ -138,7 +138,8 @@ class CompaniesHouseRegistry:
                     if off.get("resigned_on"):
                         continue
                     role = _humanize(str(off.get("officer_role") or "officer"))
-                    person = Person(business_id=business_row["id"], name=str(off.get("name") or "").title(),
+                    person = Person(business_id=business_row["id"],
+                                    name=natural_name(str(off.get("name") or "")).title(),
                                     title=role, labeled_by="registry", is_dm=0, source_url=profile_url)
                     ev = Evidence(business_id=business_row["id"], ref_table="people", fact="registry_officer",
                                   url=profile_url, snippet=f"{role} — appointed {off.get('appointed_on', '?')}",
@@ -194,7 +195,8 @@ class OpenCorporatesRegistry:
                     if o.get("end_date"):
                         continue
                     role = _humanize(str(o.get("position") or "officer"))
-                    person = Person(business_id=business_row["id"], name=str(o.get("name") or "").title(),
+                    person = Person(business_id=business_row["id"],
+                                    name=natural_name(str(o.get("name") or "")).title(),
                                     title=role, labeled_by="registry", is_dm=0, source_url=url)
                     ev = Evidence(business_id=business_row["id"], ref_table="people", fact="registry_officer",
                                   url=url, snippet=f"{role} — {o.get('start_date', '?')}", observed_at=now_iso())

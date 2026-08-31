@@ -114,6 +114,22 @@ def slugify(text: str) -> str:
     return text or "x"
 
 
+_LEGAL_SUFFIX_RE = re.compile(r"^(inc|llc|ltd|llp|plc|co|corp|corporation|gmbh|sa|bv)\.?$", re.IGNORECASE)
+
+
+def natural_name(raw: str) -> str:
+    """'SURNAME, Given Names' (how corporate registries list officers) -> 'Given Names Surname'.
+    Anything not person-shaped passes through unchanged: no comma, two commas, or a legal
+    suffix after the comma ('Acme Widgets, Inc'). Casing is left to the caller."""
+    raw = (raw or "").strip()
+    if raw.count(",") == 1:
+        last, _, given = raw.partition(",")
+        last, given = last.strip(), given.strip()
+        if last and given and not _LEGAL_SUFFIX_RE.match(given):
+            return f"{given} {last}"
+    return raw
+
+
 # Minimal multi-label public suffixes we care about for apex-domain extraction without a PSL dep.
 _CC_SLD = {
     "co.uk", "org.uk", "me.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz",

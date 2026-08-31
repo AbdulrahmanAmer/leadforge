@@ -17,7 +17,7 @@ from openpyxl.utils import get_column_letter
 
 from leadforge import db
 from leadforge.models import ICP
-from leadforge.util import now_iso
+from leadforge.util import natural_name, now_iso
 
 COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
@@ -77,7 +77,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
         verified = max((e["observed_at"] for e in ev), default="")
     row = {
         "Score": round(s["total"]), "Tier": s["tier"], "Business": s["name"], "Category": s["category"] or "",
-        "DM Name": dm["name"] if dm else "", "DM Title": dm["title"] if dm else "",
+        "DM Name": natural_name(dm["name"]) if dm else "", "DM Title": dm["title"] if dm else "",
         "DM Conf": round(dm["dm_confidence"], 2) if dm else "",
         "Phone": _display_phone(s["phone_e164"]) or s["phone_raw"]
                  or _display_phone(next((c["value"] for c in contacts if c["kind"] == "phone"), None)),
@@ -93,6 +93,11 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     enrich_all = json.loads(s["enrich_json"]) if s["enrich_json"] else {}
     regp = enrich_all.get("registry_profile") or {}
     crawled = bool(enrich_all.get("crawled_at"))
+    # Honesty markers for the Summary/report stats, captured BEFORE the placeholder text below
+    # fills the cells — "not identified - ask for owner/manager" must never count as a DM.
+    # Underscore keys are stripped by the writers (they only emit `columns`).
+    row["_has_email"] = bool(row["Email"])
+    row["_has_dm"] = bool(row["DM Name"])
     # No unresolved cells: a blank is replaced by WHY it is blank, so callers know what they hold.
     if not row["Email"]:
         row["Email"] = "none published" if crawled else ("no website to crawl" if not row["Website"] else "site not crawled")
@@ -107,7 +112,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     row["Company Status"] = regp.get("company_status") or "-"
     row["SIC Codes"] = ", ".join(regp.get("sic_codes") or []) or "-"
     has_phone = bool(row["Phone"])
-    has_dm = not row["DM Name"].startswith("not identified")
+    has_dm = row["_has_dm"]
     row["Call Readiness"] = ("READY - named contact" if has_phone and has_dm
                              else "READY - ask switchboard" if has_phone
                              else "NO PHONE - research first")
@@ -213,8 +218,7 @@ def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> Non
     for r in rows:
         if r["Likely Need (Hook)"]:
             hook_counts[r["Likely Need (Hook)"]] = hook_counts.get(r["Likely Need (Hook)"], 0) + 1
-    with_dm = sum(1 for r in rows if r["DM Name"])
-    with_email = sum(1 for r in rows if r["Email"])
+    with_dm, with_email = _real_counts(rows)
     lines = [
         ("LeadForge campaign", icp.campaign),
         ("Offer", icp.offer.what),
@@ -258,12 +262,18 @@ def _about_sheet(wb: Workbook) -> None:
     ws.column_dimensions["B"].width = 100
 
 
+def _real_counts(rows: list[dict]) -> tuple[int, int]:
+    """(with_dm, with_email) counting only real data — placeholder cells don't inflate coverage."""
+    return (sum(1 for r in rows if r.get("_has_dm")), sum(1 for r in rows if r.get("_has_email")))
+
+
 def _write_report(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
+    with_dm, with_email = _real_counts(rows)
     report = {
         "run": run_id, "campaign": icp.campaign, "generated": now_iso(), "total": len(rows),
         "tiers": {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "DQ")},
-        "with_dm": sum(1 for r in rows if r["DM Name"]),
-        "with_email": sum(1 for r in rows if r["Email"]),
+        "with_dm": with_dm,
+        "with_email": with_email,
     }
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return path
