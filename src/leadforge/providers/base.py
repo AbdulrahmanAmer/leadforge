@@ -33,15 +33,44 @@ class DiscoveryProvider(ABC):
 
 PROVIDERS: dict[str, type[DiscoveryProvider]] = {}
 
+# v0.3: every provider registers its own raw-field map so normalize.to_business can dispatch on
+# RawListing.provider instead of assuming gosom's field names.
+FIELD_MAPS: dict[str, dict[str, list[str]]] = {}
+
 
 def register(cls: type[DiscoveryProvider]) -> type[DiscoveryProvider]:
     PROVIDERS[cls.name] = cls
+    fmap = getattr(cls, "FIELD_MAP", None)
+    if isinstance(fmap, dict):
+        FIELD_MAPS[cls.name] = fmap
     return cls
+
+
+def register_field_map(name: str, fmap: dict[str, list[str]]) -> None:
+    FIELD_MAPS[name] = fmap
+
+
+def get_field_map(name: str) -> dict[str, list[str]] | None:
+    if name not in FIELD_MAPS:
+        _import_builtins()
+    return FIELD_MAPS.get(name)
+
+
+def _import_builtins() -> None:
+    """Import the built-in providers so their @register / field maps run (each import is optional so a
+    half-built provider module never takes the others down)."""
+    import importlib
+
+    for mod in ("gosom", "fallback_rest", "dvsa", "companies_house"):
+        try:
+            importlib.import_module(f"leadforge.providers.{mod}")
+        except ImportError:
+            continue
 
 
 def get_chain(cfg: Config, only: str | None = None) -> list[DiscoveryProvider]:
     # imports here so registration happens on demand without import cycles
-    from leadforge.providers import fallback_rest, gosom  # noqa: F401
+    _import_builtins()
 
     names = [only] if only else cfg.discovery.providers
     chain: list[DiscoveryProvider] = []

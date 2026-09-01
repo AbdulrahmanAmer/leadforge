@@ -200,6 +200,14 @@ def enrich(
 dm_app = typer.Typer(help="Decision-maker labeling loop.")
 app.add_typer(dm_app, name="dm")
 
+# v0.3 sub-apps (ADR-011/012): outreach lifecycle + agent drafting. Each lives in its own module so the
+# units that build them never edit this file.
+from leadforge.draft.cli import draft_app  # noqa: E402
+from leadforge.outreach.cli import outreach_app  # noqa: E402
+
+app.add_typer(outreach_app, name="outreach")
+app.add_typer(draft_app, name="draft")
+
 
 @dm_app.command("export")
 def dm_export(
@@ -526,11 +534,28 @@ def version():
     emit_digest(True, "version", counts={}, warnings=[], next_=None)
 
 
+_ROOT_FLAGS = ("--json", "--verbose")
+
+
+def _hoist_root_flags(argv: list[str]) -> list[str]:
+    """`--json` / `--verbose` are root options, but every skill example (and every agent) writes them
+    after the subcommand — `leadforge plan --icp x --json` — which Typer rejects. Hoist them to the
+    front so both spellings work. Values after `--` are left alone."""
+    if "--" in argv:
+        head, tail = argv[: argv.index("--")], argv[argv.index("--"):]
+    else:
+        head, tail = argv, []
+    hoisted = [a for a in head if a in _ROOT_FLAGS]
+    rest = [a for a in head if a not in _ROOT_FLAGS]
+    return hoisted + rest + tail
+
+
 def main() -> None:
     # Digest lines must be UTF-8 regardless of platform locale (Windows pipes default to cp1252).
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
+    sys.argv[1:] = _hoist_root_flags(sys.argv[1:])
     try:
         app()
     except (SystemExit, KeyboardInterrupt):

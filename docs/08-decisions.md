@@ -64,4 +64,44 @@ ACTIVE INDIVIDUAL officer (corporate officers like "X Ltd/LLP" excluded by name 
 them the DM automatically (`labeled_by=registry`, confidence 0.9). Zero or 2+ individuals still go to the
 agent. **Consequences:** DM batches shrink dramatically on registry-covered campaigns; the agent's judgment is
 reserved for genuinely ambiguous cases; a wrong registry match remains possible but is bounded by the
-locality-overlap match rule (U4.6).
+locality-overlap match rule (U4.6). *Amended by ADR-013 (v0.3): the match must also pass a name-similarity
+gate and the company must be active; the auto-pick inherits both.*
+
+
+## ADR-011 — Email sending is in scope, under guardrails (v0.3, owner decision 2026-09-02)
+**Context:** `icm/SCOPE.md` #4 and docs/00 §5 excluded sending so the compliance posture could rest on
+"it sends nothing". The owners now need the tool to carry outreach for GainLev and for clients, and the
+measured live campaign showed that the honest sendable list is small (45–100 of 816) while 793 rows have a
+phone. **Decision:** sending is allowed as a bounded, audited extension: phone-first `Next Action`; dry-run
+default; `--live` only with `outreach.armed` + `--i-am`; approval bound to the draft's content hash;
+suppression + eligibility + caps + warm-up + send window re-checked inside the send transaction; RFC 8058
+one-click unsubscribe; automatic suppression from bounces/complaints/unsubscribes/reply opt-outs; per-mailbox
+circuit breaker; Article-14 first-contact line; `client_id` on every identity, target, send and suppression
+row so a client's opt-outs never leak into another list (hybrid controller model — the contract decides
+whether the client or GainLev owns the sending domain). No dialer, no SMS, no probing, no sending to
+non-sendable tiers. **Consequences:** docs/07's PECR/CAN-SPAM row moves from "operator's duty" to
+LeadForge-owned controls; the skill gains an outreach section; SCOPE #4 rewritten; the README no longer
+claims the tool cannot send.
+
+## ADR-012 — Pluggable transport, in-harness drafting, no paid dependencies (v0.3)
+**Context:** the tool is internal open source; the owners want the sending method chosen by the operator at
+send time, not baked in, and no API key required anywhere. **Decision:** a `Transport` ABC with `file`
+(dry-run `.eml`, the default) and `smtp` (stdlib `smtplib` + `imaplib`, any mailbox) built in and an adapter
+registry for platforms later; secrets are referenced by environment-variable *name* in SQLite, never stored.
+Drafting is agent-in-the-loop exactly like DM labeling: `draft export` emits evidence packets, the harness
+writes the two model slots, `draft apply` runs a mechanical no-fabrication gate. Domain resolution in company
+mode uses free methods only (slug candidates + on-page verification). **Consequences:** deliverability
+tooling (warm-up, rotation) is the operator's mailbox provider's job or a later adapter; drafting cost is
+session tokens (bounded by the packet size) rather than an API bill.
+
+## ADR-013 — Registry-first discovery alongside Maps; registry matches gated by name + status (v0.3)
+**Context:** Google Maps serves ~106 results per search server-side; the live campaign covered 4 of 10
+cities and, by phone match, held 317 of the 1,045 MOT stations the DVSA lists in those cities. Companies
+House matches were accepted on locality alone (7–10% wrong company, 26 DMs from dissolved companies).
+**Decision:** official registers are first-class discovery providers — the DVSA "Active MOT test stations"
+CSV (OGL) and Companies House advanced search — merged into Maps rows by E.164 phone; tiled Maps queries
+that saturate (>= `discovery.subdivide_at`) are subdivided automatically; a registry match requires
+`name_similarity >= registry.min_name_similarity` and `company_status == active`, and the profile is
+persisted on every match. Provider field maps are registered per provider (`providers/base.py`).
+**Consequences:** coverage becomes measurable against a denominator; the sheet's Company No column is true;
+dissolved companies never carry a decision maker.

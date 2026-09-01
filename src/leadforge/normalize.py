@@ -157,7 +157,8 @@ def region_for(data_country: str | None, default_region: str) -> str:
 
 def to_business(raw: RawListing, run_id: str, icp: ICP | None, default_region: str = "US") -> Business | None:
     d = raw.data
-    g = GOSOM_FIELD_MAP
+    from leadforge.providers.base import get_field_map
+    g = {**GOSOM_FIELD_MAP, **(get_field_map(raw.provider) or {})}  # v0.3: per-provider field names
     name = _pick(d, g["name"]) or d.get("name")
     if not name:
         return None

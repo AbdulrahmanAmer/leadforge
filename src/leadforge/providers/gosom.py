@@ -192,3 +192,8 @@ GOSOM_FIELD_MAP = {
     "hours": ["open_hours"],
     "maps_url": ["link", "url"],
 }
+GosomProvider.FIELD_MAP = GOSOM_FIELD_MAP  # v0.3: registered for normalize's per-provider dispatch
+
+from leadforge.providers.base import register_field_map as _register_field_map  # noqa: E402
+
+_register_field_map(GosomProvider.name, GOSOM_FIELD_MAP)

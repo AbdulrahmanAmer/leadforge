@@ -209,6 +209,8 @@ class Contact(BaseModel):
     tier: Literal["valid", "risky", "role", "catch_all", "inferred", "unknown", "invalid"] = "unknown"
     verified_at: str = ""
     meta: dict[str, Any] = Field(default_factory=dict)
+    # v0.3: own_domain | freemail_linked | freemail_unlinked | foreign (see extract.classify_email_affinity)
+    affinity: str = ""
 
 
 class Person(BaseModel):
@@ -219,8 +221,9 @@ class Person(BaseModel):
     snippet: str = ""
     dm_confidence: float = 0.0
     is_dm: int = 0               # 1 accepted, 0 unlabeled, -1 rejected
-    labeled_by: str = "heuristic"  # heuristic|agent|registry
+    labeled_by: str = "heuristic"  # heuristic|agent|registry|gbp
     labeled_at: str = ""
+    origin: str = ""               # v0.3: where the candidate came from (heuristic|registry|gbp); survives agent labeling
 
     @field_validator("snippet")
     @classmethod

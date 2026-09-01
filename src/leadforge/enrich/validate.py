@@ -92,3 +92,22 @@ TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown", "inv
 def best_email_tier(tiers: list[str]) -> str:
     present = [t for t in TIER_ORDER if t in tiers]
     return present[0] if present else "unknown"
+
+
+# ============================================================================ v0.3 interface (U9.6)
+_AFFINITY_RANK = {"own_domain": 0, "freemail_linked": 1, "": 2, "freemail_unlinked": 3, "foreign": 4}
+_TIER_RANK = {t: i for i, t in enumerate(TIER_ORDER)}
+
+
+def rank_email_contacts(contacts: list) -> list:
+    """Email contact rows, best first: own-domain valid > own-domain role > linked freemail valid >
+    inferred > risky > unknown > invalid. A freemail box never outranks the business's own mailbox
+    (the v0.2 sheet exported a font designer's gmail above a real info@ three times)."""
+    rows = [c for c in contacts if c["kind"] == "email"]
+
+    def key(c):
+        affinity = c["affinity"] if "affinity" in c.keys() else ""
+        tier = c["tier"] or "unknown"
+        return (_AFFINITY_RANK.get(affinity or "", 2), _TIER_RANK.get(tier, 99), c["value"])
+
+    return sorted(rows, key=key)

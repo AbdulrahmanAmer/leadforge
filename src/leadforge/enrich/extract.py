@@ -266,3 +266,57 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         if len(out) >= max_candidates:
             break
     return out
+
+
+# ============================================================================ v0.3 interfaces (U9.6)
+# Wave-1 unit C1 owns the real implementations; the bodies below are the minimal contract so parallel
+# units can build against the final names today.
+JUNK_LOCALPARTS = {
+    "test", "sample", "demo", "example", "someone", "yourname", "your", "user", "username", "name", "email",
+    "noreply", "no-reply", "no_reply", "donotreply", "postmaster", "abuse", "webmaster", "hostmaster", "root",
+    "mailer-daemon", "null", "none", "asdf", "xxx",
+}
+
+
+def classify_email_affinity(email: str, business_domain: str | None, business_name_norm: str = "",
+                            people_names: list[str] | None = None) -> str:
+    """-> 'own_domain' | 'freemail_linked' | 'freemail_unlinked' | 'foreign'.
+
+    own_domain: the address is on the business's own domain (or a subdomain).
+    freemail_linked: a gmail/hotmail/... box whose local part plausibly belongs to this business — it
+        shares a token (>= 3 chars) or initials with the business name, or matches a person on record
+        ('First Last' or 'Last, First').
+    freemail_unlinked: a freemail box with no such link (a template credit, a client, a stranger).
+    foreign: any other domain — never the business's own."""
+    dom = email.rsplit("@", 1)[-1].casefold().removeprefix("www.")
+    local = email.split("@", 1)[0].casefold()
+    if business_domain:
+        biz = business_domain.casefold().removeprefix("www.")
+        if dom == biz or dom.endswith("." + biz) or biz.endswith("." + dom):
+            return "own_domain"
+    if dom not in FREEMAIL_DOMAINS:
+        return "own_domain" if not business_domain else "foreign"
+    local_alnum = re.sub(r"[^a-z0-9]", "", local)
+    tokens = [t for t in re.split(r"[^a-z0-9]+", (business_name_norm or "").casefold()) if len(t) >= 3]
+    if any(t in local_alnum for t in tokens):
+        return "freemail_linked"
+    initials = "".join(t[0] for t in re.split(r"\s+", (business_name_norm or "").casefold()) if t)
+    if len(initials) >= 2 and local_alnum.startswith(initials):
+        return "freemail_linked"
+    for raw in people_names or []:
+        parts = [re.sub(r"[^a-z0-9]", "", p) for p in re.split(r"[\s,]+", str(raw).casefold()) if p]
+        parts = [p for p in parts if len(p) >= 3]
+        if parts and (any(p in local_alnum for p in parts)):
+            return "freemail_linked"
+    return "freemail_unlinked"
+
+
+def email_context(text: str, email: str, window: int = 90) -> str:
+    """The page text around an address, for the evidence row (was: the bare address, which proves nothing)."""
+    if not text:
+        return email
+    idx = text.casefold().find(email.casefold())
+    if idx < 0:
+        return email
+    start, end = max(0, idx - window), min(len(text), idx + len(email) + window)
+    return " ".join(text[start:end].split())

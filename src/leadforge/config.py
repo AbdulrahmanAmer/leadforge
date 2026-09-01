@@ -18,8 +18,23 @@ class FallbackRestCfg(BaseModel):
     url: str = "http://localhost:8765"
 
 
+class DvsaCfg(BaseModel):
+    """DVSA 'Active MOT test stations' register (gov.uk, OGL, refreshed quarterly) - v0.3 provider `dvsa`."""
+
+    url: str = "https://assets.publishing.service.gov.uk/media/69a0638bc497bac082bc7741/active-mot-stations.csv"
+    refresh_days: int = 90
+
+
+class CompaniesHouseDiscoveryCfg(BaseModel):
+    """Companies House advanced search as a discovery provider (company mode, v0.3)."""
+
+    page_size: int = 100
+    max_hits_per_shard: int = 9000  # the API stops paging at 10k; a bigger shard must be split
+    exclude_sic: list[str] = Field(default_factory=lambda: ["82200"])  # call centres = competitors (owner decision 7)
+
+
 class DiscoveryCfg(BaseModel):
-    providers: list[str] = Field(default_factory=lambda: ["gosom"])
+    providers: list[str] = Field(default_factory=lambda: ["gosom"])  # + "dvsa" | "companies_house" per campaign
     grid_mode: str = "off"  # off | auto — keep off until gosom grid flags are live-verified (U8.2)
     grid_cell_km: float = 3.0
     depth: int = 10
@@ -30,6 +45,14 @@ class DiscoveryCfg(BaseModel):
     proxies: list[str] = Field(default_factory=list)
     email_crawl: bool = False
     fallback_rest: FallbackRestCfg = Field(default_factory=FallbackRestCfg)
+    # v0.3 coverage: explicit [minLng, minLat, maxLng, maxLat] per area label bypasses the geocoder
+    area_bbox: dict[str, list[float]] = Field(default_factory=dict)
+    subdivide_at: int = 100        # a tiled query returning >= this many listings is split into 4 child tiles
+    max_subdivisions: int = 2
+    est_min_per_query: float = 2.0         # measured 2026-08-31: 1.7 min untiled
+    est_min_per_tiled_query: float = 4.0   # measured 2026-08-31: 3.5-4.7 min tiled
+    dvsa: DvsaCfg = Field(default_factory=DvsaCfg)
+    companies_house: CompaniesHouseDiscoveryCfg = Field(default_factory=CompaniesHouseDiscoveryCfg)
 
 
 class CrawlCfg(BaseModel):
@@ -53,11 +76,42 @@ class ValidationCfg(BaseModel):
     # convention is demonstrated by an email already found there. Public evidence + MX only —
     # never SMTP/RCPT probing (icm/SCOPE.md #5). Exported in its own column, never as a found email.
     infer_emails: bool = False
+    # v0.3 (owner decision 5): which freemail addresses count as the business's own -
+    # linked (local part matches the business or a known person), any, none (own-domain only)
+    freemail_policy: str = "linked"
 
 
 class RegistryCfg(BaseModel):
     companies_house_key: str = ""
     opencorporates_token: str = ""
+    min_name_similarity: float = 0.45  # v0.3: a registry hit must also resemble the business name
+    active_only: bool = True           # v0.3: dissolved/liquidated companies are never matched
+
+
+class OutreachCfg(BaseModel):
+    """v0.3 sending layer (ADR-011/012). Nothing sends unless `armed` is true AND `--live` AND `--i-am` agree."""
+
+    armed: bool = False
+    transport: str = "file"            # file (dry-run .eml) | smtp | <registered adapter>
+    require_corporate: bool = False    # owner decision 5: plausibility-linked freemail is mailable by default
+    daily_cap_default: int = 30
+    send_window: str = "09:00-17:00"   # local time of `timezone`
+    timezone: str = "Europe/London"
+    max_touches: int = 2
+    follow_up_days: int = 5
+    bounce_rate_pause: float = 0.03    # hard bounces over the last 100 live sends
+    complaint_rate_pause: float = 0.001
+    inbox_dir: str = "inbox"           # webhook spool + IMAP dumps under data_dir; never printed
+    outbox_dir: str = "outbox"
+
+
+class DraftCfg(BaseModel):
+    """v0.3 agent drafting (in-harness by default: the CLI emits packets, the agent writes the two slots)."""
+
+    packet_max_tokens: int = 350
+    name_policy: str = "gated"         # gated | never | always (owner decision 6)
+    max_observation_words: int = 45
+    max_subject_chars: int = 60
 
 
 class SocialCfg(BaseModel):
@@ -92,6 +146,8 @@ class Config(BaseModel):
     registry: RegistryCfg = Field(default_factory=RegistryCfg)
     social: SocialCfg = Field(default_factory=SocialCfg)
     export: ExportCfg = Field(default_factory=ExportCfg)
+    outreach: OutreachCfg = Field(default_factory=OutreachCfg)
+    draft: DraftCfg = Field(default_factory=DraftCfg)
 
     _workspace: Path = Path(".")
 

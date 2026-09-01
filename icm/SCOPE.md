@@ -34,8 +34,14 @@ is ordinary professional contact data, not private-life data.
   into the output, an opt-out suppression list honored at crawl, score and export time.
 - It is **polite by construction**: robots.txt is honored, one request in flight per host, delays with jitter,
   hard caps, an identifying user-agent. These are enforced in code and covered by tests (ADR-009).
-- It **sends nothing**. There is no email, SMS, or dialer functionality anywhere in the design, so it cannot
-  be a spam tool. It produces a spreadsheet; a human decides what to do with it.
+- It **sends nothing by default, and never without a named human's approval.** Since v0.3 (owner decision,
+  2026-09-02, ADR-011) LeadForge can carry an approved message to an operator-configured mailbox — but the
+  send path is dry-run unless the workspace is explicitly armed, every message is bound to a human approval
+  of its exact content, suppression and eligibility are re-checked inside the send transaction, per-mailbox
+  caps and warm-up are enforced in code, one-click unsubscribe and bounce/complaint ingestion feed the
+  suppression list automatically, and a circuit breaker pauses any mailbox that bounces or draws complaints.
+  It still contains no dialer, no SMS, no mailbox probing and no list-buying. The spreadsheet remains the
+  primary product; sending is a bounded, audited extension of it.
 
 Building, extending, and testing this is normal software engineering work. If you are an agent and something
 in the plan feels like it needs a second look, the answer is almost always in `docs/07-compliance.md` — check
@@ -60,7 +66,17 @@ and say so.
    browser-session auth for several platforms; never configure or use those paths. Business/brand accounts
    only, and only ones the business links from its own site — never search a platform for a person. Store
    metadata (exists / last-post date / follower count), never post content, images, or transcripts.
-4. **No email sending, dialing, or outreach automation.** Not now, not as a "small helper".
+4. **No dialing, no SMS, and no unattended email sending.** *Amended 2026-09-02 (ADR-011):* email
+   sending IS in scope, under these non-negotiable guardrails, each enforced in code and tested:
+   dry-run is the default and `--live` requires `outreach.armed: true` plus `--i-am <approver>`; a
+   message is sendable only while its content hash equals the hash a named human approved; suppression,
+   entity/lawful-basis eligibility, per-mailbox daily caps, warm-up age and send windows are re-checked
+   inside the send transaction; every message carries sender identity, a postal address, an RFC 8058
+   one-click unsubscribe and a first-contact privacy line; bounces, complaints, unsubscribes and reply
+   opt-outs write to the suppression list automatically; a mailbox pauses itself at 3% hard bounces or
+   0.1% complaints. No dialer, no SMS, no purchased lists, no sending to `inferred`, `risky`, `unknown`
+   or `invalid` addresses, ever. The transport is whatever mailbox the operator configures (ADR-012) —
+   LeadForge never bundles or requires a sending service.
 5. **No SMTP RCPT probing / mailbox enumeration.** Email validity stops at syntax + MX + disposable + role
    classification, reported as tiers. (Also the technically correct choice — catch-all domains make probing
    meaningless and it damages IP reputation.)

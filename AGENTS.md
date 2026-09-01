@@ -37,8 +37,11 @@ leadforge doctor --fix --full  # bootstrap EVERYTHING: runtime deps, pinned scra
 - Politeness/compliance invariants (`docs/04` §5, `docs/07`) are load-bearing: robots.txt respect, per-host single-flight + delay,
   caps, suppression filtering, no SMTP probing, no login-gated scraping, no LinkedIn. Never weaken them to "make a test pass".
 - Scope red lines: use the pinned OSS engines as shipped — never write or extend anti-bot/captcha evasion, fake accounts, or
-  fingerprint spoofing; never add outreach/sending features; public business data only. A unit that seems to need any of that is
-  mis-read — stop and flag it (`docs/07-compliance.md` has the reasoning).
+  fingerprint spoofing; no dialer, no SMS, no SMTP probing; public business data only. **Email sending is in scope since v0.3
+  (ADR-011) only inside the outreach package and only with its guardrails intact** — dry-run default, armed + approver for live,
+  approval bound to content hash, suppression/eligibility/caps re-checked at send time, automatic suppression from bounces and
+  complaints. Never weaken those to make a test pass. A unit that seems to need anything beyond that is mis-read — stop and flag
+  it (`icm/SCOPE.md`, `docs/07-compliance.md`, `docs/09-v0.3-build-plan.md` have the reasoning).
 - Style: Python 3.11+, pathlib-only paths, `shell=False` subprocess with explicit encoding + timeout, pydantic v2 at boundaries,
   no new runtime deps outside `pyproject.toml` extras.
 

@@ -224,3 +224,23 @@ def enabled_registries(cfg) -> list[str]:
     if cfg.registry.opencorporates_token:
         out.append("opencorporates")
     return out
+
+
+# ============================================================================ v0.3 interface (U9.6)
+_LEGAL_TOKENS = {"ltd", "limited", "llp", "plc", "the", "and", "co", "company", "uk", "group", "holdings", "services"}
+
+
+def name_similarity(business_name_norm: str, company_name: str) -> float:
+    """0..1 — how much a registry company name resembles the business name (legal tokens ignored).
+    Max of token Jaccard and a character-sequence ratio, so 'A B S MOT Station' ~ 'ABS MOT STATION LTD'."""
+    import difflib
+    import re as _re
+
+    def toks(s: str) -> set[str]:
+        return {t for t in _re.split(r"[^a-z0-9]+", (s or "").casefold()) if t and t not in _LEGAL_TOKENS}
+
+    a, b = toks(business_name_norm), toks(company_name)
+    jacc = len(a & b) / len(a | b) if (a | b) else 0.0
+    ca, cb = "".join(sorted(a)), "".join(sorted(b))
+    ratio = difflib.SequenceMatcher(None, ca, cb).ratio() if ca and cb else 0.0
+    return round(max(jacc, ratio), 3)
