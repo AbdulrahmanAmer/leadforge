@@ -22,6 +22,8 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `run` | orchestrated: plan→discover→enrich→(dm_pending)→score→export, resumable | `--icp F`, `--resume`, `--limit N`, `--skip-dm` | `stage`, everything above |
 | `status` | current run snapshot | `--run ID` | `stage`, counts |
 | `suppress add\|list` | opt-out list (domain/email/place_id) | value | `suppressed` |
+| `dashboard` | local read-only status page: machine stages (discover/enrich/registry/validate) with measured pace + ETA, human/agent stages with item counts, every count behind them; `--open` opens the browser | `--port` (8765), `--open` | JSON at `/api/status` |
+| `watch` | live bar for this workspace's run; pace and ETA from the feed's own clock (identical in every window) | — | prints a one-line summary on attach |
 | `render-check URL` | diagnose one site: robots → plain fetch → browser → contacts | — | `emails`, `blocked`, `rendered` |
 | `outreach identity add\|list` | sending identities (from name/email, postal address, privacy URL, opt-out channel) | `--label`, `--from-email`, … | `id`, `live_complete` |
 | `outreach mailbox add\|list` | mailboxes that send for an identity; secrets by env var NAME only | `--identity`, `--address`, `--transport file\|smtp`, `--config k=ENV`, `--daily-cap` | `id` |

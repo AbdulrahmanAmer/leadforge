@@ -64,6 +64,7 @@ leadforge config set registry.companies_house_key XXX  # read/write one leadforg
 leadforge export --icp icp.yaml --format xlsx,csv      # re-export the latest run
 leadforge suppress add someone@example.com   # opt-outs, honored everywhere (--kind domain|email|place_id)
 leadforge render-check https://site.example  # diagnose one site: robots -> plain fetch -> browser -> contacts
+leadforge dashboard --open                   # read-only status page: machine stages with measured pace + ETA, human stages
 ```
 
 Everything lands under `./leadforge_data/` (gitignored): SQLite db, cache, logs, and `exports/<run>/` with the

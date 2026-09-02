@@ -174,7 +174,35 @@ def social_network(url: str) -> str | None:
 #  - agent/pipe (stdout not a TTY): bounded `LF_PROGRESS {json}` lines on stdout (docs/06)
 #  - human terminal (stderr a TTY): ONE in-place animated bar with %, ETA and live status;
 #    each finished stage collapses to a permanent one-line summary above the bar (the history).
-_PROG = {"stage": None, "start": 0.0, "spin": 0, "done0": 0}
+_PROG: dict = {"stage": None, "spin": 0, "hist": []}  # hist: [(ts, done, total)] for the current stage
+_RATE_WINDOW = 12  # completions used for the moving rate (responsive to stalls, stable enough to trust)
+
+
+def progress_estimate(hist: list[tuple[float, int, int]], now: float) -> dict:
+    """Honest ETA math from the FEED's own timestamps, so every watcher (and the run itself) shows the
+    same numbers — a window attached mid-run used to divide its own short uptime by whatever it had
+    seen, and two windows disagreed by hours. `hist` = [(ts, done, total)] with one entry per change of
+    `done`; `total` may grow while the stage runs (saturated tiles subdivide), which the plain
+    remaining/rate formula reports instead of hiding.
+
+    -> {elapsed_s, done, total, growth, rate_per_s|None, per_item_s|None, eta_s|None}"""
+    if not hist:
+        return {"elapsed_s": 0.0, "done": 0, "total": None, "growth": 0, "rate_per_s": None,
+                "per_item_s": None, "eta_s": None}
+    t0, d0, total0 = hist[0]
+    tn, dn, totaln = hist[-1]
+    elapsed = max(0.0, now - t0)
+    window = hist[-_RATE_WINDOW:]
+    rate = None
+    if len(window) >= 2 and window[-1][0] > window[0][0] and window[-1][1] > window[0][1]:
+        rate = (window[-1][1] - window[0][1]) / (window[-1][0] - window[0][0])
+    elif len(hist) >= 2 and tn > t0 and dn > d0:
+        rate = (dn - d0) / (tn - t0)
+    eta = None
+    if rate and totaln:
+        eta = max(0.0, (totaln - dn) / rate)
+    return {"elapsed_s": elapsed, "done": dn, "total": totaln, "growth": (totaln or 0) - (total0 or 0),
+            "rate_per_s": rate, "per_item_s": (1.0 / rate) if rate else None, "eta_s": eta}
 _SPINNER = "|/-\\"
 _CLEAR = "\r\x1b[2K"
 _PROGRESS_FILE: str | None = None
@@ -253,13 +281,15 @@ def _fmt_secs(sec: float) -> str:
 def emit_progress(stage: str, done: int, total: int | None, msg: str = "") -> None:
     import json as _json
     import sys as _sys
+    import time as _time
 
     try:
         human = _sys.stderr.isatty()
     except Exception:  # noqa: BLE001
         human = False
 
-    payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120]}
+    ts = round(_time.time(), 1)  # v0.3.1: the feed carries its own clock so watchers agree on the ETA
+    payload = {"stage": stage, "done": done, "total": total, "msg": msg[:120], "ts": ts}
     if _PROGRESS_FILE:
         try:
             with open(_PROGRESS_FILE, "a", encoding="utf-8") as fh:
@@ -270,35 +300,62 @@ def emit_progress(stage: str, done: int, total: int | None, msg: str = "") -> No
     if not human:
         print("LF_PROGRESS " + _json.dumps(payload, ensure_ascii=False), flush=True)
         return
-    render_progress_line(stage, done, total, msg)
+    render_progress_line(stage, done, total, msg, ts=ts)
 
 
-def render_progress_line(stage: str, done: int, total: int | None, msg: str = "") -> None:
-    """The human-facing in-place bar (used by emit_progress on a TTY and by `leadforge watch`)."""
+def progress_summary(stage: str, hist: list[tuple[float, int, int]], now: float) -> str:
+    """One plain line for a watcher that just attached: where the stage is, since when, at what pace."""
+    import time as _time
+
+    est = progress_estimate(hist, now)
+    if not hist:
+        return f"{stage}: no progress recorded yet"
+    since = _time.strftime("%H:%M", _time.localtime(hist[0][0]))
+    parts = [f"{stage}: {est['done']}/{est['total']} done since {since} ({_fmt_secs(est['elapsed_s'])} elapsed)"]
+    if est["per_item_s"]:
+        parts.append(f"avg {_fmt_secs(est['per_item_s'])} per item over the last {min(len(hist), _RATE_WINDOW)}")
+    if est["eta_s"] is not None:
+        parts.append(f"~{_fmt_secs(est['eta_s'])} left at this pace")
+    if est["growth"]:
+        parts.append(f"total grew +{est['growth']} (saturated tiles split); the ETA moves with it")
+    return " · ".join(parts)
+
+
+def render_progress_line(stage: str, done: int, total: int | None, msg: str = "", ts: float | None = None) -> None:
+    """The human-facing in-place bar (used by emit_progress on a TTY and by `leadforge watch`).
+
+    `ts` is the feed's own timestamp for this event (seconds since the epoch). Elapsed, pace and ETA are
+    computed from the feed's timestamps (progress_estimate), never from this process's uptime, so a
+    watcher attached at any moment shows the same figures as the run itself."""
     import sys as _sys
     import time as _time
 
     try:
-        now = _time.monotonic()
+        now = float(ts) if ts is not None else _time.time()
         if _PROG["stage"] != stage:
-            if _PROG["stage"] is not None:  # previous stage becomes a permanent history line
+            if _PROG["stage"] is not None and _PROG["hist"]:  # previous stage becomes a permanent history line
+                prev = progress_estimate(_PROG["hist"], now)
                 _sys.stderr.write(_CLEAR + f"\x1b[32m[done]\x1b[0m {_PROG['stage']} "
-                                  f"({_fmt_secs(now - _PROG['start'])})\n")
-            _PROG.update(stage=stage, start=now, done0=max(0, done - 1))
+                                  f"({_fmt_secs(prev['elapsed_s'])})\n")
+            _PROG.update(stage=stage, hist=[])
+        hist: list = _PROG["hist"]
+        if not hist or hist[-1][1] != done or hist[-1][2] != total:
+            hist.append((now, done, total or 0))
+            del hist[:-500]
         _PROG["spin"] = (_PROG["spin"] + 1) % len(_SPINNER)
         spin = _SPINNER[_PROG["spin"]]
-        elapsed = now - _PROG["start"]
+        est = progress_estimate(hist, now)
+        elapsed = est["elapsed_s"]
         if total:
             pct = min(100, round(100 * done / max(1, total)))
             width = 22
             filled = min(width, round(width * done / max(1, total)))
             bar = "\x1b[36m" + "█" * filled + "\x1b[90m" + "░" * (width - filled) + "\x1b[0m"
-            # rate from items seen by THIS process only — a watch window attached mid-run must not
-            # divide its own short elapsed by the run's full done count (ETA was ~4x under)
-            seen = done - _PROG["done0"]
-            eta = f" ~{_fmt_secs(elapsed / seen * (total - done))} left" if 0 < seen and done < total else ""
-            line = (f"{spin} \x1b[1m{stage}\x1b[0m {bar} {pct:3d}% ({done}/{total})"
-                    f"  {msg[:46]}  {_fmt_secs(elapsed)}{eta}")
+            growth = f" +{est['growth']}" if est["growth"] > 0 else ""
+            pace = f" · {_fmt_secs(est['per_item_s'])}/item" if est["per_item_s"] else ""
+            eta = f" · ~{_fmt_secs(est['eta_s'])} left" if est["eta_s"] is not None and done < total else ""
+            line = (f"{spin} \x1b[1m{stage}\x1b[0m {bar} {pct:3d}% ({done}/{total}{growth})"
+                    f"  {msg[:40]}  {_fmt_secs(elapsed)}{pace}{eta}")
         else:
             line = f"{spin} \x1b[1m{stage}\x1b[0m  {done} done  {msg[:56]}  {_fmt_secs(elapsed)}"
         _sys.stderr.write(_CLEAR + line)
