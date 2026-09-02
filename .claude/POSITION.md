@@ -132,3 +132,13 @@ Wave 3 (docs, version 0.3.0 everywhere, CHANGELOG, STATE, tag, push), then data 
 **If resuming after a compaction:** `git worktree list` shows the builder worktrees; `git branch --list` the
 unit branches; the workflow journal is at
 `~/.claude/projects/D--GainLev-LeadForge-leadforge/bb93e453-b256-4096-9ee1-d9ef417ed812/subagents/workflows/wf_ecc94138-118/journal.jsonl`.
+
+**Wave 1 MERGED into master (0be8074 + 53c61f3 cfg pass-through + 3159d0b package-data): 326 tests, ruff clean.**
+Accepted: B (dvsa provider), C2 (runner/registry truth), C1 (extraction truth; test_crawler_politeness.py
+exception granted). A and D merged WITH known reviewer findings, now being fixed in the polish round.
+**RUNNING — Workflow `wf_0c94adb2-499`** (base 3159d0b): polish A/B/C1/C2/D + Wave 2 builds E (outreach)
+and F (drafting), worktrees under `.claude/worktrees/wf_0c94adb2-499-*`, patches at `<scratchpad>/wave2/<unit>/`.
+NEXT after it: merge, full gate, pass cfg to score_run call sites (cli.py:269, pipeline.py:258) once D adds the
+param, launch H (company mode: providers/companies_house.py, resolve_domain.py, company.py, models.py Target.mode,
+intake.py, grid.py dispatch), then Wave 3 docs/SKILL/CHANGELOG/STATE + tag v0.3.0 + push, then data ops.
+Precomputed clean city bboxes for the sweep: `<scratchpad>/plan/area_bbox.yaml` (discovery.area_bbox format).
