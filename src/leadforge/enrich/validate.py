@@ -77,7 +77,7 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     # BEFORE any DNS call: extract_emails() already drops these at extraction, but an inferred guess or
     # a manually-added contact can still reach validate_email() directly.
     if email.split("@", 1)[0].casefold() in JUNK_LOCALPARTS:
-        return "invalid", {"reason": "placeholder_localpart"}
+        return "invalid", {"reason": "placeholder"}
 
     if _DISPOSABLE and domain.lower() in _DISPOSABLE:
         return "risky", {"reason": "disposable_domain"}
@@ -93,13 +93,31 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     return "valid", meta
 
 
-# Why this order (kept in sync with export._EMAIL_TIER_ORDER): valid/role are directly confirmed —
-# syntax + MX resolved, so mail *can* be delivered there. risky/catch_all are observed but uncertain
-# (disposable domain; a catch-all that accepts anything, proving nothing). inferred is never observed
-# at all — a guess from the domain's demonstrated naming convention — so it must rank BELOW every tier
-# that came from a real, found address, however uncertain that address's deliverability is. unknown is
-# a DNS timeout (retryable, not a verdict). invalid is worst but still stored for the record (a
-# placeholder localpart, bad syntax, or a domain with no mail servers at all).
+# --------------------------------------------------------------------------------------------------
+# THIS is the one place that states the relationship between the two orderings below. Read this before
+# touching either TIER_ORDER or rank_email_contacts() — they answer two different questions and are
+# NOT meant to agree on where 'inferred' sits relative to 'risky'/'catch_all':
+#
+#   TIER_ORDER (below) answers "how much do we TRUST this tier, for coverage/display purposes"
+#       (best_email_tier(), the Summary sheet's tier counts, export._EMAIL_TIER_ORDER which mirrors it).
+#       valid/role are directly confirmed — syntax + MX resolved, so mail *can* be delivered there.
+#       risky/catch_all are OBSERVED (a real address was found) but uncertain (disposable domain; a
+#       catch-all that accepts anything, proving nothing). inferred is never observed at all — a guess
+#       from the domain's demonstrated naming convention — so as a matter of TRUST it ranks BELOW every
+#       tier that came from a real, found address, however uncertain that address's deliverability is.
+#       unknown is a DNS timeout (retryable, not a verdict). invalid is worst but still stored for the
+#       record (a placeholder localpart, bad syntax, or a domain with no mail servers at all).
+#
+#   rank_email_contacts() (further below) answers "which address should we actually SEND to" per
+#       docs/09-v0.3-build-plan.md's SEND ranking: own-domain valid > own-domain role > freemail_linked
+#       valid > inferred > risky > unknown > invalid. Here inferred ranks ABOVE risky/catch_all/unknown
+#       ON PURPOSE: a risky/catch_all/unknown address is an OBSERVED address we have positive reason to
+#       distrust or cannot yet confirm, while an inferred guess follows the domain's own demonstrated
+#       pattern and has no adverse signal against it — worth trying before a known-shaky observed one.
+#
+# So: TIER_ORDER puts inferred last-but-one among non-invalid tiers (trust); rank_email_contacts puts
+# it ahead of risky/catch_all/unknown (sendability). Both are correct for what they measure — this is
+# two different questions, not a contradiction. See test_rank_email_contacts_inferred_outranks_risky.
 TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown", "invalid"]
 
 
@@ -148,12 +166,26 @@ def _sendability_group(affinity: str, tier: str) -> int:
     return 4  # unrecognized tier -> treat like a DNS-timeout unknown, not a verdict
 
 
+# Guards the SEND-ranking half of the TIER_ORDER docstring above at import time: inferred (group 2) must
+# outrank risky/catch_all (group 3) here even though TIER_ORDER (a different ordering, for a different
+# question) ranks them the other way round. See test_rank_email_contacts_inferred_outranks_risky for the
+# same guarantee proven through the public function, on real contact rows.
+assert _sendability_group("", "inferred") < _sendability_group("", "risky"), (
+    "rank_email_contacts must rank inferred ABOVE risky (docs/09 SEND order) — see the TIER_ORDER "
+    "docstring above for why this differs from TIER_ORDER's coverage/display order on purpose"
+)
+
+
 def rank_email_contacts(contacts: list) -> list:
-    """Email contact rows, best first: own-domain valid > own-domain role > freemail_linked valid >
-    inferred > risky > unknown > invalid. A freemail box never outranks the business's own mailbox
-    (the v0.2 sheet exported a font designer's gmail above a real info@ three times), AND an own-domain
-    address that is invalid/unknown/risky/inferred never outranks a validated freemail_linked one
-    either — the PRIMARY sort key is a sendability group (see _sendability_group), not affinity alone.
+    """Email contact rows, best first, per docs/09's SEND ranking: own-domain valid > own-domain role >
+    freemail_linked valid > inferred > risky > unknown > invalid. See the TIER_ORDER docstring above for
+    why this SEND order differs from TIER_ORDER's coverage/display order on 'inferred' vs 'risky' —
+    that is intentional, not a contradiction between the two.
+
+    A freemail box never outranks the business's own mailbox (the v0.2 sheet exported a font designer's
+    gmail above a real info@ three times), AND an own-domain address that is invalid/unknown/risky/
+    inferred never outranks a validated freemail_linked one either — the PRIMARY sort key is a
+    sendability group (see _sendability_group), not affinity alone.
 
     Works on sqlite3.Row and plain dict inputs alike (both support `in .keys()` and `[]`); contacts
     from an old DB that predates the affinity column simply have none and sort as '' (mid-table, below

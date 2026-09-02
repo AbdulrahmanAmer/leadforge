@@ -45,15 +45,23 @@ JUNK_EMAIL_HOSTS = ("example.", "sentry.", "wixpress.", "@2x", ".png", ".jpg", "
 # <style>/<script>/<noscript>/<template> CONTENT must never feed the raw-markup email regex pass — but
 # mailto: hrefs and data-cfemail spans are always deliberate published contact points, so those are still
 # read from the FULL, unstripped document (extract_emails() below does exactly that).
-# v0.3 fix: an UNCLOSED <script> (no matching </script>) used to leave its whole tail — including any
-# email inside it — in the raw-markup pass, because .*?</\1\s*> requires a closing tag to match at all.
-# `(?:</\1\s*>|\Z)` makes end-of-document an acceptable second boundary, same as a browser/parser would
-# implicitly close an unclosed element at EOF.
-_NOISE_TAGS_RE = re.compile(r"<(style|script|noscript|template)\b[^>]*>.*?(?:</\1\s*>|\Z)", re.IGNORECASE | re.DOTALL)
+_NOISE_SELECTORS = ("style", "script", "noscript", "template")
 
 
 def _strip_noise_elements(html: str) -> str:
-    return _NOISE_TAGS_RE.sub(" ", html)
+    """Remove <style>/<script>/<noscript>/<template> nodes via the HTML PARSER (decompose), not a regex.
+
+    v0.3 fix: an earlier regex approach (`<(style|script|...)\\b[^>]*>.*?</\\1\\s*>`) needed its own
+    explicit end-of-document fallback to handle an UNCLOSED tag at all — easy to get subtly wrong (a
+    nested same-name tag, an attribute containing '>', case variance). A real parser closes an unclosed
+    element at EOF the same way a browser would, with no special-casing: selectolax's tree already does
+    this (proven by test_unclosed_script_content_does_not_leak_an_email), so decomposing the matched
+    nodes and re-serializing is both simpler and more correct than reimplementing that boundary logic."""
+    tree = HTMLParser(html)
+    for sel in _NOISE_SELECTORS:
+        for node in tree.css(sel):
+            node.decompose()
+    return tree.html or ""
 
 
 TITLE_WORDS = (

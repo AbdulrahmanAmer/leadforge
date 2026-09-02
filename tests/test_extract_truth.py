@@ -65,9 +65,11 @@ def test_cfemail_still_read_despite_noise_stripping():
 
 
 def test_unclosed_script_content_does_not_leak_an_email():
-    """A malformed/truncated document with a <script> that has no matching </script> — a real parser
-    (or a browser) would implicitly close it at end-of-document; the noise-stripping regex must do the
-    same instead of leaving the tail (and any email inside it) in the raw-markup pass."""
+    """A malformed/truncated document with a <script> that has no matching </script> — a real HTML
+    parser (or a browser) implicitly closes it at end-of-document. v0.3 fix: noise stripping now
+    decomposes the <script>/<style>/<noscript>/<template> nodes via the selectolax parser itself
+    (_strip_noise_elements) rather than a hand-rolled closing-tag regex, so this "boundary at EOF"
+    behavior comes for free from the parser instead of needing a bespoke `(?:</tag>|\\Z)` fallback."""
     html = (
         "<html><body><p>Contact real@shop.com for a quote.</p>"
         '<script>var config = {"support": "leak@gmail.com"};'
@@ -151,6 +153,60 @@ def test_booking_hint_nav_anchor_survives_trafilatura_boilerplate_stripping():
     assert signals["booking_source"] == "regex"
 
 
+# unit C2's reviewer, on booking on REAL crawled HTML: the fixture above proves the mechanism (one bare
+# nav anchor) but is thinner than an actual crawled site — a real crawl hands compute_signals full site
+# chrome (header nav with SEVERAL links, a footer) across MULTIPLE pages, the way SiteCrawler.crawl()
+# actually assembles result.pages. This fixture matches that shape: two pages, each with a header nav
+# containing "Book Online" alongside unrelated nav links (Services/About/Contact), real body copy long
+# enough that trafilatura is the active extraction path on both pages, and a footer — proving booking_hint
+# still reads the nav anchor from the raw HTML, not from trafilatura's boilerplate-stripped Page.text,
+# on something closer to what actually comes back from a live site.
+def test_booking_hint_realistic_multi_page_site_nav():
+    home_html = (
+        "<html><body>"
+        "<header><nav>"
+        '<a href="/services">Services</a> '
+        '<a href="/about">About</a> '
+        '<a href="/booking">Book Online</a> '
+        '<a href="/contact">Contact</a>'
+        "</nav></header>"
+        "<main><p>We are a family-run garage in the heart of town, serving the local community for over "
+        "twenty years with honest, reliable car repair and servicing. Our fully qualified technicians "
+        "handle everything from routine maintenance to major mechanical work, and take pride in clear "
+        "communication and fair pricing for every single customer who walks through our doors each day.</p>"
+        "<p>Whether it is a routine oil change, a full brake overhaul, or a pre-purchase inspection, our "
+        "team has the tools and the training to get the job done right the first time, every time, with "
+        "a genuine commitment to keeping local drivers safely on the road.</p></main>"
+        "<footer><p>Copyright 2024 Example Garage. All rights reserved.</p></footer>"
+        "</body></html>"
+    )
+    about_html = (
+        "<html><body>"
+        "<header><nav>"
+        '<a href="/services">Services</a> '
+        '<a href="/about">About</a> '
+        '<a href="/booking">Book Online</a> '
+        '<a href="/contact">Contact</a>'
+        "</nav></header>"
+        "<main><p>Our story began decades ago when the founder opened the doors to serve local drivers "
+        "with fair prices and expert workmanship, a tradition the whole team continues to this day with "
+        "the same care and attention to detail that built the shop's reputation in the first place.</p>"
+        "</main></body></html>"
+    )
+    pages = [
+        Page(url="https://shop.example/", html=home_html, text=SiteCrawler.extract_text(home_html)),
+        Page(url="https://shop.example/about", html=about_html, text=SiteCrawler.extract_text(about_html)),
+    ]
+    for p in pages:
+        assert "book" not in p.text.casefold(), (
+            f"trafilatura must have dropped the nav anchor from {p.url}'s Page.text for this fixture "
+            "to actually exercise the HTML-derived path, not the (identical either way) text path"
+        )
+    signals = SiteCrawler.compute_signals(pages, stale_after_years=3)
+    assert signals["booking_hint"] is True
+    assert signals["booking_source"] == "regex"
+
+
 def test_booking_hint_word_distance_bounded_at_four_words():
     """"book" and a target word more than 4 words apart must NOT trigger — otherwise any page
     mentioning both "book" and "service" anywhere would false-positive."""
@@ -222,6 +278,58 @@ def test_form_labels_never_read_as_a_name():
     assert people == [], f"form labels produced a candidate: {people}"
 
 
+# --- extract_people_ner: same review-noise skip + context='team' as extract_people --------------------
+# GLiNER (the [ner] extra) is not installed on this machine (test_gliner_path_matches_heuristic_quality
+# above skips itself for exactly that reason via importorskip), so the review-noise-skip and
+# context='team' behavior of extract_people_ner had NO coverage at all here. This monkeypatches
+# extract._gliner_model with a stub that returns fixed, position-accurate spans — no gliner install
+# required — so the two v0.3 behaviors (shared with extract_people via _is_review_noise/_context_for)
+# are proven on the NER code path itself, not just inferred from the heuristic path's tests.
+def test_ner_path_applies_review_noise_skip_and_team_context(monkeypatch):
+    from leadforge.enrich import extract as extract_mod
+
+    # The review block and the team block are kept > 120 chars apart (the +-120-char window
+    # extract_people_ner checks around each NAME span) with neutral filler text between them, so the
+    # two candidates' windows don't bleed into each other — Paul's window must stay noise-free on its
+    # own merits, not merely because it is short enough to dodge the review markers by accident.
+    text = (
+        "Customer Reviews. Catalina Campbell rated us 5 stars ★★★★★, 2 weeks ago, "
+        "and said she would recommend us on Google. "
+        "We are a family-run garage that has served this community for many years with honest pricing "
+        "and clear communication on every job, large or small, and we always aim to get your vehicle "
+        "back to you as quickly as safely possible without cutting any corners on quality. "
+        "Our Team. Paul Smith, Owner, runs the front desk and has done for years."
+    )
+
+    class _StubGlinerModel:
+        """Minimal stand-in for the real GLiNER model: same predict_entities(text, labels, threshold)
+        shape, fixed spans computed against the ACTUAL text passed in (so window slicing in
+        extract_people_ner lines up exactly like it would against a real model's output)."""
+
+        def predict_entities(self, scan_text, labels, threshold=0.4):
+            def span(needle):
+                i = scan_text.index(needle)
+                return i, i + len(needle)
+
+            r_start, r_end = span("Catalina Campbell")
+            o_start, o_end = span("Paul Smith")
+            t_start, t_end = span("Owner")
+            return [
+                {"text": "Catalina Campbell", "label": "person name", "start": r_start, "end": r_end},
+                {"text": "Paul Smith", "label": "person name", "start": o_start, "end": o_end},
+                {"text": "Owner", "label": "job title", "start": t_start, "end": t_end},
+            ]
+
+    monkeypatch.setattr(extract_mod, "_gliner_model", lambda: _StubGlinerModel())
+    people = extract_mod.extract_people_ner(text, "https://shop.example/team")
+    names = {p.name for p in people}
+    assert "Catalina Campbell" not in names, f"review noise leaked into the NER path: {people}"
+    assert "Paul Smith" in names, f"a real team candidate was lost on the NER path: {people}"
+    paul = next(p for p in people if p.name == "Paul Smith")
+    assert paul.title == "Owner"
+    assert paul.context == "team", f"NER-path candidate did not get context='team': {paul}"
+
+
 # --- classify_email_affinity truth table ---------------------------------------------------------------
 def test_affinity_freemail_unlinked_template_credit():
     assert classify_email_affinity("impallari@gmail.com", "abbeyservice.co.uk", "abbeyservice") == "freemail_unlinked"
@@ -248,9 +356,15 @@ def test_affinity_foreign():
 
 
 def test_affinity_apostrophe_folding():
-    """"o'brien" in the business name must match a freemail local part containing "obrien" (local parts
-    never carry punctuation) — the apostrophe is folded away, not treated as a word separator."""
-    assert classify_email_affinity("obrienauto99@gmail.com", "somewhere.co.uk", "O'Brien Auto Repair") == "freemail_linked"
+    """A discriminating case (mirrors test_affinity_hyphen_folding_joins_pieces_too_short_alone below):
+    business_name_norm is ONLY "Jo'El" (ASCII apostrophe, U+0027) — no other word to accidentally match.
+    Split-without-folding gives "jo"/"el", each 2 chars with no digit — neither qualifies as a token on
+    its own, and the 2-char initials "je" don't match the local part "joelrepairs" either. Only the
+    FOLDED "joel" (4 chars) is a significant token, so this can only pass when the apostrophe is folded
+    away, not treated as a separator. (The old fixture, "O'Brien Auto Repair" x "obrienauto99", did NOT
+    discriminate: "brien" alone — the unfolded second half — already matches as a substring, so it
+    passed whether or not folding actually happened.)"""
+    assert classify_email_affinity("joelrepairs@gmail.com", "somewhere.co.uk", "Jo'El") == "freemail_linked"
 
 
 def test_affinity_hyphen_folding_joins_pieces_too_short_alone():
@@ -262,10 +376,18 @@ def test_affinity_hyphen_folding_joins_pieces_too_short_alone():
 
 
 def test_affinity_typographic_apostrophe_folding():
-    """The typographic right single quote (U+2019) is what real sites actually emit for "O'Brien",
-    not the ASCII apostrophe — must fold the same way."""
-    name = "O" + "’" + "Brien Auto Repair"
-    assert classify_email_affinity("obrienauto99@gmail.com", "somewhere.co.uk", name) == "freemail_linked"
+    """Same discriminating "Jo?El" shape as test_affinity_apostrophe_folding above, but with the
+    typographic right single quote (U+2019) -- what real sites actually emit for names like "O'Brien",
+    not the ASCII apostrophe -- written as a \\u escape so this file stays ASCII. Must fold the same way."""
+    name = "Jo" + "\u2019" + "El"
+    assert classify_email_affinity("joelrepairs@gmail.com", "somewhere.co.uk", name) == "freemail_linked"
+
+
+def test_affinity_left_typographic_apostrophe_folding():
+    """Same discriminating shape again with the typographic LEFT single quote (U+2018) -- less common but
+    still seen (curly-quote autocorrect sometimes picks the wrong direction) -- written as a \\u escape."""
+    name = "Jo" + "\u2018" + "El"
+    assert classify_email_affinity("joelrepairs@gmail.com", "somewhere.co.uk", name) == "freemail_linked"
 
 
 def test_affinity_generic_stopword_token_does_not_link_unrelated_name():
@@ -373,6 +495,25 @@ def test_rank_email_contacts_missing_affinity_column_treated_as_empty():
     assert "legacy@shop.com" in ranked
 
 
+def test_rank_email_contacts_inferred_outranks_risky():
+    """The SEND-ranking half of validate.py's TIER_ORDER docstring, proven through the public function
+    directly: docs/09 puts inferred ABOVE risky/catch_all/unknown in SEND order, the OPPOSITE of
+    TIER_ORDER's own coverage/display order (test_tier_order_never_ranks_inferred_above_an_observed_tier
+    below proves that TIER_ORDER side). Both a bare 'inferred' vs 'risky' pair and a 'catch_all'/
+    'unknown' pair are checked, all at the same (irrelevant here) affinity, isolating the tier
+    comparison from any affinity effect."""
+    contacts = [
+        {"kind": "email", "value": "risky@shop.com", "tier": "risky", "affinity": ""},
+        {"kind": "email", "value": "catchall@shop.com", "tier": "catch_all", "affinity": ""},
+        {"kind": "email", "value": "unknown@shop.com", "tier": "unknown", "affinity": ""},
+        {"kind": "email", "value": "guess@shop.com", "tier": "inferred", "affinity": ""},
+    ]
+    ranked = [c["value"] for c in rank_email_contacts(contacts)]
+    assert ranked[0] == "guess@shop.com", (
+        f"inferred must outrank risky/catch_all/unknown in SEND order (docs/09), got {ranked}"
+    )
+
+
 def test_tier_order_never_ranks_inferred_above_an_observed_tier():
     assert TIER_ORDER.index("inferred") > TIER_ORDER.index("valid")
     assert TIER_ORDER.index("inferred") > TIER_ORDER.index("role")
@@ -394,7 +535,7 @@ def test_validate_email_placeholder_localpart_never_hits_dns(tmp_path, monkeypat
     for junk in ("test", "noreply", "sample"):
         tier, meta = validate_mod.validate_email(f"{junk}@example-shop.com", "personal", cfg)
         assert tier == "invalid"
-        assert meta["reason"] == "placeholder_localpart"
+        assert meta["reason"] == "placeholder"
 
 
 def test_junk_localparts_constant_matches_extraction_use():
