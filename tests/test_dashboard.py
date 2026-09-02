@@ -36,7 +36,10 @@ def _seed(cfg, with_ts: bool) -> tuple[str, float]:
         lines.append(json.dumps(d))
     # the real feed ends with a line that REPEATS the latest count (the next query's text) — the case that
     # silently dropped the "as of now" pin on 2026-09-03
-    lines.append(json.dumps({"stage": "discover", "done": 4, "total": 14, "msg": "q5 (next)"}))
+    tail = {"stage": "discover", "done": 4, "total": 14, "msg": "q5 (next)"}
+    if with_ts:
+        tail["ts"] = started + 4 * 120.0 + 0.3  # the next-query line follows the completion within a second
+    lines.append(json.dumps(tail))
     feed.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return run_id, started
 
