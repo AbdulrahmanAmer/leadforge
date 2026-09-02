@@ -5,7 +5,7 @@ import csv
 
 from leadforge import db
 from leadforge.config import load_config
-from leadforge.export import ACCOUNT_COLUMNS, DEFAULT_EXTRA_COLUMNS, export_run
+from leadforge.export import ACCOUNT_COLUMNS, DEFAULT_EXTRA_COLUMNS, _site_status, export_run
 from leadforge.models import ICP, Business, Contact, Person, Score, ScoreFactor
 
 
@@ -129,3 +129,75 @@ def test_freemail_never_outranks_own_domain_in_the_email_column(tmp_path, monkey
     assert row["Email"] == "info@dualgarage.example"
     assert row["Email Tier"] == "role"
     assert row["Email Confidence"] == "own domain, role mailbox"
+
+
+def test_freemail_never_outranks_own_domain_when_affinity_is_unset_on_both(tmp_path, monkeypatch):
+    """The real-data shape (fresh-context review blocker): 233/233 contact rows on the live campaign
+    DB store affinity '' — BOTH the freemail and the own-domain contact, not just one. Ranking on the
+    raw rows falls through to tier order alone and the freemail 'valid' address beats the own-domain
+    'role' one; affinity must be backfilled BEFORE ranking, not only on the already-chosen winner."""
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    db.upsert_business(conn, Business(id="legacy2", name="Legacy2 Garage", source="gosom",
+                                      dedupe_key="dk-legacy2", domain="legacy2garage.example"))
+    db.add_contact(conn, Contact(business_id="legacy2", kind="email", value="dave.font@gmail.com",
+                                 tier="valid"))  # affinity unset, as every pre-v0.3 row is
+    db.add_contact(conn, Contact(business_id="legacy2", kind="email", value="info@legacy2garage.example",
+                                 tier="role"))  # affinity unset here too
+    _score(conn, rid, "legacy2")
+    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
+    row = _csv_rows(arts)[0]
+    assert row["Email"] == "info@legacy2garage.example"
+    assert row["Email Confidence"] == "own domain, role mailbox"
+    assert row["Lawful Basis (Email)"] == "b2b_legitimate_interest"
+
+
+def test_email_confidence_admits_when_freemail_linkage_was_never_checked(tmp_path, monkeypatch):
+    """A legacy row's freemail affinity is a coarse domain-only guess (any freemail box == 'linked'),
+    not the real name-token linkage check — the column must say so, not claim a check that never ran."""
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    db.upsert_business(conn, Business(id="onlyfree", name="Only Freemail Garage", source="gosom",
+                                      dedupe_key="dk-onlyfree", domain="onlyfreegarage.example"))
+    db.add_contact(conn, Contact(business_id="onlyfree", kind="email", value="stranger@gmail.com",
+                                 tier="valid"))  # affinity unset -> backfilled, not a real linkage check
+    _score(conn, rid, "onlyfree")
+    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
+    row = _csv_rows(arts)[0]
+    assert row["Email"] == "stranger@gmail.com"
+    assert row["Email Confidence"] == "personal freemail (linkage not checked — pre-v0.3 row)"
+
+
+def test_why_this_score_never_shows_the_contactability_meta_factor(tmp_path, monkeypatch):
+    """'Why This Score' explains Score/Fit — contactability is a separate meta axis (docs/09 §D split)
+    that can carry up to 98 points, dwarfing every real fit factor (max 25); it must never be able to
+    push into the top-3 'Why This Score' drivers just because it happens to score the most points."""
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    db.upsert_business(conn, Business(id="whyrow", name="Why Garage", source="gosom", dedupe_key="dk-whyrow"))
+    db.save_score(conn, Score(business_id="whyrow", run_id=rid, total=25, tier="C", factors=[
+        ScoreFactor(factor="industry_match", group="fit", weight=25, score=1.0, points=25,
+                   why="category matches the ICP"),
+        ScoreFactor(factor="contactability", group="meta", weight=100, score=0.98, points=98,
+                   why="DM identified; own-domain valid email; validated phone"),
+        ScoreFactor(factor="status", group="meta", weight=0, score=0.0, points=0, why="READY"),
+    ]))
+    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
+    row = _csv_rows(arts)[0]
+    assert row["Why This Score"] == "category matches the ICP"
+    assert "DM identified" not in row["Why This Score"]
+
+
+def test_site_status_robots_disallowed_is_not_dead():
+    """Real data: 'dead (robots-disallowed)' on 5 live-campaign rows was a lie — the crawler was
+    refused, the site is not down. site_dead must stay False so email_eligibility is never blocked
+    for a reason that was never actually observed."""
+    enrich = {"crawled_at": "2026-01-01T00:00:00Z", "error": "robots-disallowed", "signals": {}}
+    status, dead = _site_status(enrich)
+    assert status == "not crawlable (robots)"
+    assert dead is False
+
+
+def test_site_status_still_reports_dead_for_a_real_failure():
+    enrich = {"crawled_at": "2026-01-01T00:00:00Z", "error": "home unreachable (status:404)",
+             "signals": {"http_status": 404}}
+    status, dead = _site_status(enrich)
+    assert status == "dead (404)"
+    assert dead is True

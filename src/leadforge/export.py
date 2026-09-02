@@ -21,7 +21,7 @@ from leadforge import compliance, db
 from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
-from leadforge.score import fallback_email_affinity, phone_is_validated
+from leadforge.score import fill_email_affinity, phone_is_validated
 from leadforge.util import natural_name, now_iso
 
 # export_run's `cfg` parameter is optional (existing call sites in cli.py/pipeline.py pass none) — when
@@ -59,8 +59,6 @@ _TIER_FILL = {
 }
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
-# kept in sync with validate.TIER_ORDER — a guess ranks below anything actually observed
-_EMAIL_TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown"]
 _REGION_REMINDER = {
     "us": "US/CAN-SPAM: identify yourself, include a physical postal address + working opt-out; honor within 10 business days.",
     "uk": "UK/PECR: corporate subscribers may be emailed B2B; sole traders/individuals need consent. Always give identity + opt-out.",
@@ -99,14 +97,19 @@ def _display_phone(e164: str | None) -> str:
 
 
 def _site_status(enrich: dict) -> tuple[str, bool]:
-    """-> ('live' | 'dead (<status/error>)' | 'redirects to <host>' | 'not crawled', site_dead).
-    Reads signals C1/A set when present (final_host, offsite_redirect, http_status); degrades to
-    'live' on a bare crawl with none of those (nothing observed to say otherwise)."""
+    """-> ('live' | 'not crawlable (robots)' | 'dead (<status/error>)' | 'redirects to <host>' |
+    'not crawled', site_dead). Reads signals C1/A set when present (final_host, offsite_redirect,
+    http_status); degrades to 'live' on a bare crawl with none of those (nothing observed to say
+    otherwise). robots-disallowed means the crawler was refused, not that the site is down — it is
+    reported honestly and does NOT set site_dead (which would otherwise withdraw email eligibility
+    from a live site for a reason that was never actually observed)."""
     if not enrich.get("crawled_at"):
         return "not crawled", False
     signals = enrich.get("signals") or {}
     err = enrich.get("error")
     status = signals.get("http_status")
+    if err == "robots-disallowed":
+        return "not crawlable (robots)", False
     dead = bool(err) or (isinstance(status, int) and status >= 400)
     if dead:
         return f"dead ({status if status is not None else err})", True
@@ -115,12 +118,16 @@ def _site_status(enrich: dict) -> tuple[str, bool]:
     return "live", False
 
 
-def _email_confidence(affinity: str, tier: str) -> str:
-    """Human-readable affinity+tier, per docs/09 §D. 'none' when there is no sendable candidate at all."""
+def _email_confidence(affinity: str, tier: str, linkage_checked: bool = True) -> str:
+    """Human-readable affinity+tier, per docs/09 §D. 'none' when there is no sendable candidate at all.
+    linkage_checked=False means the affinity came from the coarse pre-v0.3 fallback (ANY freemail on
+    the domain), not the real name/business-token linkage check — the column must not claim a check
+    that never ran."""
     if affinity == "own_domain":
         return f"own domain, {tier} mailbox" if tier else "own domain"
     if affinity == "freemail_linked":
-        return "personal freemail, linked to owner name"
+        return ("personal freemail, linked to owner name" if linkage_checked
+                else "personal freemail (linkage not checked — pre-v0.3 row)")
     if affinity == "freemail_unlinked":
         return "personal freemail, UNLINKED — do not mail"
     if affinity == "foreign":
@@ -135,20 +142,28 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
+    # Affinity MUST be backfilled BEFORE ranking (docs/09 §D fix): every pre-v0.3 row stores
+    # affinity '' (100% of the live campaign DB), and this SAME filled list is what
+    # compliance.email_eligibility below ranks too, so Email / Email Confidence / Lawful Basis /
+    # contactability can never describe two different addresses for one business.
+    contacts_filled = fill_email_affinity(contacts, s["domain"])
     # Best email: affinity-first (own-domain always outranks a freemail box, even a 'valid' one — the
     # v0.2 sheet exported a font designer's gmail above a real info@ three times), tier second.
     # 'inferred' addresses are NEVER candidates for the Email column — they get their own,
     # so a mail-merge over 'Email' can never pick up a guess.
-    ranked_emails = rank_email_contacts(contacts)
+    ranked_emails = rank_email_contacts(contacts_filled)
     sendable_ranked = [c for c in ranked_emails if c["tier"] not in ("invalid", "inferred")]
     best_row = sendable_ranked[0] if sendable_ranked else None
     best_email = (best_row["value"], best_row["tier"] or "") if best_row else ("", "")
-    best_affinity = (best_row["affinity"] if best_row and "affinity" in best_row.keys() else "") \
-        if best_row else ""
-    best_affinity = best_affinity or fallback_email_affinity(best_email[0] or None, s["domain"])
-    inferred = next((c for c in contacts if c["kind"] == "email" and c["tier"] == "inferred"), None)
+    best_affinity = (best_row["affinity"] or "") if best_row else ""
+    best_affinity_backfilled = bool(best_row and best_row.get("_affinity_backfilled"))
+    inferred = next((c for c in contacts_filled if c["kind"] == "email" and c["tier"] == "inferred"), None)
     factors = json.loads(s["factors_json"])
-    top_why = "; ".join(f["why"] for f in sorted(factors, key=lambda f: -f["points"])[:3])
+    # 'Why This Score' explains Score/Fit — the meta factors (contactability, status) are a separate
+    # axis by design (docs/09 §D split) and must never re-blend into it: contactability alone can carry
+    # up to 98 points, which would silently outrank every fit factor (max 25) if left in this sort.
+    top_why = "; ".join(f["why"] for f in sorted((f for f in factors if f.get("group") != "meta"),
+                                                  key=lambda f: -f["points"])[:3])
     hooks = json.loads(s["need_hooks_json"])
     verified = ""
     ev = db.evidence_for(conn, s["business_id"])
@@ -244,7 +259,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     site_status, site_dead = _site_status(enrich_all)
     is_suppressed = db.is_suppressed(conn, s["domain"], s["place_id"], best_email[0] or None)
     eligibility = compliance.email_eligibility(
-        s, contacts, entity, icp.compliance.region_profile if icp else "us",
+        s, contacts_filled, entity, icp.compliance.region_profile if icp else "us",
         freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
         suppressed=is_suppressed, site_dead=site_dead,
     )
@@ -270,7 +285,9 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
         "Registry Match": f"{float(sim):.2f}" if sim is not None else "n/a",
         "Chain": chain_key or "-",
         "Site Status": site_status,
-        "Email Confidence": _email_confidence(best_affinity, best_email[1]) if best_email[0] else "none",
+        "Email Confidence": _email_confidence(best_affinity, best_email[1],
+                                              linkage_checked=not best_affinity_backfilled)
+                           if best_email[0] else "none",
         "All Hooks": "; ".join(hooks) if hooks else "no hooks triggered",
     })
     return row

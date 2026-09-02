@@ -310,17 +310,24 @@ class Scorer:
         from leadforge.enrich.validate import rank_email_contacts
 
         contacts = ctx["contacts"]
+        # Affinity MUST be backfilled BEFORE ranking, not after: every pre-v0.3 contact row stores
+        # affinity '' (100% of the live campaign DB), so ranking on raw rows falls through to tier
+        # order alone and a stranger's freemail 'valid' address can outrank the business's own
+        # 'role' mailbox — which was then exported and labeled as the (wrong) winner. Rank and grade
+        # the SAME filled list compliance.email_eligibility below also sees, so contactability,
+        # Lawful Basis and the exported Email column can never disagree about which address won.
+        contacts_filled = fill_email_affinity(contacts, b["domain"])
         dm = ctx["dm"]
         pts = 0
         why: list[str] = []
         if dm and dm["is_dm"] == 1:
             pts += 30
             why.append("DM identified")
-        ranked = rank_email_contacts(list(contacts))
+        ranked = rank_email_contacts(contacts_filled)
         best = ranked[0] if ranked else None
         email_tier = (best["tier"] if best else "") or ""
-        affinity = (best["affinity"] if best and "affinity" in best.keys() else "") if best else ""
-        affinity = affinity or fallback_email_affinity(best["value"] if best else None, b["domain"])
+        affinity = (best["affinity"] if best else "") or ""
+        backfilled = bool(best and best.get("_affinity_backfilled"))
         if affinity == "own_domain" and email_tier == "valid":
             pts += 30
             why.append("own-domain valid email")
@@ -329,7 +336,7 @@ class Scorer:
             why.append("own-domain role email")
         elif affinity == "freemail_linked" and email_tier == "valid":
             pts += 20
-            why.append("linked-freemail valid email")
+            why.append("linked-freemail valid email" + (" (linkage not checked)" if backfilled else ""))
         elif email_tier == "inferred":
             pts += 8
             why.append("inferred email only")
@@ -346,14 +353,14 @@ class Scorer:
         if (ctx["enrich"].get("signals") or {}).get("phone_confirmed"):
             pts += 5
             why.append("site phone matches Maps phone")
-        phones = [c["value"] for c in contacts if c["kind"] == "phone"]
+        phones = [c["value"] for c in contacts_filled if c["kind"] == "phone"]
         if _any_mobile(phones):
             pts += 3
             why.append("mobile/direct number")
         pts = min(100, pts)
 
         eligibility = compliance.email_eligibility(
-            b, contacts, entity, self.icp.compliance.region_profile,
+            b, contacts_filled, entity, self.icp.compliance.region_profile,
             freemail_policy=_DEFAULT_POLICY.validation.freemail_policy,
             require_corporate=_DEFAULT_POLICY.outreach.require_corporate,
             suppressed=False, site_dead=False,
@@ -435,6 +442,26 @@ def fallback_email_affinity(email: str | None, business_domain: str | None) -> s
     if biz and (dom == biz or dom.endswith("." + biz)):
         return "own_domain"
     return "freemail_linked" if dom in FREEMAIL_DOMAINS else "foreign"
+
+
+def fill_email_affinity(contacts: list, business_domain: str | None) -> list[dict]:
+    """One contact list with `affinity` backfilled on every email row BEFORE it is ranked or fed to
+    `compliance.email_eligibility` — the fix for the blocker the fresh-context review caught: ranking
+    on raw rows (100% of the live campaign DB stores affinity '') falls through to tier order alone,
+    so a stranger's freemail 'valid' address could outrank the business's own 'role' mailbox, and the
+    wrong winner was then exported and labeled as if it were the best one. Every caller that ranks or
+    grades email contacts (contactability, eligibility, the exported Email column) MUST rank and grade
+    this SAME filled list — never the raw one — so they can never describe two different addresses.
+    A dict carries `_affinity_backfilled: True` when its affinity came from the coarse guess rather
+    than a stored value, so callers can word confidence honestly instead of overclaiming linkage."""
+    out = []
+    for c in contacts:
+        d = dict(c)
+        if d.get("kind") == "email" and not d.get("affinity"):
+            d["affinity"] = fallback_email_affinity(d.get("value"), business_domain)
+            d["_affinity_backfilled"] = True
+        out.append(d)
+    return out
 
 
 # ---- scoring-profile registry (v0.3 U9.D) -----------------------------------------------------

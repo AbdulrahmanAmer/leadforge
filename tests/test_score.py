@@ -231,6 +231,23 @@ def test_contactability_registry_and_phone_confirmed_and_mobile(conn, sample_icp
     assert next(f for f in s.factors if f.factor == "contactability").points == 5 + 5 + 3
 
 
+def test_contactability_backfills_affinity_before_ranking_not_after(conn, sample_icp):
+    """Fresh-context review blocker: 233/233 contact rows on the live campaign DB store affinity ''.
+    Ranking those raw rows falls through to tier order alone and a stranger's freemail 'valid' address
+    outranks the business's own 'role' mailbox — scoring it as a mere 20-pt linked-freemail hit
+    instead of the 22-pt own-domain role hit it actually is. Affinity must be filled BEFORE ranking."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164=None, domain="indieauto.example")
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="stranger@gmail.com",
+                                 tier="valid"))  # affinity unset, as every pre-v0.3 row is
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.example",
+                                 tier="role"))  # affinity unset here too
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    contact = next(f for f in s.factors if f.factor == "contactability")
+    assert contact.points == 22, f"expected own-domain role (22), got {contact.points} ({contact.why})"
+    assert "own-domain role email" in contact.why
+
+
 def test_contactability_combined_matches_the_arithmetic(conn, sample_icp):
     """DM(30) + own-domain valid email(30) + validated phone(25) + registry-active(5)
     + phone_confirmed(5) + mobile contact(3) = 98 — never hits the 100 cap under this weight table."""
