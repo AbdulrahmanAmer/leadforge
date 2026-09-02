@@ -57,6 +57,11 @@ and say so.
 1. **No anti-bot or captcha evasion.** Do not write captcha solvers, fingerprint spoofing, header/TLS
    forgery, or "stealth" patches. Use the pinned open-source engines exactly as they ship. Reliability comes
    from the provider chain, conservative pacing, and (optionally) proxies the operator supplies themselves.
+   *Amended 2026-09-03 (ADR-014, owner decision):* a self-written scraping engine (e.g. `providers/maps_list.py`,
+   plain Playwright driving Google Maps' results list) is also in scope, under the exact same red line — no
+   stealth flags, no fingerprint changes, no captcha solving, an identifying user-agent, and politeness
+   (delays, rate caps) enforced in code. This does not relax the rule; it states that the rule binds code this
+   repo writes itself, not only the pinned third-party engines.
 2. **No authentication bypass.** Never log in, create accounts, reuse cookies/sessions, or fetch anything
    behind a paywall or login. Public, logged-out pages only.
 3. **No LinkedIn.** Explicitly excluded from the design. Note that the optional Agent-Reach integration

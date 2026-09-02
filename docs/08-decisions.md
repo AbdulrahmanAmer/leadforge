@@ -105,3 +105,28 @@ that saturate (>= `discovery.subdivide_at`) are subdivided automatically; a regi
 persisted on every match. Provider field maps are registered per provider (`providers/base.py`).
 **Consequences:** coverage becomes measurable against a denominator; the sheet's Company No column is true;
 dissolved companies never carry a decision maker.
+
+## ADR-014 — Native list-first Maps provider; gosom kept as fallback (speed unit, v0.3)
+**Context:** gosom shells out to a subprocess that visits every place page — reliable but slow (tens of
+minutes for a tiled sweep). Live probing (2026-09-02, `scratchpad/speed/probe_list.py` /
+`probe_list2.py`) showed the Google Maps results LIST itself (the `div[role="feed"]` a person scrolls)
+already carries name, CID, lat/lng, rating, review count, category, street, open/closed state, phone
+(119-120/120 cards) and website (83-91/120, as a redirect that must be unwrapped) — with plain
+Playwright, headless Chromium, an identifying UA, and no stealth. **Decision:** ship `maps_list`, a
+second discovery provider that drives one persistent browser per provider instance, scrolls the list to
+its end (or a configured cap), and normalizes cards directly — no place-page visit unless
+`discovery.maps_list.visit_details` is opted in. It carries no `place_id` (the list view never exposes
+one); dedupe instead keys on CID, hex-decoded to the same decimal representation gosom's own `cid`
+field already uses, so a maps_list row for a place gosom already found merges cleanly (by CID when the
+gosom row also has one, or by phone via `db.upsert_business`'s existing fallback otherwise) rather than
+creating a duplicate. gosom remains the primary/default provider (`discovery.providers: [gosom]`);
+`maps_list` is opt-in per campaign. `discovery.parallel_queries` (any provider) fans queries across N
+provider-chain instances instead of one at a time. **SCOPE.md #1 amended by owner decision
+2026-09-03:** a self-written scraping engine is in scope as long as it stays plain Playwright with no
+anti-bot evasion, no fingerprint spoofing, and no stealth patches — the same red line that already
+governed gosom and crawl4ai usage, now stated to also cover code this repo writes itself, not only
+pinned third-party engines. **Consequences:** a maps_list-discovered business is missing full postal
+address, opening hours and Business-Profile "about" facts unless a details visit is opted in (a real
+coverage trade-off against speed, not a bug); `Business.cid` becomes populated far more often across
+both providers, and normalize.py must not assume `place_id` is the only non-name+street dedupe anchor
+going forward.

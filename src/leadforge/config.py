@@ -33,6 +33,22 @@ class CompaniesHouseDiscoveryCfg(BaseModel):
     exclude_sic: list[str] = Field(default_factory=lambda: ["82200"])  # call centres = competitors (owner decision 7)
 
 
+class MapsListCfg(BaseModel):
+    """Native list-first Google Maps provider (`maps_list`, speed unit) — docs/09, ADR-014.
+
+    Measured 2026-09-02 (probe_list2.py, plain Playwright, no stealth): one persistent browser,
+    ~120 cards per search in 25-28s once the browser is up (13s page load + ~15s scrolling);
+    phone on 119-120/120 cards, website on 83-91/120. Defaults below are set from that probe.
+    """
+
+    max_cards: int = 130            # Google Maps list caps out ~120/search server-side regardless
+    search_delay_s: float = 4.0     # politeness gap between searches in one browser; +/-30% jitter applied
+    max_searches_per_hour: int = 120  # token-bucket cap per provider instance
+    visit_details: bool = False     # opt-in place-page visit for full address/hours/plus-code on NEW cards only
+    detail_tabs: int = 3            # pages of the same context cycled (round-robin) for detail visits
+    delay_s: float = 1.5            # politeness gap between detail-page navigations; +/-30% jitter applied
+
+
 class DiscoveryCfg(BaseModel):
     providers: list[str] = Field(default_factory=lambda: ["gosom"])  # + "dvsa" | "companies_house" per campaign
     grid_mode: str = "off"  # off | auto — keep off until gosom grid flags are live-verified (U8.2)
@@ -53,6 +69,10 @@ class DiscoveryCfg(BaseModel):
     est_min_per_tiled_query: float = 4.0   # measured 2026-08-31: 3.5-4.7 min tiled
     dvsa: DvsaCfg = Field(default_factory=DvsaCfg)
     companies_house: CompaniesHouseDiscoveryCfg = Field(default_factory=CompaniesHouseDiscoveryCfg)
+    maps_list: MapsListCfg = Field(default_factory=MapsListCfg)
+    # speed unit: fan discover queries across N provider-chain instances (each its own browser/subprocess
+    # pool); ==1 keeps the original strictly-serial loop. See pipeline.run_discover.
+    parallel_queries: int = 1
 
 
 class CrawlCfg(BaseModel):
