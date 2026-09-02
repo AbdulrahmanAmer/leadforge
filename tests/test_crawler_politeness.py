@@ -149,6 +149,26 @@ def test_unreachable_robots_is_treated_as_disallow(tmp_path, monkeypatch, server
     assert all(p == "/robots.txt" for p in handler.requests)
 
 
+def test_final_host_http_status_and_offsite_redirect(tmp_path, monkeypatch, server):
+    """v0.3 unit C1: crawl()'s new signals against a real server (not a mock) — final_host and
+    http_status are always set from the actual response; offsite_redirect compares final_host to the
+    caller-supplied business_domain, www-insensitive, and stays False with no business_domain given."""
+    base, handler = server
+    host = base.split("//", 1)[1]  # "127.0.0.1:PORT" — no www to strip either side
+    cfg, crawler = _crawler(tmp_path, monkeypatch)
+    try:
+        same = crawler.crawl(base, business_domain=host)
+        diff = crawler.crawl(base, business_domain="totally-different.example")
+        no_domain = crawler.crawl(base)
+    finally:
+        crawler.close()
+    assert same.signals["http_status"] == 200
+    assert same.signals["final_host"] == host.casefold()
+    assert same.signals["offsite_redirect"] is False
+    assert diff.signals["offsite_redirect"] is True
+    assert no_domain.signals["offsite_redirect"] is False  # nothing to compare against -> never flagged
+
+
 def test_pages_per_site_cap(tmp_path, monkeypatch, server):
     base, handler = server
     links = "".join(f'<a href="/about-{i}">about {i}</a>' for i in range(20))
