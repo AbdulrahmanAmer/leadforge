@@ -262,6 +262,95 @@ def test_crash_between_child_insert_and_parent_finish_does_not_duplicate_childre
     assert after_resume[0] == 1  # still just the one root
 
 
+# --------------------------------------------------------------------------------------- item 1
+def test_max_leads_is_a_per_run_cap_across_resumes(cfg, monkeypatch):
+    """item 1 (docs/09) BLOCKER: `processed` must be seeded from businesses already credited to
+    THIS run (first_run_id=run_id), not 0, on every run_discover call — otherwise a cap-stopped run
+    scrapes another max_leads worth of businesses each time it is --resumed."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+
+    @register
+    class FakeCapResume(DiscoveryProvider):
+        name = "fakecapresume"
+        supports_tiles = False
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            n = int(query.text[-1])
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": f"Shop {query.text}-{i}", "place_id": f"PID_CAPRESUME_{query.text}_{i}"})
+                for i in range(n)]
+
+    icp = _minimal_icp(max_leads=3)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    db.add_queries(conn, run_id, [("cap query 5", None), ("cap query 3", None)])
+
+    from leadforge.pipeline import run_discover
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecapresume")
+    conn = db.connect(cfg.db_path)
+    n1 = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
+    assert n1 == 3  # capped at 3 mid-way through the first (5-listing) query
+    pending1 = conn.execute("SELECT COUNT(*) c FROM queries WHERE run_id=? AND status='pending'",
+                            (run_id,)).fetchone()["c"]
+    assert pending1 == 1  # the second query never got a turn
+
+    # --resume: SAME cap, SAME run_id, one query (worth 3 MORE businesses if fetched) still pending.
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecapresume")
+    conn = db.connect(cfg.db_path)
+    n2 = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
+    assert n2 == 3, f"cap was not honoured across --resume: {n2} businesses (expected 3)"
+
+
+def test_run_discover_records_cap_reached_in_run_stats_when_it_stops_on_the_cap(cfg, monkeypatch):
+    """item 1 (docs/09): the run's stats_json records cap_reached=True only when the loop actually
+    broke because caps.max_leads was hit — not merely because a --limit smoke-test value was hit,
+    and not when discovery simply finished with room to spare."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+
+    @register
+    class FakeCapFlag(DiscoveryProvider):
+        name = "fakecapflag"
+        supports_tiles = False
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": f"Shop {i}", "place_id": f"PID_CAPFLAG_{i}"}) for i in range(5)]
+
+    icp = _minimal_icp(max_leads=2)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    db.add_queries(conn, run_id, [("q1", None)])
+
+    from leadforge.pipeline import run_discover
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecapflag")
+    conn = db.connect(cfg.db_path)
+    stats = json.loads(conn.execute("SELECT stats_json FROM runs WHERE id=?", (run_id,)).fetchone()["stats_json"])
+    assert stats["cap_reached"] is True
+
+    # a second ICP with room to spare (cap raised well past what's credited) must NOT claim cap_reached
+    icp2 = _minimal_icp(max_leads=1000)
+    icp_path2 = cfg.workspace / "icp2.yaml"
+    icp_path2.write_text(yaml.safe_dump(icp2.model_dump(mode="json")), encoding="utf-8")
+    conn = db.connect(cfg.db_path)
+    run_id2 = db.create_run(conn, str(icp_path2), icp2.icp_hash())
+    db.add_queries(conn, run_id2, [("q1", None)])
+    run_discover(cfg, icp2, icp_path2, run_id=run_id2, provider="fakecapflag")
+    conn = db.connect(cfg.db_path)
+    stats2 = json.loads(conn.execute("SELECT stats_json FROM runs WHERE id=?", (run_id2,)).fetchone()["stats_json"])
+    assert stats2.get("cap_reached") is not True
+
+
 # --------------------------------------------------------------------------------------- A3
 def test_resume_completes_discovery_from_exported_stage_with_pending_queries(cfg, monkeypatch):
     """docs/09 A3: the live campaign's run sat at stage 'exported' with 18 queries still pending.
@@ -334,6 +423,78 @@ def test_resume_without_pending_or_degraded_queries_does_not_reenter_discovery(c
     assert result["stage"] == "exported"
 
 
+# ------------------------------------------------------------------------ A3 x item 1 (cap honesty)
+def test_a3_stopped_exactly_at_cap_stays_stopped_on_resume(cfg, monkeypatch):
+    """item 1 (docs/09): a run that stopped exactly at caps.max_leads must NOT re-enter discovery
+    on --resume just because pending/degraded queries remain — the cap is a PER-RUN hard stop, and
+    re-entering would silently blow through it (docs/04 §5)."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    calls = {"n": 0}
+
+    def _boom(cfg_, icp_, icp_path_, limit=None, provider=None, run_id=None):
+        calls["n"] += 1
+        raise AssertionError("run_discover must not be called — this run already hit its cap")
+
+    icp = _minimal_icp(max_leads=2)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    for i in range(2):  # credited == cap
+        biz = to_business(RawListing(provider="gosom", fetched_at=now_iso(), data={
+            "title": f"Capped Shop {i}", "place_id": f"PID_STOPPED_{i}"}), run_id, icp, "GB")
+        db.upsert_business(conn, biz)
+    db.add_queries(conn, run_id, [("still pending", None)])
+    db.set_stage(conn, run_id, "exported", cap_reached=True)  # stopped ON the cap, per item 1
+
+    monkeypatch.setattr("leadforge.pipeline.run_discover", _boom)
+    from leadforge.pipeline import run_pipeline
+    result = run_pipeline(cfg, icp, icp_path, resume=True, skip_dm=True)
+    assert calls["n"] == 0
+    assert result["stage"] == "exported"
+
+
+def test_a3_reenters_when_cap_was_raised_past_what_is_credited(cfg, monkeypatch):
+    """item 1 (docs/09): the live campaign's exact shape — cap_reached True from a stop under an
+    OLDER (lower) cap, but the owners raise caps.max_leads before the tiled sweep, so credited < the
+    NEW cap -> discovery must re-enter and pick up the still-pending queries."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+
+    @register
+    class FakeCapRaised(DiscoveryProvider):
+        name = "fakecapraised"
+        supports_tiles = False
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": "New Shop", "place_id": "PID_CAPRAISED_NEW"})]
+
+    icp = _minimal_icp(max_leads=1000)  # raised well past the 2 already credited
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+    cfg.discovery.providers = ["fakecapraised"]
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    for i in range(2):
+        biz = to_business(RawListing(provider="gosom", fetched_at=now_iso(), data={
+            "title": f"Old Capped Shop {i}", "place_id": f"PID_OLDCAP_{i}"}), run_id, icp, "GB")
+        db.upsert_business(conn, biz)
+    db.add_queries(conn, run_id, [("still pending", None)])
+    db.set_stage(conn, run_id, "exported", cap_reached=True)  # stopped under the OLD, lower cap
+
+    from leadforge.pipeline import run_pipeline
+    result = run_pipeline(cfg, icp, icp_path, resume=True, skip_dm=True)
+    assert result["stage"] == "exported"
+    conn = db.connect(cfg.db_path)
+    n = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
+    assert n == 3  # 2 pre-existing + 1 discovered after the cap was raised
+
+
 # --------------------------------------------------------------------------------------- A5
 _GBP_FIXTURE = Path(__file__).parent / "fixtures" / "gosom_gbp_sample.ndjson"
 
@@ -356,7 +517,9 @@ def test_gbp_facts_extracted_from_gosom_raw_payload():
     assert gbp["booking_links"] == [
         "https://riverside-auto.example/book", "https://wa.me/447700900123",
     ]
-    assert gbp["status"] == "OPERATIONAL"
+    # A5 review (minor): gosom v1.17.4 emits '' for the overwhelming majority of live places (the
+    # 'OPERATIONAL' the pre-fix fixture used was invented, not observed) — the fixture reflects that.
+    assert gbp["status"] == ""
     assert gbp["owner_name"] == "Riverside Auto Repair (Owner)"
     assert gbp["reply_signatures"] == ["Sam"]      # every signed reply names the same person once
     # "Ali" is credited in 4 distinct reviews (>= 3); "This" ('This was fixed...') appears 3x too but
@@ -377,6 +540,28 @@ def test_reply_signatures_excludes_non_name_signoffs():
         {"reply_text_original": "Thanks so much for the kind words! Regards, Sam"},
     ]
     assert _reply_signatures(reviews) == ["Sam"]
+
+
+def test_reply_signatures_excludes_the_reviewer_own_name_echoed_back():
+    """A5 review (major): 'Thanks <Name>' is the DOMINANT reply form on the live cache and it is the
+    owner thanking the REVIEWER by name, not a sign-off — must be rejected when the signed name
+    equals the review author's own first token ('Name'/'name' on that same review), even though it
+    passes the stoplist, the plausible-name check and the tail-of-reply window."""
+    reviews_echo = [
+        {"Name": "Sam", "reply_text_original": "Thanks Sam, glad we could help with your MOT!"},
+    ]
+    assert _reply_signatures(reviews_echo) == []  # rejected: echoes the reviewer's own first name
+
+    reviews_real_signoff = [
+        {"Name": "Priya", "reply_text_original": "Thanks so much for the kind words! Regards, Marcus"},
+    ]
+    assert _reply_signatures(reviews_real_signoff) == ["Marcus"]  # unrelated name -> still accepted
+
+    reviews_full_name_reviewer = [
+        {"Name": "Samantha Rivers", "reply_text_original": "Thanks so much! Regards, Sam"},
+    ]
+    # only the FIRST token of the reviewer's name is compared — "Sam" != "Samantha" -> accepted
+    assert _reply_signatures(reviews_full_name_reviewer) == ["Sam"]
 
 
 def test_review_credited_names_excludes_mot_and_all_caps():

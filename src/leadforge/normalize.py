@@ -224,9 +224,15 @@ def _is_plausible_name(name: str, name_tokens: set[str]) -> bool:
 
 def _reply_signatures(reviews: list, business_name: str = "") -> list[str]:
     """First names an owner signed their review replies with (reply_text_original), e.g. 'Thanks Sam' —
-    the LAST sign-off in a reply is kept (sign-offs sit at the end, so requiring it near the end of the
-    text avoids matching a sign-off word used mid-sentence earlier in a long reply); one entry per
-    distinct name."""
+    the LAST sign-off in a reply is kept, and only when it sits in the LAST 60 characters of the text
+    (sign-offs sit at the tail, so requiring it near the end avoids matching a sign-off word used
+    mid-sentence earlier in a long reply); one entry per distinct name.
+
+    A5 review (major): the dominant reply form on the live cache is the OWNER opening with
+    'Thanks <reviewer's name>' — e.g. reviewer 'Sam' gets 'Thanks Sam, glad we could help' — which the
+    signoff regex matches just as readily as a genuine 'Regards, <owner>' close. A candidate equal to
+    the review author's own first token (the 'Name'/'name' field on that same review) is therefore
+    never accepted as an owner signature, regardless of stoplist or position."""
     name_tokens = _name_token_set(business_name)
     names: list[str] = []
     for r in reviews:
@@ -239,11 +245,14 @@ def _reply_signatures(reviews: list, business_name: str = "") -> list[str]:
         if not matches:
             continue
         last = matches[-1]
-        if len(text) - last.start() > 40:  # a real sign-off sits at the tail of the reply
+        if len(text) - last.start() > 60:  # a real sign-off sits in the last 60 chars of the reply
             continue
         name = last.group(1)
         if name.casefold() in _SIGNOFF_STOP or not _is_plausible_name(name, name_tokens):
             continue
+        reviewer_first = str(r.get("Name") or r.get("name") or "").strip().split(" ", 1)[:1]
+        if reviewer_first and name.casefold() == reviewer_first[0].casefold():
+            continue  # the owner thanking the REVIEWER by name, not signing off as them
         if name not in names:
             names.append(name)
     return names
@@ -273,7 +282,12 @@ def _review_credited_names(reviews: list, business_name: str = "") -> list[str]:
 
 def gbp_facts(d: dict, g: dict, business_name: str = "") -> dict:
     """Business.enrich["gbp"] (A5, docs/09): Google Business Profile facts the raw provider payload
-    already carries. Empty defaults, never None, so export/scoring never has to null-check this."""
+    already carries. Empty defaults, never None, so export/scoring never has to null-check this.
+
+    `status` is UNRELIABLE (docs/09 item 4, measured 2026-09-02 against gosom v1.17.4 live cache):
+    it is '' for 1335 of 1339 live places and a subtitle-like string (not a fixed vocabulary of
+    "OPERATIONAL"/"CLOSED"/etc.) for the rest. It is kept here as raw evidence only — never gate a
+    scoring hook, an export column's meaning, or any other decision on this field's value or presence."""
     about = _pick(d, g["about"])
     order_online = _pick(d, g["order_online"])
     reviews = _pick(d, g["reviews"])

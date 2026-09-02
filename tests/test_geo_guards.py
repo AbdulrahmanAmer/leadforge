@@ -169,6 +169,26 @@ def test_geocode_prefers_preferred_addresstype_over_a_merely_undisfavored_higher
     assert out["display"] == "Manchester, Greater Manchester, England, UK"
 
 
+def test_geocode_canal_loses_to_undisfavored_type_with_no_preferred_row_present(cfg, monkeypatch):
+    """A1 review (minor): a disfavored canal (higher importance, listed first) must lose to a
+    'railway' row that is in NEITHER _PREFERRED_ADDRESSTYPES nor _DISFAVORED_ADDRESSTYPES — proving
+    _DISFAVORED_ADDRESSTYPES itself does the exclusion, independent of the preferred-tier logic
+    (which has nothing to prefer here). Must go red if _DISFAVORED_ADDRESSTYPES is removed: with no
+    disfavored filter, the canal (0.8 > 0.4 importance) would win outright."""
+    _fake_httpx(monkeypatch, [
+        {"lat": "53.39", "lon": "-2.57", "boundingbox": ["53.35", "53.45", "-2.65", "-2.50"],
+         "display_name": "Random Canal, Cheshire, England, UK", "importance": 0.8,
+         "addresstype": "canal",
+         "address": {"waterway": "Random Canal", "county": "Cheshire", "state": "England"}},
+        {"lat": "53.10", "lon": "-2.90", "boundingbox": ["53.05", "53.15", "-2.95", "-2.85"],
+         "display_name": "Random Railway Station, Cheshire, England, UK", "importance": 0.4,
+         "addresstype": "railway",
+         "address": {"railway": "Random Railway Station", "county": "Cheshire", "state": "England"}},
+    ])
+    out = geocode("Randomtown", cfg, "GB")
+    assert out["display"] == "Random Railway Station, Cheshire, England, UK"
+
+
 def test_area_bbox_override_skips_nominatim_entirely(cfg, monkeypatch):
     """docs/09 A1: cfg.discovery.area_bbox[area] (exact or casefolded) is used verbatim and the
     Nominatim transport must never be touched — not even to populate the cache."""
