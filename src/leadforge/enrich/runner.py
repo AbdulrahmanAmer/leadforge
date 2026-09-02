@@ -14,6 +14,8 @@ from leadforge.config import Config
 from leadforge.enrich import browser
 from leadforge.enrich.crawler import Page, SiteCrawler
 from leadforge.enrich.extract import (
+    classify_email_affinity,
+    email_context,
     extract_emails,
     extract_people,
     extract_people_ner,
@@ -54,7 +56,8 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                     region = _region_for_business(b, cfg.default_region)
                     people_fn = extract_people_ner if ner_available() else extract_people
                     for email, label in extract_emails(rendered, text).items():
-                        out["emails"].setdefault(email, {"label": label, "url": b["website"]})
+                        out["emails"].setdefault(email, {"label": label, "url": b["website"],
+                                                          "context": email_context(text, email)})
                     for phone in extract_phones(rendered, text, region):
                         if phone not in out["phones"]:
                             out["phones"].append(phone)
@@ -82,7 +85,8 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         people_fn = extract_people_ner if ner_available() else extract_people
         for page in res.pages:
             for email, label in extract_emails(page.html, page.text).items():
-                out["emails"].setdefault(email, {"label": label, "url": page.url})
+                out["emails"].setdefault(email, {"label": label, "url": page.url,
+                                                  "context": email_context(page.text, email)})
             for phone in extract_phones(page.html, page.text, region):
                 if phone not in out["phones"]:
                     out["phones"].append(phone)
@@ -109,7 +113,8 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                 rendered_any = True
                 text = SiteCrawler.extract_text(rendered)
                 for email, label in extract_emails(rendered, text).items():
-                    out["emails"].setdefault(email, {"label": label, "url": url})
+                    out["emails"].setdefault(email, {"label": label, "url": url,
+                                                      "context": email_context(text, email)})
                 for cand in people_fn(text, url):
                     out["people"].append(cand)
             if rendered_any:
@@ -121,12 +126,16 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
 
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
-    """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'infer', 'validate', 'all'."""
+    """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'gbp' (Google
+    Business Profile facts for site-less businesses — the crawl stage covers sited ones inline),
+    'infer', 'validate', 'all'."""
     counts = {"sites_crawled": 0, "contacts": 0, "dm_candidates": 0, "needs_browser": 0, "emails_valid": 0}
     if stage in ("all", "site"):
         _crawl_stage(conn, cfg, limit, counts)
     if stage in ("all", "registry"):
         _registry_stage(conn, cfg, counts)
+    if stage in ("all", "gbp"):
+        _gbp_stage(conn, cfg, counts)
     if stage in ("all", "infer"):
         _infer_stage(conn, cfg, counts)
     if stage in ("all", "validate"):
@@ -203,7 +212,7 @@ def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
                 db.add_person(conn, person)
                 db.add_evidence(conn, ev)
                 counts["dm_candidates"] = counts.get("dm_candidates", 0) + 1
-            _auto_pick_registry_dm(conn, b, found, counts)
+            _auto_pick_registry_dm(conn, b, found, counts, profile)
             enrich_update: dict = {"registry_checked": True}
             if profile:
                 enrich_update["registry_profile"] = profile
@@ -242,7 +251,7 @@ def _crawl_stage(conn: sqlite3.Connection, cfg: Config, limit: int, counts: dict
                 res = fut.result()
             except Exception as e:  # noqa: BLE001 — one bad site never kills the batch
                 LOG.warning("enrich failed for %s: %s", b["id"], e)
-                db.update_enrich(conn, b["id"], {"crawled_at": now_iso(), "error": str(e)[:200]})
+                db.update_enrich(conn, b["id"], {"attempted_at": now_iso(), "error": str(e)[:200]})
                 continue
             _persist(conn, cfg, b, res, counts, registries, social_ok)
             if res["needs_browser"] and not browser_ok:
@@ -256,16 +265,24 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
         counts["sites_crawled"] += 1
     bid = b["id"]
     from leadforge.enrich.extract import email_matches_business
+    existing_names = [p["name"] for p in db.people_for(conn, bid)]
     for email, meta in res["emails"].items():
         if not email_matches_business(email, b["domain"]):
             continue  # testimonial/client/widget email from someone else's domain
         tier, vmeta = validate_email(email, meta["label"], cfg)
+        affinity = classify_email_affinity(email, b["domain"], b["name_norm"], existing_names)
+        if affinity == "foreign":
+            continue  # never this business's mailbox — the domain gate above only proved freemail-or-own
+        if affinity == "freemail_unlinked":
+            tier = "risky"
+            vmeta = {**vmeta, "reason": "freemail_unlinked"}
         if tier == "valid":
             counts["emails_valid"] += 1
-        db.add_contact(conn, Contact(business_id=bid, kind="email", value=email, label=meta["label"],
-                                     tier=tier, verified_at=now_iso(), meta=vmeta))
-        db.add_evidence(conn, Evidence(business_id=bid, ref_table="contacts", fact="email_found",
-                                       url=meta["url"], snippet=email, observed_at=now_iso()))
+        cid = db.add_contact(conn, Contact(business_id=bid, kind="email", value=email, label=meta["label"],
+                                           tier=tier, verified_at=now_iso(), meta=vmeta, affinity=affinity))
+        snippet = meta.get("context") or email
+        db.add_evidence(conn, Evidence(business_id=bid, ref_table="contacts", ref_id=cid, fact="email_found",
+                                       url=meta["url"], snippet=snippet, observed_at=now_iso()))
         counts["contacts"] += 1
     for phone in res["phones"]:
         db.add_contact(conn, Contact(business_id=bid, kind="phone", value=phone, label="site", tier="valid",
@@ -275,11 +292,14 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
         db.add_contact(conn, Contact(business_id=bid, kind="social", value=url, label=net, tier="valid"))
     for cand in res["people"]:
         db.add_person(conn, Person(business_id=bid, name=cand.name, title=cand.title, source_url=cand.source_url,
-                                   snippet=cand.snippet, labeled_by="heuristic", labeled_at=now_iso()))
+                                   snippet=cand.snippet, labeled_by="heuristic", labeled_at=now_iso(),
+                                   origin="heuristic"))
         db.add_evidence(conn, Evidence(business_id=bid, ref_table="people", fact="dm_candidate",
                                        url=cand.source_url, snippet=f"{cand.name} — {cand.title}", observed_at=now_iso()))
         counts["dm_candidates"] += 1
     _registry_cross_check(conn, b, counts, registries or [])
+    _apply_gbp(conn, b, res["signals"], counts)
+    res["signals"]["phone_confirmed"] = bool(b["phone_e164"]) and any(p == b["phone_e164"] for p in res["phones"])
     social_presence: dict = {}
     if social_ok:
         from leadforge.providers import social
@@ -290,11 +310,14 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
             db.add_evidence(conn, Evidence(business_id=bid, ref_table="businesses", fact="social_presence",
                                            url=p["url"], snippet=f"{net}: last post {p['last_post_at'] or 'unknown'}",
                                            observed_at=now_iso()))
-    enrich = {"crawled_at": now_iso(), "signals": res["signals"], "socials": res["socials"],
-              "pages": res["pages"], "needs_browser": res["needs_browser"],
-              "registry_checked": bool(registries)}
-    if res.get("error"):
-        enrich["error"] = res["error"]  # WHY the crawl failed (robots-disallowed / unreachable cause)
+    enrich: dict = {}
+    if res["ok"]:
+        enrich["crawled_at"] = now_iso()
+    else:
+        enrich["attempted_at"] = now_iso()
+        enrich["error"] = res.get("error") or "crawl_failed"
+    enrich.update({"signals": res["signals"], "socials": res["socials"], "pages": res["pages"],
+                   "needs_browser": res["needs_browser"], "registry_checked": bool(registries)})
     if res.get("profile"):
         enrich["profile"] = res["profile"]
     if social_presence:
@@ -306,17 +329,90 @@ def _registry_cross_check(conn: sqlite3.Connection, b, counts: dict, registries:
     """U4.6: officer lookup from public registries — key-gated (empty list when no keys), country-gated."""
     if not registries:
         return
+    from leadforge.providers.registry import CompaniesHouseRegistry
     country = (b["address_country"] or "").strip().upper()
     registry_people: list[Person] = []
+    profile: dict | None = None
     for reg in registries:
         if country not in reg.jurisdictions():
             continue
-        for person, ev in reg.lookup(b):
+        if isinstance(reg, CompaniesHouseRegistry):
+            people, p = reg.lookup_with_profile(b)
+            if p:
+                profile = p
+        else:
+            people = reg.lookup(b)
+        for person, ev in people:
             registry_people.append(person)
             db.add_person(conn, person)
             db.add_evidence(conn, ev)
             counts["dm_candidates"] += 1
-    _auto_pick_registry_dm(conn, b, registry_people, counts)
+    # persist the profile on the crawled path too — it used to be written only on the site-less
+    # path (_registry_stage), so a crawled business's Registry Name/Match columns came out blank.
+    enrich_update: dict = {"registry_checked": True}
+    if profile:
+        enrich_update["registry_profile"] = profile
+    db.update_enrich(conn, b["id"], enrich_update)
+    _auto_pick_registry_dm(conn, b, registry_people, counts, profile)
+
+
+def _apply_gbp(conn: sqlite3.Connection, b, signals: dict, counts: dict) -> dict:
+    """Google Business Profile facts the discover stage already stored in enrich_json.gbp (unit A) —
+    a booking link is a strong contactability signal, and an owner-reply signer / repeatedly-credited
+    reviewer is a real decision-maker lead even with no website at all."""
+    import json
+    try:
+        enrich_json = json.loads(b["enrich_json"] or "{}") if "enrich_json" in b.keys() else {}
+    except (json.JSONDecodeError, TypeError):
+        enrich_json = {}
+    gbp = enrich_json.get("gbp") or {}
+    if not gbp:
+        return {}
+    if gbp.get("booking_links"):
+        signals["booking_hint"] = True
+        signals["booking_source"] = "gbp"
+    existing = {p["name"].casefold() for p in db.people_for(conn, b["id"]) if p["origin"] == "gbp"}
+    maps_url = b["maps_url"] if "maps_url" in b.keys() else ""
+    for name in (gbp.get("reply_signatures") or []):
+        if not name or name.casefold() in existing:
+            continue
+        db.add_person(conn, Person(business_id=b["id"], name=name, title="", labeled_by="gbp", origin="gbp",
+                                   snippet="signed an owner reply on Google", source_url=maps_url or "",
+                                   labeled_at=now_iso()))
+        existing.add(name.casefold())
+        counts["dm_candidates"] = counts.get("dm_candidates", 0) + 1
+    review_counts: dict[str, int] = {}
+    for name in (gbp.get("review_names") or []):
+        if name:
+            review_counts[name] = review_counts.get(name, 0) + 1
+    for name, n in review_counts.items():
+        if name.casefold() in existing:
+            continue
+        plural = "review" if n == 1 else "reviews"
+        db.add_person(conn, Person(business_id=b["id"], name=name, title="", labeled_by="gbp", origin="gbp",
+                                   snippet=f"credited by customers in {n} {plural}", source_url=maps_url or "",
+                                   labeled_at=now_iso()))
+        existing.add(name.casefold())
+        counts["dm_candidates"] = counts.get("dm_candidates", 0) + 1
+    return gbp
+
+
+def _gbp_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
+    """Site-less businesses never reach _crawl_stage (where _apply_gbp normally runs inline), so
+    their GBP facts — booking links, owner-reply signers, review-credited names — need their own pass."""
+    import json
+    rows = conn.execute(
+        """SELECT * FROM businesses b
+           WHERE json_extract(b.enrich_json,'$.gbp') IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM people p WHERE p.business_id=b.id AND p.origin='gbp')"""
+    ).fetchall()
+    for b in rows:
+        signals: dict = {}
+        _apply_gbp(conn, b, signals, counts)
+        if signals:
+            prior = json.loads(b["enrich_json"] or "{}").get("signals") or {}
+            db.update_enrich(conn, b["id"], {"signals": {**prior, **signals}})
+    conn.commit()
 
 
 _CORPORATE_OFFICER_RE = None
@@ -330,10 +426,17 @@ def _is_corporate_officer(name: str) -> bool:
     return bool(_CORPORATE_OFFICER_RE.search(name))
 
 
-def _auto_pick_registry_dm(conn: sqlite3.Connection, b, registry_people: list[Person], counts: dict) -> None:
+def _auto_pick_registry_dm(conn: sqlite3.Connection, b, registry_people: list[Person], counts: dict,
+                           profile: dict | None = None) -> None:
     """v0.1.1 (amends ADR-003): exactly ONE active individual director from the official registry is
     stronger evidence than any agent inference — auto-mark them DM so big runs don't queue the
-    obvious cases. 0 or 2+ individuals (or corporate officers only) stay with the agent."""
+    obvious cases. 0 or 2+ individuals (or corporate officers only) stay with the agent.
+
+    v0.3: also requires a matched registry `profile` whose company_status is active — the registry
+    lookup already filters on this (name_similarity + active_only), but auto-picking a DM is
+    consequential enough to assert it here rather than trust the caller silently."""
+    if profile is None or (profile.get("company_status") or "").casefold() != "active":
+        return
     individuals = [p for p in registry_people if not _is_corporate_officer(p.name)]
     if len(individuals) != 1:
         return

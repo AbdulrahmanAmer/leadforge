@@ -71,11 +71,23 @@ def _humanize(role: str) -> str:
     return role.replace("-", " ").replace("_", " ").strip().title()
 
 
+def _name_norm_of(business_row) -> str:
+    """business_row is sometimes a sqlite3.Row (no .get()), sometimes a plain dict (tests) — and
+    may not carry 'name_norm' at all. Fall back to 'name' either way."""
+    try:
+        val = business_row["name_norm"]
+    except (KeyError, IndexError):
+        val = None
+    return val or business_row["name"]
+
+
 class CompaniesHouseRegistry:
     name = "companies_house"
 
     def __init__(self, cfg):
         self.key = cfg.registry.companies_house_key
+        self.min_similarity = cfg.registry.min_name_similarity
+        self.active_only = cfg.registry.active_only
         self.disabled = False
 
     def jurisdictions(self) -> set[str]:
@@ -86,7 +98,12 @@ class CompaniesHouseRegistry:
         return people
 
     def lookup_with_profile(self, business_row) -> tuple[list[tuple[Person, Evidence]], dict | None]:
-        """Officers + the matched company's registry profile (number, incorporation, status, SIC).
+        """Officers + the matched company's registry profile (number, incorporation, status, SIC,
+        legal_name, match_similarity). A hit is only ever considered when it clears BOTH gates:
+        locality overlap AND name_similarity >= cfg.registry.min_name_similarity — a same-locality
+        company with an unrelated name is worse than no match at all (v0.2 measured 7-10% wrong-company
+        matches). When cfg.registry.active_only, a dissolved/liquidated company is also rejected —
+        from the search hit's own company_status when present, else from the fetched profile.
         Never raises; ([], None) on any problem. On 429: back off 60s once, then disable for the run."""
         if self.disabled or not self.key:
             return [], None
@@ -103,16 +120,24 @@ class CompaniesHouseRegistry:
                 self.disabled = True
                 return [], None
             r.raise_for_status()
+            name_norm = _name_norm_of(business_row)
             for item in (r.json().get("items") or []):
                 if not _locality_overlap(item, business_row):
                     continue
                 number = item.get("company_number")
                 if not number:
                     continue
+                title = item.get("title") or ""
+                similarity = name_similarity(name_norm, title)
+                if similarity < self.min_similarity:
+                    continue  # same-locality, unrelated company — reject before spending a network call
                 profile = {"company_number": number,
                            "incorporated": item.get("date_of_creation") or "",
                            "company_status": item.get("company_status") or "",
-                           "legal_name": item.get("title") or "", "sic_codes": []}
+                           "legal_name": title, "sic_codes": [], "match_similarity": similarity}
+                if self.active_only and profile["company_status"] \
+                        and profile["company_status"].casefold() != "active":
+                    continue  # dissolved/liquidated, known from the search hit itself — no profile fetch needed
                 try:
                     _CH_BUCKET.wait()
                     rp = httpx.get(f"{CH_BASE}/company/{number}", auth=auth, timeout=15.0)
@@ -123,6 +148,8 @@ class CompaniesHouseRegistry:
                         profile["company_status"] = pj.get("company_status") or profile["company_status"]
                 except Exception:  # noqa: BLE001 — profile is a bonus, never blocks officers
                     pass
+                if self.active_only and (profile["company_status"] or "").casefold() != "active":
+                    continue  # dissolved/liquidated, only knowable from the profile fetch
                 _CH_BUCKET.wait()
                 _CH_BUCKET.wait()
                 ro = httpx.get(f"{CH_BASE}/company/{number}/officers",
@@ -146,6 +173,7 @@ class CompaniesHouseRegistry:
                                   observed_at=now_iso())
                     out.append((person, ev))
                 return out, profile
+            return [], None
         except Exception as e:  # noqa: BLE001 — registries must never block the run
             LOG.warning("companies_house lookup failed for %s: %s", business_row["name"], type(e).__name__)
         return [], None
@@ -156,6 +184,8 @@ class OpenCorporatesRegistry:
 
     def __init__(self, cfg):
         self.token = cfg.registry.opencorporates_token
+        self.min_similarity = cfg.registry.min_name_similarity
+        self.active_only = cfg.registry.active_only
         self.disabled = False
 
     def jurisdictions(self) -> set[str]:
@@ -184,11 +214,18 @@ class OpenCorporatesRegistry:
                 return []
             r.raise_for_status()
             out = []
+            name_norm = _name_norm_of(business_row)
             for wrap in ((r.json().get("results") or {}).get("companies") or [])[:3]:
                 comp = wrap.get("company") or {}
                 addr = {"address_snippet": comp.get("registered_address_in_full") or ""}
                 if not _locality_overlap(addr | {"address": {}}, business_row):
                     continue
+                title = comp.get("name") or ""
+                if title and name_similarity(name_norm, title) < self.min_similarity:
+                    continue  # same-locality, unrelated company
+                status = str(comp.get("current_status") or "").casefold()
+                if self.active_only and status and status != "active":
+                    continue  # dissolved/liquidated — reject where the data says so
                 url = comp.get("opencorporates_url") or ""
                 for off in (comp.get("officers") or []):
                     o = off.get("officer") or {}
