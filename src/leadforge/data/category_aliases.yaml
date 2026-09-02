@@ -1,0 +1,117 @@
+# Vertical -> Google category alias table (U/Wave1 unit D, docs/09 "D — Scoring and export truth").
+#
+# score._f_industry_match uses this to grade a business's own category (categories_json + the primary
+# `category` field) against the vertical(s) the ICP's wanted categories belong to:
+#   - a business category in a matched vertical's `exact` list -> 1.0 (same trade as the ICP)
+#   - a business category in a matched vertical's `adjacent` list -> 0.6 (a real, but different, trade
+#     that overlaps with the ICP's — e.g. a tyre shop relative to general auto repair/MOT: many garages
+#     also fit tyres, but "tyre shop" is not the same listing as "auto repair shop"/"MOT centre", so it
+#     is graded adjacent rather than exact, by design)
+#   - anything else falls through to score.py's token-overlap fallback (0.6 shared significant token,
+#     else 0.1); stopwords ('shop','service','services','centre','center','station') are excluded from
+#     that fallback so generic words like "centre" don't fuzzy-match unrelated categories (a "Community
+#     centre" must not read as adjacent to an ICP that includes "MOT centre").
+verticals:
+  auto_repair:
+    exact:
+      - auto repair shop
+      - car repair shop
+      - car repair and maintenance service
+      - car garage
+      - garage
+      - mot centre
+      - mot test centre
+      - mot testing station
+      - vehicle inspection station
+      - car inspection station
+      - auto body shop
+      - body shop
+      - bodyshop
+      - collision repair shop
+      - mechanic
+      - car mechanic
+      - auto mechanic
+    adjacent:
+      - tyre shop
+      - tire shop
+      - tyre dealer
+      - tire dealer
+      - car dealer
+      - used car dealer
+      - car wash
+      - auto parts store
+  dental:
+    exact:
+      - dentist
+      - dental clinic
+      - dental hygienist
+      - cosmetic dentist
+      - orthodontist
+    adjacent:
+      - dental laboratory
+      - denture care center
+  real_estate:
+    exact:
+      - real estate agency
+      - real estate agent
+      - estate agent
+      - letting agent
+      - lettings agent
+      - property management company
+    adjacent:
+      - real estate consultant
+      - real estate appraiser
+  accounting:
+    exact:
+      - accounting firm
+      - accountant
+      - bookkeeping service
+      - tax preparation service
+      - certified public accountant
+    adjacent:
+      - financial consultant
+  law:
+    exact:
+      - law firm
+      - lawyer
+      - solicitor
+      - attorney
+      - legal services
+    adjacent:
+      - notary public
+  plumbing:
+    exact:
+      - plumber
+      - plumbing supply store
+    adjacent:
+      - heating contractor
+  electrical:
+    exact:
+      - electrician
+      - electrical supply store
+    adjacent:
+      - electrical installation service
+  restaurant:
+    exact:
+      - restaurant
+      - cafe
+      - coffee shop
+    adjacent:
+      - fast food restaurant
+      - takeaway restaurant
+  gym:
+    exact:
+      - gym
+      - fitness center
+      - health club
+    adjacent:
+      - yoga studio
+      - personal trainer
+  salon:
+    exact:
+      - hair salon
+      - barber shop
+      - beauty salon
+    adjacent:
+      - nail salon
+      - spa

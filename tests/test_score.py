@@ -1,3 +1,5 @@
+import json
+
 from leadforge import db
 from leadforge.models import Business, Contact, Person
 from leadforge.score import Scorer, score_run
@@ -12,6 +14,10 @@ def _seed_business(conn, **kw):
     b = Business(**base)
     db.upsert_business(conn, b)
     return b
+
+
+def _row(conn, business_id):
+    return next(r for r in db.all_businesses(conn) if r["id"] == business_id)
 
 
 def test_website_missing_is_positive_for_web_offer(conn, sample_icp):
@@ -35,18 +41,23 @@ def test_hard_dq_no_phone(conn, sample_icp):
     assert row["tier"] == "DQ"
 
 
-def test_dm_and_contact_raise_score(conn, sample_icp):
+def test_dm_and_contact_raise_contactability_not_fit(conn, sample_icp):
+    """v0.3: reachability (DM/email/phone) no longer blends into `total`/fit — it is graded
+    separately as the `contactability` meta factor, so it must NOT move `total` at all."""
     run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
     _seed_business(conn)
     scorer = Scorer(conn, sample_icp, run_id)
-    before = scorer.score_business(db.all_businesses(conn)[0]).total
+    before = scorer.score_business(db.all_businesses(conn)[0])
+    before_contactability = next(f for f in before.factors if f.factor == "contactability").points
 
     db.add_person(conn, Person(business_id="biz_x", name="Joe A", title="Owner", is_dm=1, dm_confidence=0.9,
                                labeled_by="agent"))
     db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="joe@indie.com", label="personal",
-                                 tier="valid"))
-    after = scorer.score_business(db.all_businesses(conn)[0]).total
-    assert after > before
+                                 tier="valid", affinity="freemail_unlinked"))
+    after = scorer.score_business(db.all_businesses(conn)[0])
+    after_contactability = next(f for f in after.factors if f.factor == "contactability").points
+    assert after.total == before.total          # fit is untouched by reachability
+    assert after_contactability > before_contactability  # but contactability rose (DM identified)
 
 
 def test_weight_override_changes_ranking(conn, sample_icp):
@@ -148,3 +159,162 @@ def test_export_cells_are_always_resolved(tmp_path, monkeypatch):
     assert row["Company No"] == "not looked up"
     assert _format_hours(None) == "-"
     assert _format_hours(_json.dumps({})) == "-"
+
+
+# --- v0.3 D: category alias truth table (docs/09 §D acceptance table) -------------------------
+def test_category_alias_truth_table(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.target.categories = ["auto repair shop", "car garage", "MOT centre"]
+    scorer = Scorer(conn, sample_icp, run_id)
+    cases = {
+        "Car inspection station": 1.0,
+        "Car repair and maintenance service": 1.0,
+        "MOT centre": 1.0,
+        "Auto body shop": 1.0,
+        "Mechanic": 1.0,
+        "Tire shop": 0.6,          # adjacent, not the same trade as general repair/MOT — documented
+        "Car dealer": 0.6,         # "0.6 at most" per the acceptance table
+        "Community centre": 0.1,   # 'centre' is a stopword — must NOT fuzzy-match "MOT centre"
+    }
+    for i, (cat, expected) in enumerate(cases.items()):
+        bid = f"biz_cat_{i}"
+        _seed_business(conn, id=bid, place_id=bid, dedupe_key=f"pid:{bid}", category=cat, categories=[cat])
+        score, why = scorer._f_industry_match(_row(conn, bid), {})
+        assert score == expected, f"{cat}: expected {expected}, got {score} ({why})"
+
+
+# --- v0.3 D: contactability weight table (docs/09 §D) ------------------------------------------
+def test_contactability_dm_only(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164=None)  # no phone -> isolate the DM bonus
+    db.add_person(conn, Person(business_id="biz_x", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.9, labeled_by="agent"))
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "contactability").points == 30
+
+
+def test_contactability_validated_phone_only(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164="+17135550100")
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "contactability").points == 25
+
+
+def test_contactability_email_tiers(conn, sample_icp):
+    cases = [
+        ("own_domain", "valid", 30),
+        ("own_domain", "role", 22),
+        ("freemail_linked", "valid", 20),
+        ("", "inferred", 8),
+        ("freemail_unlinked", "risky", 0),
+    ]
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    for i, (affinity, tier, expected) in enumerate(cases):
+        bid = f"biz_email_{i}"
+        _seed_business(conn, id=bid, place_id=bid, dedupe_key=f"pid:{bid}", phone_e164=None)
+        db.add_contact(conn, Contact(business_id=bid, kind="email", value=f"c{i}@example.com",
+                                     tier=tier, affinity=affinity))
+        s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, bid))
+        assert next(f for f in s.factors if f.factor == "contactability").points == expected, \
+            f"{affinity}/{tier}: expected {expected}"
+
+
+def test_contactability_registry_and_phone_confirmed_and_mobile(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164=None)
+    conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'", (json.dumps({
+        "registry_profile": {"company_number": "123", "company_status": "active"},
+        "signals": {"phone_confirmed": True},
+    }),))
+    db.add_contact(conn, Contact(business_id="biz_x", kind="phone", value="+447890123456"))  # UK mobile
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "contactability").points == 5 + 5 + 3
+
+
+def test_contactability_combined_matches_the_arithmetic(conn, sample_icp):
+    """DM(30) + own-domain valid email(30) + validated phone(25) + registry-active(5)
+    + phone_confirmed(5) + mobile contact(3) = 98 — never hits the 100 cap under this weight table."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164="+17135550100")
+    db.add_person(conn, Person(business_id="biz_x", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.9, labeled_by="agent"))
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
+                                 tier="valid", affinity="own_domain"))
+    db.add_contact(conn, Contact(business_id="biz_x", kind="phone", value="+447890123456"))
+    conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'", (json.dumps({
+        "registry_profile": {"company_number": "123", "company_status": "active"},
+        "signals": {"phone_confirmed": True},
+    }),))
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    contact = next(f for f in s.factors if f.factor == "contactability")
+    assert contact.points == 98
+    status = next(f for f in s.factors if f.factor == "status")
+    assert status.why == "READY"  # tier A/B (fit unaffected) + contactability >= 50
+
+
+# --- v0.3 D: hooks fire only on real evidence (phantom-crawl fixture) ---------------------------
+def test_hooks_never_fire_on_a_phantom_crawl(conn, sample_icp):
+    """crawled_at stamped but `signals` has no keys computed (the live campaign's 115 zero-page
+    'phantom' crawls) must fire NO signal-based hook, even though the soft qualifiers are enabled."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.soft = ["phone_only_booking", "weak_social_presence", "stale_site", "hiring"]
+    _seed_business(conn, website="https://x.example")
+    conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'",
+                (json.dumps({"crawled_at": "2026-01-01T00:00:00Z", "signals": {}}),))
+    scorer = Scorer(conn, sample_icp, run_id)
+    row = _row(conn, "biz_x")
+    hits = scorer._need_hits(row, json.loads(row["enrich_json"]))
+    assert hits == []
+
+
+def test_hooks_fire_with_real_evidence_and_interpolate_year(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.soft = ["phone_only_booking", "weak_social_presence", "stale_site"]
+    _seed_business(conn, website="https://x.example")
+    conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'", (json.dumps({
+        "crawled_at": "2026-01-01T00:00:00Z", "socials": {},
+        "signals": {"booking_hint": False, "stale_site": True, "copyright_year": 2018},
+    }),))
+    scorer = Scorer(conn, sample_icp, run_id)
+    row = _row(conn, "biz_x")
+    enrich = json.loads(row["enrich_json"])
+    hits = scorer._need_hits(row, enrich)
+    assert set(hits) == {"phone_only_booking", "weak_social_presence", "stale_site"}
+    hooks = scorer._hooks(row, {"need_hits": hits, "enrich": enrich})
+    joined = " | ".join(hooks)
+    assert "No online booking found on their website" in joined
+    assert "No social profile is linked from their website" in joined
+    assert "2018" in joined and "broken pages" not in joined
+
+
+# --- v0.3 D: chain penalty + profile registry ---------------------------------------------------
+def test_chain_member_penalty_from_db_chain_map(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, id="biz_a", place_id="A", dedupe_key="pid:A", phone_e164="+17135551111",
+                   domain="sharedsite.example")
+    _seed_business(conn, id="biz_b", place_id="B", dedupe_key="pid:B", phone_e164="+17135552222",
+                   domain="sharedsite.example")  # same domain, different phone -> chain by domain
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_a"))
+    assert any(f.factor == "negative:chain_member" for f in s.factors)
+
+
+def test_contactability_infers_affinity_for_legacy_rows_without_affinity(conn, sample_icp):
+    """Real-data proof on the live UK campaign DB caught this: a pre-v0.3 contact row (affinity
+    column added this release, so old rows store '') for a real own-domain role email scored 0
+    contactability points instead of 22, because the code only trusted a set `affinity` value."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164=None, domain="indieauto.com")
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
+                                 tier="role"))  # affinity left unset — legacy shape
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "contactability").points == 22
+
+
+def test_profile_registry_dispatches_default_and_account_fit(conn, sample_icp):
+    from leadforge.score import PROFILES
+
+    assert "default" in PROFILES and "account_fit" in PROFILES
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn)
+    counts = score_run(conn, sample_icp, run_id)
+    assert counts["scored"] == 1  # default dispatch still works through the registry
