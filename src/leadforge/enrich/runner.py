@@ -9,6 +9,8 @@ from __future__ import annotations
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+from selectolax.parser import HTMLParser as _HTMLParser
+
 from leadforge import db
 from leadforge.config import Config
 from leadforge.enrich import browser
@@ -29,6 +31,43 @@ from leadforge.normalize import COUNTRY_TO_REGION
 from leadforge.util import LOG, HostThrottle, emit_progress, now_iso
 
 
+def _mailto_anchor_context(html: str, email: str, window: int = 90) -> str | None:
+    """Anchor text + parent element text for a mailto address that never surfaces in the page's
+    extracted text — an icon-only 'Email us' anchor, or a nav/footer mailto trafilatura strips as
+    boilerplate. Kept local to runner.py (not extract.py) because this unit does not own that file.
+    -> collapsed text, or None if no matching mailto anchor is found."""
+    try:
+        tree = _HTMLParser(html)
+    except Exception:  # noqa: BLE001 — malformed HTML must never break persistence
+        return None
+    target = email.strip().casefold()
+    for a in tree.css('a[href^="mailto:"]'):
+        href = (a.attributes.get("href") or "")[7:].split("?")[0]
+        href = href.strip().strip(".,;:<>()[]\"'").casefold()
+        if href != target:
+            continue
+        anchor_text = (a.text() or "").strip()
+        parent = a.parent
+        parent_text = (parent.text(separator=" ") if parent is not None else "").strip()
+        combined = " ".join(x for x in (anchor_text, parent_text) if x)
+        combined = " ".join(combined.split())[: 2 * window + len(email) + 40] if combined else ""
+        if combined:
+            return combined
+    return None
+
+
+def _email_evidence(html: str, text: str, email: str) -> str:
+    """Evidence snippet for a found address: page-text context around it (email_context), falling
+    back to the mailto anchor's own text (+ its parent element) when the address itself never
+    appears in the extracted text — without this fallback the evidence row for a mailto-only,
+    icon-style contact link was just the bare address, which proves nothing beyond 'this string
+    looks like an email'."""
+    ctx = email_context(text, email)
+    if len(ctx) > len(email):
+        return ctx
+    return _mailto_anchor_context(html, email) or ctx
+
+
 def _region_for_business(b, default_region: str) -> str:
     """Phone region: the listing's own country wins; otherwise the campaign country passed in."""
     if b["address_country"]:
@@ -40,7 +79,10 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
     """Crawl + extract for a single business. Returns a plain dict (thread-safe; DB writes happen on main thread)."""
     crawler = SiteCrawler(cfg, throttle)
     try:
-        res = crawler.crawl(b["website"])
+        # v0.3 polish: business_domain makes signals final_host/offsite_redirect real in production
+        # (crawl() computes offsite_redirect only when given a domain to compare the final URL's
+        # host against) — omitting it left both signals permanently absent from every live run.
+        res = crawler.crawl(b["website"], business_domain=b["domain"])
         out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
                "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok,
                "pages": len(res.pages), "error": res.error}
@@ -57,7 +99,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                     people_fn = extract_people_ner if ner_available() else extract_people
                     for email, label in extract_emails(rendered, text).items():
                         out["emails"].setdefault(email, {"label": label, "url": b["website"],
-                                                          "context": email_context(text, email)})
+                                                          "context": _email_evidence(rendered, text, email)})
                     for phone in extract_phones(rendered, text, region):
                         if phone not in out["phones"]:
                             out["phones"].append(phone)
@@ -86,7 +128,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         for page in res.pages:
             for email, label in extract_emails(page.html, page.text).items():
                 out["emails"].setdefault(email, {"label": label, "url": page.url,
-                                                  "context": email_context(page.text, email)})
+                                                  "context": _email_evidence(page.html, page.text, email)})
             for phone in extract_phones(page.html, page.text, region):
                 if phone not in out["phones"]:
                     out["phones"].append(phone)
@@ -114,7 +156,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                 text = SiteCrawler.extract_text(rendered)
                 for email, label in extract_emails(rendered, text).items():
                     out["emails"].setdefault(email, {"label": label, "url": url,
-                                                      "context": email_context(text, email)})
+                                                      "context": _email_evidence(rendered, text, email)})
                 for cand in people_fn(text, url):
                     out["people"].append(cand)
             if rendered_any:
@@ -265,7 +307,12 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
         counts["sites_crawled"] += 1
     bid = b["id"]
     from leadforge.enrich.extract import email_matches_business
-    existing_names = [p["name"] for p in db.people_for(conn, bid)]
+    # v0.3 polish (finding 1): this crawl's OWN res['people'] candidates must count too, not just
+    # people already in the DB from a prior pass — the people insert loop below runs AFTER this
+    # email loop, so without adding them here a freemail box matching a person named for the first
+    # time on THIS crawl (e.g. a page naming "John Hoggarth" alongside johnhoggarth@live.co.uk) was
+    # misclassified freemail_unlinked purely because of insert order, not because no link existed.
+    existing_names = [p["name"] for p in db.people_for(conn, bid)] + [c.name for c in res["people"]]
     for email, meta in res["emails"].items():
         if not email_matches_business(email, b["domain"]):
             continue  # testimonial/client/widget email from someone else's domain

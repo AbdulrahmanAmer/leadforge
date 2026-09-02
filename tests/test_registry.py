@@ -3,7 +3,7 @@ import pytest
 
 from leadforge.config import load_config
 from leadforge.providers import registry as regmod
-from leadforge.providers.registry import CompaniesHouseRegistry, get_registries
+from leadforge.providers.registry import CompaniesHouseRegistry, get_registries, name_similarity
 
 
 class _Resp:
@@ -52,6 +52,7 @@ def test_companies_house_maps_active_officers(tmp_path, monkeypatch):
     assert person.name == "Jane Smith"  # 'SMITH, Jane' registry order flipped for the call sheet
     assert person.title == "Director"
     assert person.labeled_by == "registry" and person.is_dm == 0
+    assert person.origin == "registry"  # v0.3 polish: set explicitly, not left to db.add_person's fallback
     assert ev.fact == "registry_officer" and "01234567" in ev.url
 
 
@@ -211,6 +212,7 @@ def test_opencorporates_maps_officers(tmp_path, monkeypatch):
     cfg.registry.opencorporates_token = "tok"
     reg = OpenCorporatesRegistry(cfg)
     payload = {"results": {"companies": [{"company": {
+        "name": "Acme Widgets Ltd", "current_status": "active",
         "registered_address_in_full": "1 High St, Leeds LS1 4AB",
         "opencorporates_url": "https://opencorporates.com/companies/gb/01",
         "officers": [
@@ -222,7 +224,47 @@ def test_opencorporates_maps_officers(tmp_path, monkeypatch):
     assert len(out) == 1
     person, ev = out[0]
     assert person.name == "Jane Smith" and person.labeled_by == "registry"
+    assert person.origin == "registry"  # v0.3 polish: set explicitly, not left to db.add_person's fallback
     assert ev.fact == "registry_officer"
+
+
+def test_opencorporates_rejects_hit_with_no_company_name(tmp_path, monkeypatch):
+    """Fail closed like Companies House: name_similarity(x, "") is always 0.0, so a hit with no
+    name at all must never be waved through just because there was nothing to compare against."""
+    from leadforge.providers.registry import OpenCorporatesRegistry
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.registry.opencorporates_token = "tok"
+    reg = OpenCorporatesRegistry(cfg)
+    payload = {"results": {"companies": [{"company": {
+        # no "name" key at all — a malformed/partial API record
+        "current_status": "active",
+        "registered_address_in_full": "1 High St, Leeds LS1 4AB",
+        "opencorporates_url": "https://opencorporates.com/companies/gb/01",
+        "officers": [{"officer": {"name": "jane smith", "position": "director"}}],
+    }}]}}
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp(payload))
+    assert reg.lookup(BIZ) == []
+
+
+def test_opencorporates_active_only_rejects_empty_status(tmp_path, monkeypatch):
+    """Fail closed like Companies House's final gate: cfg.registry.active_only is a promise that a
+    dissolved/unknown-status company is never matched — an empty/absent status is unknown, not proof
+    of active, and must be rejected the same as an explicit 'dissolved'."""
+    from leadforge.providers.registry import OpenCorporatesRegistry
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.registry.opencorporates_token = "tok"
+    assert cfg.registry.active_only is True
+    reg = OpenCorporatesRegistry(cfg)
+    payload = {"results": {"companies": [{"company": {
+        "name": "Acme Widgets Ltd",  # no "current_status" key -> status unknown
+        "registered_address_in_full": "1 High St, Leeds LS1 4AB",
+        "opencorporates_url": "https://opencorporates.com/companies/gb/01",
+        "officers": [{"officer": {"name": "jane smith", "position": "director"}}],
+    }}]}}
+    monkeypatch.setattr("httpx.get", lambda *a, **k: _Resp(payload))
+    assert reg.lookup(BIZ) == []
 
 
 def test_opencorporates_unrelated_name_rejected(tmp_path, monkeypatch):
@@ -316,3 +358,43 @@ def test_registry_stage_covers_siteless_businesses(tmp_path, monkeypatch):
     monkeypatch.setattr(regmod.CompaniesHouseRegistry, "lookup_with_profile",
                         lambda self, b: pytest.fail("re-looked-up a checked business"))
     _registry_stage(conn, cfg, {})
+
+
+# --- v0.3 polish (finding 5): name_similarity at the 0.45 threshold, real-shaped pairs -----------
+# Companies House / OpenCorporates both gate a hit on name_similarity(business_name, company_name)
+# >= cfg.registry.min_name_similarity. The default (asserted below, so this test fails loudly if it
+# ever drifts without being revisited) is 0.45. 6 pairs: 3 near/accept, 3 far/reject — the 3rd
+# "near" pair is a deliberately DOCUMENTED false-positive risk, not a mistake; see its comment.
+def test_min_name_similarity_default_is_045(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    assert cfg.registry.min_name_similarity == 0.45
+
+
+@pytest.mark.parametrize("business_name,company_name,expect_accept", [
+    # --- accept: genuinely the same business, spelled/punctuated differently -------------------
+    ("a b s mot station", "ABS MOT STATION LTD", True),
+    ("bright spark electrical", "BRIGHT SPARK ELECTRICAL SERVICES LTD", True),
+    ("kingfisher plumbing and heating", "KINGFISHER PLUMBING & HEATING LTD", True),
+    # --- reject: unrelated companies that merely share a locality -------------------------------
+    ("osman motors", "ACME PROPERTY GROUP LIMITED", False),
+    ("the corner cafe", "STARBUCKS CORPORATION", False),
+    # --- accept, but a KNOWN false-positive shape: two unrelated businesses that both put their
+    # street address in the registered company name. "Dudley Road" is shared between an MOT garage
+    # and a butcher's shop on the same road (scores 0.558 >= 0.45) — name_similarity alone cannot
+    # tell these apart, and is not meant to: it is gate ONE of two. The registry profile's SIC code
+    # (checked downstream against the business's category — see score.py) is gate two, and a
+    # butcher's SIC code will not match an auto-repair ICP. Accepting here and rejecting later on
+    # SIC is the intended division of labor, not a bug. Left undocumented-as-a-bug on purpose:
+    # tightening name_similarity enough to reject this pair measurably breaks real matches elsewhere
+    # (see the "tried-and-reverted" trade-off note on classify_email_affinity in extract.py, which
+    # hit the identical shape — shared substrings from real trade-name/street-name overlap).
+    ("dudley road m o t services", "BISMILLAH MEAT & POULTRY DUDLEY ROAD LTD", True),
+])
+def test_name_similarity_threshold_real_shaped_pairs(business_name, company_name, expect_accept):
+    score = name_similarity(business_name, company_name)
+    accepted = score >= 0.45
+    assert accepted == expect_accept, (
+        f"{business_name!r} vs {company_name!r} scored {score} "
+        f"({'accepted' if accepted else 'rejected'}, expected {'accept' if expect_accept else 'reject'})"
+    )
