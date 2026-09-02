@@ -41,7 +41,10 @@ profile), kick off the pipeline, adjudicate decision-maker candidates from tiny 
 ## 5. Non-goals
 
 - Not a SaaS, no UI, no multi-tenant anything — internal CLI + agent skill only.
-- No email sending / outreach automation (compliance stays simple; see `docs/07-compliance.md`).
+- ~~No email sending / outreach automation~~ **Amended in v0.3 (owner decision 2026-09-02, ADR-011):** email sending is in
+  scope as a bounded, audited extension — phone-first `Next Action`, dry-run default, human approval bound to content, suppression
+  and eligibility re-checked at send time, automatic suppression from bounces/complaints, no dialer, no SMS, no probing, no paid
+  dependency required (ADR-012). See `docs/07-compliance.md` and `docs/09-v0.3-build-plan.md`.
 - No LinkedIn scraping in the default pipeline (ToS/ban risk; explicitly excluded by scope decision).
 - No new anti-bot evasion research — we use what the chosen OSS scrapers ship with, politely configured.
 - No CRM integration in v1 (XLSX/CSV/SQLite are the interface; CRM import is trivial from CSV).

@@ -107,3 +107,28 @@ built past a dry-run/render step until SCOPE.md is amended in writing with an AD
 **NEXT MOVE (proposed, awaiting owner decisions listed in the report §8):** Phase 0 = geocoder fix + tile
 subdivision + full 10-city tiled sweep; DVSA + Companies House SIC as discovery providers merged by phone; keep the GBP
 fields; ship the precision fixes as one release. Then a phone-first outcome loop before any sending layer.
+
+---
+
+## POSITION — 2026-09-02, v0.3 BUILD IN PROGRESS (owner decisions taken; one-shot E2E + push requested)
+
+**Owner decisions (binding, also in docs/09-v0.3-build-plan.md):** sending in scope with guardrails (ADR-011);
+phone-first, email second touch; hybrid sender identity per client; NO paid dependencies (pluggable transport,
+in-harness drafting, free domain resolution); freemail emailable after plausibility check; director names only
+when gated; own-client ICP = anyone needing outreach except call centres (SIC 82200 excluded); full 10-city tiled
+sweep in the background after the code ships.
+
+**Wave 0 DONE — commit d7eb4ce** (202 tests, ruff clean): SCOPE #4 amended, ADR-011/012/013, db schema v2,
+compliance.py, config sections, `--json` hoisting in cli.main, `outreach`/`draft` sub-app stubs, provider
+field-map registry, interface stubs (classify_email_affinity, email_context, rank_email_contacts, name_similarity),
+docs/09 build plan, tests/test_compliance.py + tests/test_db_v2.py.
+
+**Wave 1 RUNNING — Workflow run `wf_ecc94138-118`** (5 builders A/B/C1/C2/D in isolated worktrees branched
+from d7eb4ce, each reviewed by a fresh-context Fable reviewer, one fix round). Patches land at
+`<scratchpad>/wave1/<unit>/<unit>.patch`; each builder commits on its worktree branch. NEXT: merge accepted
+branches into master, run the full gate, then launch Wave 2 (E outreach, F drafting, H company mode), then
+Wave 3 (docs, version 0.3.0 everywhere, CHANGELOG, STATE, tag, push), then data ops (DVSA load + tiled sweep).
+
+**If resuming after a compaction:** `git worktree list` shows the builder worktrees; `git branch --list` the
+unit branches; the workflow journal is at
+`~/.claude/projects/D--GainLev-LeadForge-leadforge/bb93e453-b256-4096-9ee1-d9ef417ed812/subagents/workflows/wf_ecc94138-118/journal.jsonl`.

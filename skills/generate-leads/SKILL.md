@@ -4,7 +4,7 @@ description: Generate scored B2B lead lists from open-source scraping. Use when 
 license: MIT
 compatibility: Requires shell access, Python 3.11+, and network. Windows, macOS, Linux.
 metadata:
-  version: "0.2.0"
+  version: "0.3.0"
   author: leadforge
 ---
 

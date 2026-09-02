@@ -89,7 +89,13 @@ flowchart LR
 | `enrich/validate.py` | Email tiers (syntax→MX→disposable→role), phone validity, site liveness | Tiers, never booleans |
 | `enrich/dm.py` | DM candidate store; `dm export` NDJSON snippets for the agent; `dm apply` labels back | Snippets ≤ 300 chars; batch caps |
 | `score.py` | Rubric from packaged `src/leadforge/data/scoring.default.yaml` ⊕ ICP overrides; per-factor explanations; "likely need" hook synthesis | Deterministic, unit-tested |
-| `export.py` | Styled XLSX (Leads + Summary + About sheets), CSV mirror, JSON run report | Column dictionary in `docs/03-data-model.md` §5 |
+| `export.py` | Styled XLSX (Leads + Summary + About sheets), CSV mirror, JSON run report; v0.3 adds Fit / Contactability / Status / **Next Action** / Entity Type / Lawful Basis / Registry Name+Match / Chain / Site Status / Email Confidence / All Hooks | Column dictionary in `docs/03-data-model.md` §5; a freemail box never outranks the business's own mailbox |
+| `compliance.py` (v0.3) | Pure gate: `entity_type`, `lawful_basis_email`, `email_eligibility`, phone-first `next_action`, `name_allowed` | Shared by export, outreach and drafting; policy comes from config, never hard-coded |
+| `providers/dvsa.py` (v0.3) | DVSA "Active MOT test stations" register (gov.uk CSV, OGL, quarterly) as a discovery provider — every MOT station with address + phone | Cached under `leadforge_data/cache/dvsa/`; merges into Maps rows by E.164 phone |
+| `providers/companies_house.py` (v0.3) | Companies House advanced search (SIC × location × active) as a discovery provider for company-mode ICPs | Shares the 600/5-min token bucket with the registry enrichment; SIC 82200 excluded by default |
+| `company.py` + `enrich/resolve_domain.py` (v0.3) | Company-mode planner (SIC groups × locations), free domain resolution (slug candidates verified on-page by postcode / legal name / company number), company rubric | No search-engine scraping, no paid lookups (ADR-012) |
+| `outreach/` (v0.3, ADR-011) | `plan` (eligibility gate) → `approve` (content-hash bound) → `send` (dry-run default; `--live` needs `outreach.armed` + `--i-am`) → `sync` (bounces/complaints/unsubscribes/replies → suppression + states) → `status`; `doctor` checks SPF/DKIM/DMARC; `Transport` ABC with `file` and `smtp` | Suppression, eligibility, caps, warm-up and window re-checked inside the send transaction; at-most-once; mailbox circuit breaker |
+| `draft/` (v0.3, ADR-012) | `export` evidence packets (≤ 350 tokens/lead) → agent writes subject + one evidenced observation → `apply` runs the mechanical no-fabrication gate → `render` reviewable files | Identity, postal address, opt-out and the Article-14 line are interpolated by the CLI, never by the model |
 
 ## 3. Tech stack & rationale
 

@@ -115,12 +115,101 @@ erDiagram
         text value UK
         text reason
         text added_at
+        text source "v0.3: manual|bounce_hard|complaint|unsubscribe|reply_optout|import"
+        text client_id "v0.3: scope — one client's opt-outs never leak into another list"
+        text business_id "v0.3: nullable back-reference"
     }
     META {
         text key PK
-        text value "schema_version, gosom_version, etc."
+        text value "schema_version (2 since v0.3), gosom_version, etc."
     }
+    SENDING_IDENTITIES {
+        integer id PK
+        text label UK
+        text client_id "'' = GainLev's own"
+        text owner_entity "gainlev|client — hybrid controller model (ADR-011)"
+        text from_name
+        text from_email
+        text reply_to
+        text postal_address "required in every message"
+        text privacy_url "Article-14 first-contact line"
+        text unsubscribe_mailto
+        text unsubscribe_url "RFC 8058 one-click target"
+    }
+    MAILBOXES {
+        integer id PK
+        integer identity_id FK
+        text address UK
+        text transport "file|smtp|<adapter> (ADR-012)"
+        text config_json "env-var NAMES for secrets, never values"
+        integer daily_cap
+        text warmup_started_at
+        text status "active|paused"
+        text paused_reason "circuit breaker: bounce/complaint rate"
+    }
+    OUTREACH_TARGETS {
+        integer id PK
+        text business_id FK
+        integer contact_id "the address chosen by the eligibility gate"
+        text campaign
+        text client_id
+        integer identity_id FK
+        text state "enrolled|drafted|approved|queued|sent|unknown|bounced|replied|opted_out|no_response|follow_up_n|done"
+        text eligibility_json "entity type, lawful basis, reasons"
+        integer touches
+        text next_touch_at
+    }
+    MESSAGES {
+        integer id PK
+        integer target_id FK
+        integer step
+        text purpose "gainlev_leadgen|client_campaign|follow_up|re_engagement|referral"
+        text subject
+        text body_text
+        text draft_hash "approval binds to this"
+        text state "drafted|rejected|approved|queued|sent|unknown|failed"
+        text gate_json "no-fabrication gate result"
+        text grade "A|B|C personalisation grade"
+        text used_fact
+        text approved_by
+        text approved_hash "must equal draft_hash to queue"
+        text sent_at
+        integer mailbox_id FK
+        text message_id_header "signed token for reply threading"
+    }
+    EVENTS {
+        integer id PK
+        integer message_id FK
+        text business_id
+        text kind "bounce_hard|bounce_soft|complaint|unsubscribe|reply"
+        text classification "interested|not_interested|wrong_person|ooo|other"
+        text dedupe_key UK
+        text occurred_at
+    }
+    OUTCOMES {
+        integer id PK
+        text business_id FK
+        text campaign
+        text channel "phone|email"
+        text result "no_answer|not_interested|interested|meeting|won|wrong_number|opt_out"
+        text notes
+        text recorded_by
+        text contacted_at
+    }
+    SENDING_IDENTITIES ||--o{ MAILBOXES : "sends from"
+    BUSINESSES ||--o{ OUTREACH_TARGETS : "enrolled as"
+    OUTREACH_TARGETS ||--o{ MESSAGES : "steps"
+    MESSAGES ||--o{ EVENTS : "produces"
+    BUSINESSES ||--o{ OUTCOMES : "records"
 ```
+
+v0.3 also adds `people.origin` (heuristic|registry|gbp — where a candidate came from; kept when the agent
+labels it) and `contacts.affinity` (own_domain | freemail_linked | freemail_unlinked — see
+`extract.classify_email_affinity`). `businesses.enrich_json` gains `gbp` (Google Business Profile facts kept
+from the scraper: booking links, appointment attributes, owner reply signatures, review-credited first names),
+`attempted_at` (a crawl that did not succeed — `crawled_at` is only stamped on success) and
+`registry_profile.legal_name` / `match_similarity` on every accepted registry match. Registry rows (DVSA,
+Companies House) merge into the Maps row that carries the same E.164 phone (`db.upsert_business`).
 
 ## 2. Canonical pydantic models (mirror)
 

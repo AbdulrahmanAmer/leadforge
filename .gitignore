@@ -24,3 +24,6 @@ venv/
 .idea/
 .DS_Store
 Thumbs.db
+
+# builder worktrees created by the orchestration harness (never commit)
+.claude/worktrees/

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leadforge"
-version = "0.2.0"
+version = "0.3.0"
 description = "Internal B2B lead-generation engine: OSS scraping, website deep-crawl, DM discovery, ICP scoring, XLSX export. Built to be driven by AI agent harnesses (Claude Code / Codex) at minimal token cost."
 readme = "README.md"
 requires-python = ">=3.11"
