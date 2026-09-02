@@ -174,6 +174,41 @@ def test_apply_without_in_or_packets_file_fails_closed(tmp_path):
     assert d["ok"] is False
 
 
+def test_apply_follow_up_fills_prev_days_from_the_prior_message(tmp_path):
+    """The follow_up skeleton's {{prev_days}} slot is deterministic (never model-written): with a
+    prior `messages` row it's the real elapsed days; the gate never even sees it, since it lives
+    outside subject/observation."""
+    rid = _seed(tmp_path, business={"website": None}, tier="A")
+    _run(["--json", "draft", "export", "--campaign", "test-camp", "--purpose", "follow_up",
+         "--run", rid, "--tier", "A"], tmp_path)
+    lines = _ndjson(tmp_path / "drafts_packets.ndjson")
+    target_id = lines[1]["target"]
+
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    conn.execute(
+        "INSERT INTO messages(target_id,step,purpose,subject,body_text,draft_hash,state,gate_json,"
+        "grade,used_fact,created_at,updated_at) VALUES(?,1,'gainlev_leadgen','x','x','h','sent','{}','B','x',?,?)",
+        (target_id, "2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"),
+    )
+    conn.commit()
+    conn.close()
+
+    (tmp_path / "drafts.ndjson").write_text(json.dumps({
+        "target": target_id, "subject": "Following up",
+        "observation": "Noticed you don't have a business website live yet.",
+        "used_fact": "no_website",
+    }) + "\n", encoding="utf-8")
+    res = _run(["--json", "draft", "apply", "--in", "drafts.ndjson"], tmp_path)
+    assert _digest(res.stdout)["counts"]["applied"] == 1, res.stdout + res.stderr
+
+    conn = db.connect(cfg.db_path)
+    m = conn.execute("SELECT body_text FROM messages WHERE target_id=? AND state='drafted'",
+                     (target_id,)).fetchone()
+    assert "days ago about website refresh" in m["body_text"]
+    assert "{{prev_days}}" not in m["body_text"]
+
+
 # ------------------------------------------------------------------------- render
 def test_render_writes_to_subject_preamble_and_body(tmp_path):
     rid = _seed(tmp_path, business={"website": None,
