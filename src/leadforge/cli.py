@@ -129,6 +129,10 @@ def plan(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
     if counts["tiles"]:
         warns.append(f"grid tiling ON: {counts['tiles']} map cells x {len(icp_obj.target.categories)} "
                      f"categories (each cell gets its own ~120-result budget)")
+    if counts.get("est_runtime_min_max_subdivided"):
+        warns.append(f"saturated tiles subdivide automatically (discovery.subdivide_at); worst case "
+                     f"~{counts['est_runtime_min_max_subdivided'] / 60:.0f}h if every tile splits "
+                     f"{cfg.discovery.max_subdivisions}x")
     emit_digest(True, "plan", counts=counts, warnings=warns, next_="leadforge run --icp " + icp)
 
 
@@ -266,7 +270,7 @@ def score(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
         emit_digest(False, "score", warnings=["no run found; discover first"])
         raise typer.Exit(4)
     try:
-        counts = score_run(conn, load_icp(Path(icp)), run["id"])
+        counts = score_run(conn, load_icp(Path(icp)), run["id"], cfg=cfg)
     except LeadForgeError as e:
         emit_digest(False, "score", warnings=[str(e)[:120]])
         raise typer.Exit(e.exit_code) from e

@@ -44,7 +44,7 @@ def patched(monkeypatch):
     # 3) crawler: Alpha has a reachable site with an owner + email; Beta has no site
     from leadforge.enrich.crawler import CrawlResult, Page, SiteCrawler
 
-    def fake_crawl(self, website):
+    def fake_crawl(self, website, business_domain=None):
         if "alpha" in website:
             html = ('<html><body>Owner Sam Alpha founded the shop. '
                     '<a href="mailto:sam@alpha-auto.test">email</a></body></html>')

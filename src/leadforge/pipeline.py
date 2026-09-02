@@ -78,7 +78,9 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     queue = list(db.pending_queries(conn, run_id))
     known_ids = {q["id"] for q in queue}
 
-    hard_cap = min(limit, icp.caps.max_leads) if limit else icp.caps.max_leads
+    # --limit means 'at most N NEW businesses this invocation' (smoke tests), never 'stop because the
+    # run already credited N' — otherwise `discover --limit 5` on a resumed run fetched nothing
+    hard_cap = min(processed + limit, icp.caps.max_leads) if limit else icp.caps.max_leads
     qi = 0
     while qi < len(queue):
         q = queue[qi]
@@ -272,7 +274,7 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     # SCORE
     if stage in ("scoring", "enriched"):
         from leadforge.score import score_run
-        scounts = score_run(conn, icp, run_id)
+        scounts = score_run(conn, icp, run_id, cfg=cfg)
         db.set_stage(conn, run_id, "scored", **scounts)
         stage = "scored"
 

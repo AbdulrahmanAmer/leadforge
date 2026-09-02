@@ -82,7 +82,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         # v0.3 polish: business_domain makes signals final_host/offsite_redirect real in production
         # (crawl() computes offsite_redirect only when given a domain to compare the final URL's
         # host against) — omitting it left both signals permanently absent from every live run.
-        res = crawler.crawl(b["website"], business_domain=b["domain"])
+        res = crawler.crawl(b["website"], business_domain=(b["domain"] if "domain" in b.keys() else None))
         out = {"business_id": b["id"], "emails": {}, "phones": [], "socials": {}, "people": [],
                "signals": res.signals, "needs_browser": res.needs_browser, "ok": res.ok,
                "pages": len(res.pages), "error": res.error}

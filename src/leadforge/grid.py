@@ -132,6 +132,7 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
             # rather than treating "no settlement match" as this attempt's failure.
             rows = _nominatim_search(area, cfg, country, feature_type="settlement")
             if not rows:
+                time.sleep(1.0)  # the fallback is a second request: Nominatim's 1 req/s still applies
                 rows = _nominatim_search(area, cfg, country, feature_type=None)
             break
         except httpx.HTTPError as e:
@@ -365,7 +366,8 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
     # upper bound (never the expectation) if every tiled query fully subdivided, so cli.py's plan
     # warning can mention it rather than silently understating a worst-case tiled sweep.
     if tiled and cfg.discovery.subdivide_at > 0:
-        worst_case_tiled = tiled * (4 ** cfg.discovery.max_subdivisions)
+        # every generation is fetched: the parent, then 4 children, then 16 ... (reviewer: leaves-only understated it)
+        worst_case_tiled = tiled * sum(4 ** g for g in range(cfg.discovery.max_subdivisions + 1))
         out["est_runtime_min_max_subdivided"] = round(
             untiled * cfg.discovery.est_min_per_query
             + worst_case_tiled * cfg.discovery.est_min_per_tiled_query

@@ -33,7 +33,7 @@ def test_escalation_wiring_merges_rendered_contacts(monkeypatch, tmp_path):
     cfg = load_config(tmp_path)
     shell = CrawlResult(ok=True, needs_browser=True,
                         pages=[Page("http://spa.example", "<div id='root'></div>", "")])
-    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: shell)
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url, business_domain=None: shell)
     monkeypatch.setattr(runner.SiteCrawler, "_allowed", lambda self, url: True)
     monkeypatch.setattr(runner.browser, "is_available", lambda: True)
     monkeypatch.setattr(runner.browser, "fetch_rendered",
@@ -54,7 +54,7 @@ def test_escalation_respects_robots(monkeypatch, tmp_path):
     cfg = load_config(tmp_path)
     shell = CrawlResult(ok=True, needs_browser=True,
                         pages=[Page("http://spa.example", "<div id='root'></div>", "")])
-    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: shell)
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url, business_domain=None: shell)
     monkeypatch.setattr(runner.SiteCrawler, "_allowed", lambda self, url: False)
     monkeypatch.setattr(runner.browser, "is_available", lambda: True)
     calls = []
@@ -80,7 +80,7 @@ def test_http_blocked_site_gets_browser_fallback(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     cfg = load_config(tmp_path)
     blocked = CrawlResult(ok=False, needs_browser=True, error="unreachable to http client")
-    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: blocked)
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url, business_domain=None: blocked)
     monkeypatch.setattr(runner.browser, "is_available", lambda: True)
     monkeypatch.setattr(runner.browser, "fetch_rendered",
                         lambda url, cfg, throttle: "<html><body>Call 020 7946 0958 or "
@@ -100,7 +100,7 @@ def test_robots_disallowed_site_never_gets_browser(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     cfg = load_config(tmp_path)
     denied = CrawlResult(ok=False, needs_browser=False, error="robots-disallowed")
-    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url: denied)
+    monkeypatch.setattr(runner.SiteCrawler, "crawl", lambda self, url, business_domain=None: denied)
     monkeypatch.setattr(runner.browser, "is_available", lambda: True)
     monkeypatch.setattr(runner.browser, "fetch_rendered",
                         lambda *a: pytest.fail("browser used on a robots-disallowed site"))

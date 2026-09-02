@@ -42,6 +42,7 @@ _WORD_MAP = {"LTD": "Ltd", "LIMITED": "Limited"}
 # but must still stay upper.
 _ACRONYM_ALLOWLIST = {"MOT", "ABS", "ATS", "MOTS", "VW", "BMW", "DPF", "ECU", "HGV", "LGV", "PSV", "MT", "4X4"}
 _VOWELS = frozenset("AEIOU")
+_SHORT_WORDS = {"AND", "THE", "FOR", "LTD", "INC", "CO", "OF", "ON", "AT", "BY", "IN", "TO", "OR", "AN", "AS", "A"}
 
 
 def _keep_upper(bare: str) -> bool:
@@ -54,6 +55,10 @@ def _keep_upper(bare: str) -> bool:
         return True
     up = bare.upper()
     if up in _ACRONYM_ALLOWLIST:
+        return True
+    # short all-alpha tokens are acronyms far more often than words in trading names ('UK', 'AA',
+    # 'HIQ', 'RAC', 'ATS' — measured on the live register); only common connector words title-case
+    if len(bare) <= 3 and bare.isalpha() and up not in _SHORT_WORDS:
         return True
     return bare.isalpha() and not any(c in _VOWELS for c in up)
 
@@ -134,7 +139,13 @@ def _ensure_csv(cfg: Config) -> Path:
                 LOG.warning("dvsa: refresh failed (%s: %s); using stale cache", type(e).__name__, e)
                 return path
             raise ProviderDegraded(f"dvsa CSV download failed: {type(e).__name__}: {e}") from e
-        _validate_header(content, cfg.discovery.dvsa.url)  # raises before anything is cached
+        try:
+            _validate_header(content, cfg.discovery.dvsa.url)  # raises before anything is cached
+        except ProviderDegraded:
+            if path.exists():  # a CDN maintenance page must not kill the provider while a usable cache exists
+                LOG.warning("dvsa: downloaded body is not the register CSV; keeping the stale cache")
+                return path
+            raise
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         LOG.info("dvsa: downloaded %d bytes to %s", len(content), path)

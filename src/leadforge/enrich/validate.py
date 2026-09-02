@@ -99,7 +99,7 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
 # NOT meant to agree on where 'inferred' sits relative to 'risky'/'catch_all':
 #
 #   TIER_ORDER (below) answers "how much do we TRUST this tier, for coverage/display purposes"
-#       (best_email_tier(), the Summary sheet's tier counts, export._EMAIL_TIER_ORDER which mirrors it).
+#       (best_email_tier(), the Summary sheet's tier counts, the About sheet's tier legend).
 #       valid/role are directly confirmed — syntax + MX resolved, so mail *can* be delivered there.
 #       risky/catch_all are OBSERVED (a real address was found) but uncertain (disposable domain; a
 #       catch-all that accepts anything, proving nothing). inferred is never observed at all — a guess

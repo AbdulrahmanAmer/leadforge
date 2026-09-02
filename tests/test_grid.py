@@ -124,8 +124,8 @@ def test_bbox_campaign_without_grid_explains_itself(cfg):
 
 def test_plan_counts_adds_worst_case_subdivided_estimate_when_tiled(cfg):
     """item 6 (docs/09): plan honesty — with tiled queries and subdivide_at > 0, plan_counts also
-    reports the worst-case runtime if every tiled query fully subdivided (queries x
-    4**max_subdivisions), so cli.py's plan warning can mention it. Absent for an all-untiled plan
+    reports the worst-case runtime if every tiled query fully subdivided (every generation is
+    fetched: queries x sum(4**g for g <= max_subdivisions)), so cli.py's plan warning can mention it. Absent for an all-untiled plan
     (nothing to subdivide) or when subdivision is switched off (subdivide_at <= 0)."""
     from leadforge.grid import Tile
     cfg.discovery.est_min_per_query = 2.0
@@ -137,7 +137,8 @@ def test_plan_counts_adds_worst_case_subdivided_estimate_when_tiled(cfg):
         PlannedQuery(text="b in Y", category="b", area="Y", tile=Tile(bbox=(0, 0, 1, 1), cell_km=3.0)),
     ]
     c = plan_counts(qs, cfg)
-    assert c["est_runtime_min_max_subdivided"] == round(1 * 2.0 + (1 * 4**2) * 4.0)
+    # every generation is fetched (parent, 4 children, 16 grandchildren): 1 + 4 + 16 tiled fetches
+    assert c["est_runtime_min_max_subdivided"] == round(1 * 2.0 + (1 * (1 + 4 + 16)) * 4.0)
 
     untiled_only = plan_counts([qs[0]], cfg)
     assert "est_runtime_min_max_subdivided" not in untiled_only
