@@ -166,3 +166,26 @@ raised to 6000 leads / 6000 sites (backups: `*.pre-v0.3`). `leadforge plan` = 29
 (`dm export`/`dm apply`), then `run --resume` to score + export; then `outreach plan` / `draft export` for the
 eligible cohort, and a calling sprint with `outreach outcome add`. GainLev's own ICP: `config/icp.company.example.yaml`
 (Stockport pilot) — needs `discovery.providers: [companies_house]` + the CH key in a fresh workspace.
+
+---
+
+## POSITION — 2026-09-03, SWEEP PAUSED; SPEED PROGRAM (owner: "not limited to gosom, build our own")
+
+**Sweep paused by the owner** at 26/947 queries (16 Maps + 10 register; 0 degraded); resume later with
+`run --resume` in the campaign folder if wanted. Audit of its output: 2,576 new businesses (1,862 DVSA register in
+minutes; 714 Maps rows: phone 94%, rating 98%, postcode 98%, website 66%). Two real bugs found + fixed + pushed
+(1913e87): phone merge only worked register->Maps (197 twins; `leadforge dedupe` repaired them, backup
+`db.sqlite3.pre-dedupe-backup`), and DVSA facts never persisted (enrich_for was module-level; 2,162 rows backfilled).
+
+**Measured (scratchpad/speed):** gosom c=2 28/min; c=8 46-61/min; c=16 63/min; 2 parallel c=8 = 71/min aggregate;
+0 block signs in 12 min; gosom source: the result-list JSON already carries phone/website/rating/address/coords
+(EntryFromJSON) but normal mode queues a PlaceJob for EVERY result. Native list-first Playwright probe: 120 cards in
+25-28 s per search (phone 99%, website 70-76%, CID+lat/lng 100%) = 250-290 places/min per browser, no place visits.
+Enrichment: 20-site samples 4.8-6.6 sites/min; tail-dominated (403/Cloudflare, dead hosts x 15 s timeouts, browser
+Semaphore(2)); workers=16 alone did not help.
+
+**IN FLIGHT (two Sonnet builders, separate worktrees):** `speed` branch — providers/maps_list.py (list-first,
+persistent browser, known-CID skip, details only for new places, discovery.parallel_queries); `speed-enrich`
+branch — fail-fast tail, browser gate 4, workers 12, overlapped registry/validate stages, DNS pool, bench_enrich.py.
+NEXT: merge both, `scripts/bench_speed.py` end-to-end on a copy (target: 1,000 enriched+scored rows < 60 min),
+then register-density adaptive tiling; gosom demoted to fallback. Research results: tasks/wnxprvm3w.output.
