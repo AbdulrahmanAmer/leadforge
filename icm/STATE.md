@@ -121,7 +121,13 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
       active gates, profile on both paths, affinity, context evidence, gbp people), D scoring/export truth
       (category aliases, fit vs contactability, phone-first Status/Next Action, evidence-gated hooks, entity
       + lawful-basis columns).
-- [ ] **Wave 2** E outreach, F drafting, H company mode — building (workflow wf_d4a91e42-e63).
-- [ ] **Wave 3** docs, SKILL, CHANGELOG, tag v0.3.0, push; then data ops (DVSA load + 10-city tiled sweep).
+- [x] **Wave 2** E outreach (identities/mailboxes/plan/approve/send dry-run+live/sync/status/doctor/outcome),
+      F drafting (packets/gate/apply/render/check + 5 skeletons), H company mode (Companies House provider,
+      company planner + rubric, free domain resolution, Target.mode) — merged 2026-09-03, 518 tests.
+- [x] **ADR-013 register queries**: dvsa gets its own planned query per area, routed to that provider only.
+- [x] **Wave 3** docs (README, SKILL step 5, cli reference, docs/02-06, CHANGELOG 0.3.0), gate 19/19, tag v0.3.0.
+- [ ] **Data ops**: 10-city tiled sweep + DVSA register load on the live campaign (started 2026-09-03 as a
+      detached process; `leadforge status` / `leadforge watch` in the campaign workspace; `run --resume` after
+      any interruption); then dm labeling, score, export; then a calling sprint recording outcomes.
 - Gate: `python scripts/v03_gate.py --live-db <db>` (suite, lint, versions, plugin validate, CLI contract,
   DVSA fixture, export truth on a DB copy, outreach/draft guardrail probes).

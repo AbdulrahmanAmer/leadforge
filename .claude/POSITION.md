@@ -142,3 +142,27 @@ NEXT after it: merge, full gate, pass cfg to score_run call sites (cli.py:269, p
 param, launch H (company mode: providers/companies_house.py, resolve_domain.py, company.py, models.py Target.mode,
 intake.py, grid.py dispatch), then Wave 3 docs/SKILL/CHANGELOG/STATE + tag v0.3.0 + push, then data ops.
 Precomputed clean city bboxes for the sweep: `<scratchpad>/plan/area_bbox.yaml` (discovery.area_bbox format).
+
+---
+
+## POSITION — 2026-09-03, v0.3.0 RELEASED (all waves merged)
+
+**Code:** master = v0.3.0 (Waves 0/1/polish/2 + register queries + docs). Gate `python scripts/v03_gate.py
+--live-db <db>` = 19/19 PASS, full suite 518 passed, ruff clean, `claude plugin validate` OK. One flaky failure
+observed once in a full run (did not reproduce in 4 subsequent runs; drafting builder saw the same once) —
+UNPROVEN which test; watch CI.
+**Lessons recorded:** the Workflow harness branches worktrees from ORIGIN/master (last pushed commit), not local
+HEAD — push before launching worktree agents, and tell agents to `git merge-base --is-ancestor <base> HEAD ||
+git reset --hard <base>`. An agent running `pip install -e .` inside a worktree re-points the editable install
+of the MAIN tree at that worktree — re-run `pip install -e .[dev]` in the main tree after any wave. pytest here
+needs `-o addopts=""` to print the summary line. Reviewer+fixer loops on Fable were ~half the token spend; the
+deterministic gate script + orchestrator-applied small fixes replaced them for Wave 2 at ~1/3 the cost.
+**Live campaign workspace prepared:** `campaign-uk-autorepair/leadforge.yaml` has grid_mode auto, providers
+[gosom, dvsa], subdivide_at 100, area_bbox for all 10 cities (precomputed, settlement-level); `icp.yaml` caps
+raised to 6000 leads / 6000 sites (backups: `*.pre-v0.3`). `leadforge plan` = 295 cells, 885 tiled queries
++ 10 register queries, ~59 h estimated (worst case with subdivision far higher). DVSA CSV cached in
+`leadforge_data/cache/dvsa/`.
+**NEXT:** the sweep runs detached (see below); when `leadforge status` shows `dm_pending`, label DMs
+(`dm export`/`dm apply`), then `run --resume` to score + export; then `outreach plan` / `draft export` for the
+eligible cohort, and a calling sprint with `outreach outcome add`. GainLev's own ICP: `config/icp.company.example.yaml`
+(Stockport pilot) — needs `discovery.providers: [companies_house]` + the CH key in a fresh workspace.

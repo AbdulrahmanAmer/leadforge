@@ -85,3 +85,34 @@ def test_register_query_is_routed_to_its_provider_only(cfg, sample_icp, monkeypa
     assert len(FakeGosom.calls) == 2                           # and ran its own (1 category x 2 areas)
     statuses = [r["status"] for r in conn.execute("SELECT status FROM queries ORDER BY id")]
     assert statuses == ["done"] * 4
+
+
+def test_register_provider_is_never_a_fallback_for_a_maps_query(cfg, sample_icp, monkeypatch, tmp_path):
+    from leadforge.util import ProviderDegraded
+
+    class DegradedGosom(_Fake):
+        name = "gosom"
+        calls = []
+
+        def fetch(self, query, limit=None):
+            type(self).calls.append(query.text)
+            raise ProviderDegraded("captcha")
+
+    class FakeDvsa(_Fake):
+        name = "dvsa"
+        calls = []
+
+    monkeypatch.setitem(pbase.PROVIDERS, "gosom", DegradedGosom)
+    monkeypatch.setitem(pbase.PROVIDERS, "dvsa", FakeDvsa)
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda cfg: None)
+    cfg.discovery.providers = ["gosom", "dvsa"]
+    cfg.discovery.grid_mode = "off"
+    icp = _icp(sample_icp)
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, "icp.yaml", icp.icp_hash())
+    _plan_into_db(conn, cfg, icp, run_id)
+    run_discover(cfg, icp, tmp_path / "icp.yaml", run_id=run_id)
+    # the register answered ONLY its own two queries; the two degraded Maps queries stayed degraded
+    assert len(FakeDvsa.calls) == 2
+    statuses = [r["status"] for r in conn.execute("SELECT status FROM queries ORDER BY id")]
+    assert statuses == ["done", "done", "degraded", "degraded"]

@@ -61,7 +61,11 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     conn.execute("UPDATE queries SET status='pending' WHERE run_id=? AND status='degraded'", (run_id,))
     conn.commit()
 
-    chain = get_chain(cfg, only=provider)
+    # ADR-013: register providers (dvsa, ...) never act as a FALLBACK for a Maps query — a degraded tile
+    # must stay degraded (and be retried) rather than be "answered" with town-wide register rows. They run
+    # through their own planned queries (PlannedQuery.provider), routed below.
+    from leadforge.grid import ADDITIVE_PROVIDERS
+    chain = [p for p in get_chain(cfg, only=provider) if provider or p.name not in ADDITIVE_PROVIDERS]         or get_chain(cfg, only=provider)
     warns: list[str] = []
     degraded = 0
     new_count = 0
