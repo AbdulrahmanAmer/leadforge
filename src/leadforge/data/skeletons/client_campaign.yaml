@@ -1,0 +1,19 @@
+# v0.3 unit F drafting skeleton — outreach GainLev sends on behalf of a client identity. Same slot
+# contract as gainlev_leadgen.yaml (see that file's header comment).
+purpose: client_campaign
+cta: "Happy to share more — worth a quick call?"
+literals: []
+template_numbers: []
+body: |
+  {{greeting}}
+
+  {{observation}}
+
+  {{offer_line}}
+
+  {{cta}}
+
+  {{signature}}
+  {{postal_address}}
+  {{privacy_line}}
+  {{optout_line}}

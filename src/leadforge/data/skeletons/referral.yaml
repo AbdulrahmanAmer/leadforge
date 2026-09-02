@@ -1,0 +1,19 @@
+# v0.3 unit F drafting skeleton — asking an existing contact for a warm introduction. Same
+# {{subject}}/{{observation}} model-slot contract as the other skeletons.
+purpose: referral
+cta: "Know someone this could help? A quick intro would mean a lot."
+literals: []
+template_numbers: []
+body: |
+  {{greeting}}
+
+  {{observation}}
+
+  {{offer_line}}
+
+  {{cta}}
+
+  {{signature}}
+  {{postal_address}}
+  {{privacy_line}}
+  {{optout_line}}

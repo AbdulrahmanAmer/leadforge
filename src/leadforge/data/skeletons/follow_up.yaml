@@ -1,0 +1,21 @@
+# v0.3 unit F drafting skeleton — a second touch on an already-drafted/sent target. Adds one extra
+# deterministic slot, {{prev_days}} (the CLI computes it from the target's previous message, falling
+# back to cfg.outreach.follow_up_days when there is no prior send timestamp yet) — still never
+# model-written. Same {{subject}}/{{observation}} model-slot contract as the other skeletons.
+purpose: follow_up
+cta: "Still worth a quick chat?"
+literals: []
+template_numbers: []
+body: |
+  {{greeting}}
+
+  I reached out {{prev_days}} days ago about {{offer_line}} — wanted to follow up in case it got buried.
+
+  {{observation}}
+
+  {{cta}}
+
+  {{signature}}
+  {{postal_address}}
+  {{privacy_line}}
+  {{optout_line}}

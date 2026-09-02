@@ -1,0 +1,19 @@
+# v0.3 unit F drafting skeleton — reaching back out to a past lead/client after a gap. Same
+# {{subject}}/{{observation}} model-slot contract as the other skeletons.
+purpose: re_engagement
+cta: "Open to reconnecting?"
+literals: []
+template_numbers: []
+body: |
+  {{greeting}}
+
+  It's been a while since we last spoke about {{offer_line}}.
+
+  {{observation}}
+
+  {{cta}}
+
+  {{signature}}
+  {{postal_address}}
+  {{privacy_line}}
+  {{optout_line}}
