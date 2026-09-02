@@ -1,5 +1,87 @@
 # Changelog
 
+## [0.3.0] — 2026-09-03
+
+The truth, coverage and outreach release. Every change below was driven by a measurement on the live
+816-row UK auto-repair campaign (report in `.claude/POSITION.md`, plan and owner decisions in
+`docs/09-v0.3-build-plan.md`). Release gate: `python scripts/v03_gate.py --live-db <db>` (suite, lint,
+versions, plugin validate, CLI contract, DVSA fixture, export truth on a DB copy, outreach and drafting
+guardrail probes).
+
+### Scope change (owner decision, ADR-011/012/013)
+- **Email sending is in scope, under coded guardrails.** `icm/SCOPE.md` #4 rewritten: dry-run by default,
+  `--live` only with `outreach.armed: true` and `--i-am <approver>`, approval bound to the message's content
+  hash, suppression / eligibility / caps / warm-up / send window re-checked inside the send transaction,
+  RFC 8058 one-click unsubscribe, bounces / complaints / unsubscribes / reply opt-outs written to the
+  suppression list automatically, a per-mailbox circuit breaker. No dialer, no SMS, no probing.
+- **No paid dependency anywhere.** Transport is pluggable (`file` dry-run, `smtp` with any mailbox, adapters
+  later; secrets by environment-variable name only); drafting is in-harness (packets out, gated drafts in);
+  company-mode domain resolution uses free methods only.
+- **Registry-first discovery.** Official registers are discovery providers alongside Maps, merged by phone.
+
+### Added
+- **Coverage.** Geocoder resolves bare city names with `featureType=settlement` (bare "Southampton" no longer
+  becomes a bus stop, "City of Manchester" no longer a canal), a coordinates-first same-place rule, waterway /
+  amenity rows never beat a city, and `discovery.area_bbox` overrides. Tiled Maps queries that saturate
+  (≥ `discovery.subdivide_at`) split into quadrants automatically, persisted before the parent completes.
+  `run --resume` finishes a run's pending queries from any stage (the live campaign was `exported` with 18
+  never-run queries); `caps.max_leads` is a per-run stop across resumes; `--limit` means new businesses per
+  invocation. `plan` reports untiled / tiled / register queries, measured per-query estimates and a worst-case
+  subdivided figure.
+- **DVSA provider** (`discovery.providers: [gosom, dvsa]`): the "Active MOT test stations" register (OGL,
+  quarterly, phone on 23,085 of 23,087 rows) as its own planned query per area, merged into Maps rows by E.164
+  phone. Live-proven on a campaign copy: 40 new stations, 5 merged.
+- **Google Business Profile facts kept** from the scraper: appointment attributes, booking links, owner reply
+  signatures (reviewer echoes rejected), review-credited first names — a `gbp` enrichment stage turns them into
+  booking signals and decision-maker candidates for site-less businesses.
+- **Compliance gate** (`compliance.py`): entity type, lawful basis per address, email eligibility, phone-first
+  `Next Action`, gated director names. New sheet columns: Fit, Contactability, Status (READY / CALL_ONLY /
+  RESEARCH / DQ), Next Action, Entity Type, Lawful Basis (Email), Registry Name / Match, Chain, Site Status,
+  Email Confidence, All Hooks; Summary funnel and Next Action breakdown.
+- **Outreach layer** (`leadforge outreach …`): identities and mailboxes, `plan` (eligibility with every exclusion
+  counted), `approve`, `send` (dry-run default; at-most-once; never re-queued on failure), `sync` (spool + IMAP
+  → suppression + states, content never printed), `status`, `doctor` (SPF / DKIM / DMARC / MX / warm-up, fails
+  closed), `outcome add` (the call-floor feedback loop). Schema v2: sending_identities, mailboxes,
+  outreach_targets, messages, events, outcomes; suppression gains source / client_id / business_id.
+- **Agent drafting** (`leadforge draft …`): `export` emits one evidence packet per enrolled target (measured
+  160–270 tokens) with only evidenced facts and a personalisation grade; the agent writes exactly a subject
+  and one observation citing one fact; `apply` runs a mechanical no-fabrication gate (numbers, addresses,
+  URLs, proper nouns, banned claims, negation consistency) before anything is stored; `render` writes
+  reviewable files; `check` is the gate alone. Five purpose skeletons; identity, postal address, opt-out and
+  the Article-14 line are interpolated by the CLI, never by the model.
+- **Company mode** (GainLev's own pipeline): `target.mode: company` + SIC codes; Companies House advanced search
+  as a discovery provider (SIC × location, 82200 excluded by default), free domain resolution verified on-page,
+  a company rubric (SIC fit, incorporation age, new-director trigger, hiring). Example ICP:
+  `config/icp.company.example.yaml`.
+- `scripts/v03_gate.py`, `docs/09-v0.3-build-plan.md`, `--json` accepted after the subcommand (every skill
+  example was previously broken).
+
+### Fixed (measured defects)
+- Seven junk freemail addresses tiered "valid personal" (a font designer's Gmail scraped from a site template
+  onto three garages, `test@` / `sample@` from a site builder's script): style / script content is stripped
+  before extraction, placeholder local parts are invalid, every address is classified own_domain /
+  freemail_linked / freemail_unlinked / foreign, and **a freemail address never outranks the business's own
+  mailbox** (three tier-A rows had a stranger's Gmail above a real `info@`).
+- Companies House matches accepted on locality alone (7–10 % wrong company; 26 decision makers from
+  dissolved companies): a name-similarity gate plus `company_status == active`, profile persisted on both
+  code paths (the sheet said "not matched" on ~280 matched businesses).
+- Review authors and form labels extracted as staff (42 % of heuristic candidates): review-context exclusion.
+- Hooks asserted without evidence (473 of 630 "no active social profiles" rows were never checked; 115
+  zero-page crawls stamped as crawled): `crawled_at` only on success, hooks require pages > 0 and the signal
+  key, templates say only what was observed, all hooks exported. The booking regex missed "Book a Service"
+  on the campaign's top lead: it now reads nav anchors from HTML and knows the UK booking platforms.
+- Google's category strings ("Car inspection station", "Car repair and maintenance service") scored 0.1 on
+  industry match for 404 rows: a packaged category-alias table; fit and contactability separated so a
+  high-fit unreachable row is visible as such.
+- Evidence rows for emails stored only the address: they now carry a context window, URL and the contact id.
+- Chains (30 domains shared by 78 rows) get a chain key and one contact per chain in outreach.
+
+### Measured on the live campaign (copy, after the release gate)
+Tier A 381 / B 387 / C 25 / DQ 23 of 816; Status READY 408, CALL_ONLY 385; Next Action: call named contact
+406, call switchboard 387; 0 freemail-above-own-domain violations; 0 zero-page crawls reading "live";
+outreach plan enrols 174 of 766 A/B rows with 579 excluded for no sendable email; draft export on 30 tier-A
+rows: grade A 8 / B 3 / C 19, mean 235 tokens per packet.
+
 ## [0.2.0] — 2026-08-31
 
 The coverage release: break the per-query result ceiling, rescue bot-walled sites, and propose

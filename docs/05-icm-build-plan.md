@@ -159,6 +159,11 @@ install via `/plugins` → `$generate-leads` visible; `npx skills add Abdulrahma
 
 ---
 
+## Stage 9 — v0.3: truth, coverage, outreach (2026-09-02/03)
+
+Planned, decided and tracked in **`docs/09-v0.3-build-plan.md`** (owner decisions, waves, per-unit ownership and
+acceptance criteria) and `icm/STATE.md`. Gate: `python scripts/v03_gate.py --live-db <db>`.
+
 ## One-shot finalize protocol (for the coding agent)
 
 Execute in this order — it respects every dependency:

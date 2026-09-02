@@ -106,6 +106,36 @@ The final digest lists artifact paths (XLSX, CSV, report.json). Report to the us
 
 Do NOT paste sheet contents (≤ 5 rows only if the user explicitly asks for a preview).
 
+## Step 5 — Outreach (optional, v0.3; only when the user asks to contact leads)
+
+The sheet's **Next Action** column is phone-first by owner decision: call rows with a validated phone,
+email is the second touch. Email goes out only through `leadforge outreach`, which is **dry-run by default
+and cannot send until the workspace owner arms it**. Protocol + digest fields: `references/outreach.md`
+(sending) and `references/drafting.md` (how you write the two model slots of each message).
+
+```bash
+leadforge outreach identity add --label gainlev --from-email you@sending-domain --from-name "Name" \
+    --postal-address "..." --privacy-url https://... --unsubscribe-mailto stop@sending-domain --json
+leadforge outreach mailbox add --identity gainlev --address you@sending-domain --transport smtp \
+    --config host_env=LF_SMTP_HOST --config port_env=LF_SMTP_PORT --config user_env=LF_SMTP_USER \
+    --config password_env=LF_SMTP_PASS --json            # values are env var NAMES, never secrets
+leadforge outreach plan --campaign <campaign> --tier A,B --identity gainlev --json   # enrol eligible leads
+leadforge draft export --campaign <campaign> --purpose client_campaign --max 40 --json
+#   read the packet file; write drafts.ndjson: {"target", "subject", "observation", "used_fact"} or {"target","abstain":true}
+leadforge draft apply --in drafts.ndjson --json          # mechanical no-fabrication gate; rejected drafts are counted
+leadforge draft render --campaign <campaign> --out drafts/ --json   # files for the human to read
+leadforge outreach approve --campaign <campaign> --all-drafted --approver "<human name>" --json
+leadforge outreach send --campaign <campaign> --json     # DRY RUN: writes .eml files to the outbox, sends nothing
+leadforge outreach doctor --identity gainlev --json      # SPF / DKIM / DMARC / MX / warm-up must all be ok
+```
+
+Rules you must not bend: never run `--live` yourself — the owner sets `outreach.armed: true` and passes
+`--i-am <approver>`; never edit a message after approval (it reverts to drafted); never invent a fact in a
+draft (the gate rejects it, and the packet is the only source of truth); abstain on grade-C packets when the
+purpose needs personalisation. After a calling or mailing sprint, record results with
+`leadforge outreach outcome add --business <id> --channel phone|email --result <..>` so the next scoring pass
+learns from real outcomes.
+
 ## Repeat campaigns
 
 Same workspace = same SQLite: re-runs dedupe automatically and re-verify stale rows. For a new campaign, just run Step 1 with a new

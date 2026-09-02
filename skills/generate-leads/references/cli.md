@@ -22,10 +22,31 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `run` | orchestrated: plan→discover→enrich→(dm_pending)→score→export, resumable | `--icp F`, `--resume`, `--limit N`, `--skip-dm` | `stage`, everything above |
 | `status` | current run snapshot | `--run ID` | `stage`, counts |
 | `suppress add\|list` | opt-out list (domain/email/place_id) | value | `suppressed` |
+| `render-check URL` | diagnose one site: robots → plain fetch → browser → contacts | — | `emails`, `blocked`, `rendered` |
+| `outreach identity add\|list` | sending identities (from name/email, postal address, privacy URL, opt-out channel) | `--label`, `--from-email`, … | `id`, `live_complete` |
+| `outreach mailbox add\|list` | mailboxes that send for an identity; secrets by env var NAME only | `--identity`, `--address`, `--transport file\|smtp`, `--config k=ENV`, `--daily-cap` | `id` |
+| `outreach plan` | enrol scored leads as outreach targets (entity type, lawful basis, suppression, chain dedupe) | `--campaign`, `--tier A,B`, `--identity`, `--limit`, `--client` | `enrolled`, `no_sendable_email`, `entity_gate`, `chain_duplicate`, `suppressed` |
+| `draft export` | one evidence packet per enrolled target for you to draft from | `--campaign`, `--purpose`, `--max`, `--out`, `--run`/`--tier` (standalone) | `targets`, `grade_a/b/c`, `insufficient_evidence`; artifact = packet path |
+| `draft apply` | ingest your drafts through the no-fabrication gate | `--in F`, `--packets F` | `drafted`, `rejected`, `abstained` |
+| `draft render` / `draft check` | reviewable files / gate-only dry check | `--campaign`, `--out DIR` / `--in F` | counts |
+| `outreach approve` | bind a human approval to each draft's content hash | `--campaign`, `--tier`/`--ids`/`--all-drafted`, `--approver` | `approved` |
+| `outreach send` | **dry-run by default** (.eml files to the outbox); `--live` needs `outreach.armed` + `--i-am` | `--campaign`, `--dry-run`/`--live`, `--i-am`, `--mailbox`, `--max` | `would_send` / `sent`, `unknown`, `skipped_*`, `breaker_paused` |
+| `outreach sync` | ingest bounces / complaints / unsubscribes / replies → suppression + states | — | `events`, `suppressed`, `replies` |
+| `outreach status` | counts by state, caps consumed, breaker | `--campaign` | per-state counts |
+| `outreach doctor` | SPF / DKIM / DMARC / MX / identity / warm-up checks, fails closed | `--identity` | per-check ok/FAIL |
+| `outreach outcome add` | record a call/email result (feeds the outcome loop) | `--business`, `--channel`, `--result`, `--notes` | `outcomes` |
 
 Notes
 - `run` picks up an interrupted run for the same ICP hash automatically with `--resume`.
-- `--limit N` caps businesses processed this invocation — use for smoke tests (`--limit 10`).
+- `--limit N` caps NEW businesses processed this invocation — use for smoke tests (`--limit 10`); `caps.max_leads` is the
+  per-run hard stop across resumes.
+- `--json` may be written before or after the subcommand (v0.3); both spellings work.
+- v0.3 discovery: `discovery.providers: [gosom, dvsa]` adds the DVSA MOT-station register as its own planned query per area
+  (merged into Maps rows by phone); `discovery.grid_mode: auto` tiles areas and splits any tile that returns ≥ `subdivide_at`
+  results; `discovery.area_bbox` bypasses the geocoder for a named area; `plan` reports `registry_queries`, `tiled_queries`,
+  `est_runtime_min` and a worst-case subdivided estimate.
+- v0.3 company mode (GainLev's own pipeline): `target.mode: company` + `sic_codes` in the ICP and `discovery.providers:
+  [companies_house]` discover companies from Companies House by SIC × location; see `icp-guide.md`.
 - Optional extras change behavior when installed: `[browser]` auto-covers `needs_browser` sites; configured registry keys add
   officer cross-checks. Digest `warnings` tell you when an extra would have helped.
 - Config file `leadforge.yaml` (workspace, optional): provider order, politeness knobs, proxies passthrough, registry keys, validation.staleness_days (drives the sheet's Stale? column). Write values with `leadforge config set <dotted.key> <value>`.

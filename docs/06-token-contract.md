@@ -30,7 +30,8 @@ LF_DIGEST {"ok":true,"cmd":"discover","run":"run_20260831_1201_k3","counts":{"ti
 | discover + enrich digests (incl. resumes) | ~4–8 digest lines | ~0.5k |
 | DM labeling | 1 batch ≤ 60 businesses × ≤ ~70 tokens/line, read + labels out | ~6–9k |
 | score + export digests + final summary to user | digests + ~15-line summary | ~1k |
-| **Total** | | **< 15k** |
+| Outreach drafting (v0.3, optional) | `draft export` packets ≈ 160–270 tokens each + your two slots (subject + one observation) ≈ 60 tokens out | ~9–13k per 40 leads |
+| **Total (research campaign)** | | **< 15k** |
 
 Contrast: one raw Google Maps results page or one uncompressed business website ≈ 30–150k tokens. The pipeline processes hundreds of
 pages; **none of them** cross the boundary.

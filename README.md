@@ -82,7 +82,10 @@ Codes**) · and **Call Readiness** — whether the row is safe to dial right now
 `scoring: {profile: account_fit}` the sheet appends 14 account-intel columns (Employees, Employee Range,
 Revenue, Departments, Microsoft 365, CRM, ERP, Other Systems, Trigger, Trigger Strength, LinkedIn,
 Contactability, Data Confidence, Status). **A cell is never empty** — a would-be blank says why it is blank
-("none published", "not matched in registry", …).
+("none published", "not matched in registry", …). v0.3 appends **Fit**, **Contactability**, **Status**
+(READY / CALL_ONLY / RESEARCH / DQ), **Next Action** (phone-first, or the outreach state once a lead is enrolled),
+**Entity Type**, **Lawful Basis (Email)**, **Registry Name / Match**, **Chain**, **Site Status**, **Email
+Confidence** and **All Hooks**.
 
 The workbook also carries a **Summary** tab (counts, tier split, top hooks, compliance reminder for your region)
 and an **About** tab that explains the columns — so your partner can read it without asking you.
@@ -109,13 +112,45 @@ Architecture, data model, pipeline behavior and every decision are documented in
 - **robots.txt respected** on business sites; one request in flight per host with a delay; identifying user-agent.
 - **Caps** from your ICP are hard stops; a **suppression list** is honored at crawl, score and export time.
 - **No SMTP probing** (email validity is reported as tiers, never a false binary), **no LinkedIn**, **no
-  login-gated scraping**, **no anti-bot evasion**, **no outreach sending**. Public business data only.
+  login-gated scraping**, **no anti-bot evasion**, **no dialer, no SMS**. Public business data only.
+- **Email sending is opt-in and audited (v0.3, ADR-011):** dry-run by default, `--live` only with `outreach.armed: true`
+  and a named approver, approval bound to the message's content hash, suppression / eligibility / caps / warm-up / send
+  window re-checked inside the send transaction, one-click unsubscribe, bounces and complaints written to the suppression
+  list automatically, a per-mailbox circuit breaker. No paid service is required or bundled (ADR-012): the transport is
+  whatever mailbox you configure.
 - **Country is required** on every campaign and areas must be specific — vague locations are how lead lists fill
   with garbage, so the tool refuses them and asks instead of guessing.
 
 See [`docs/07-compliance.md`](docs/07-compliance.md) for the practical GDPR/PECR/CAN-SPAM posture. Not legal advice.
 
+## Outreach and drafting (v0.3)
+
+The sheet's **Next Action** column is phone-first: call rows with a validated phone and a named contact, email
+is the second touch. `leadforge outreach plan` enrols eligible leads (entity type + lawful basis computed per
+row, chains de-duplicated, suppressed and dead-site rows excluded); `leadforge draft export` hands the agent a
+compact evidence packet per lead (≈160–270 tokens) and `draft apply` accepts only drafts whose every number,
+address, URL and proper noun exists in that packet; `outreach approve` binds a human approval to the content
+hash; `outreach send` is a dry run that writes `.eml` files until the owner arms the workspace and passes
+`--i-am`. `outreach doctor` checks SPF, DKIM, DMARC, MX and mailbox warm-up and fails closed; `outreach sync`
+turns bounces, complaints, unsubscribes and replies into suppression rows and state changes; `outreach outcome
+add` records what happened on the phone so the next scoring pass learns from real outcomes. Full protocol:
+`skills/generate-leads/references/outreach.md` and `drafting.md`.
+
+**Company mode** (GainLev's own client pipeline): `target.mode: company` with SIC codes discovers companies
+from Companies House by activity and location, resolves their websites without paid lookups, and scores them
+with a company rubric (incorporation age, new-director trigger, hiring). Example ICP:
+`config/icp.company.example.yaml`.
+
 ## Status
+
+**v0.3.0 — truth, coverage, outreach (2026-09-03).** Measured on the live 816-row campaign: the sheet now separates
+**Fit** from **Contactability** and carries **Status / Next Action / Entity Type / Lawful Basis / Registry Match /
+Chain / Site Status / Email Confidence / All Hooks**; hooks fire only on observed evidence (no more "no online
+booking" on sites that were never read); a freemail address never outranks the business's own mailbox; registry
+matches require a name-similarity gate and an active company; Google Business Profile facts (booking links,
+appointment attributes, owner reply signatures) are kept; the DVSA MOT-station register is a discovery provider
+merged into Maps rows by phone; tiled Maps queries subdivide when they saturate and `--resume` finishes a run's
+pending queries; the geocoder resolves bare city names to the city. Release gate: `python scripts/v03_gate.py`.
 
 **v0.1.4 — shipped and live-validated** with a 709-lead UK auto-repair campaign (2026-08-31). Every ICM unit
 is implemented and tested. Since v0.1.1: a **registry stage** that covers site-less businesses and adds a
