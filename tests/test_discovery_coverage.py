@@ -14,7 +14,7 @@ import yaml
 from leadforge import db
 from leadforge.grid import Tile
 from leadforge.models import ICP, RawListing
-from leadforge.normalize import to_business
+from leadforge.normalize import _appointments_from_about, _reply_signatures, _review_credited_names, to_business
 from leadforge.providers.base import DiscoveryProvider, register, register_field_map
 from leadforge.util import now_iso
 
@@ -158,6 +158,110 @@ def test_subdivision_children_persisted_before_a_crash_are_picked_up_by_a_later_
     assert pending == 0
 
 
+def test_subdivision_never_fires_when_the_answering_provider_ignores_tiles(cfg, monkeypatch):
+    """A2 review (major): a chain fallback that ignores query.tile (supports_tiles=False) but still
+    returns >= subdivide_at whole-area rows must NOT trigger subdivision — splitting a whole-area
+    answer into quadrants only gets the same whole-area rows back on each child, recursing pointlessly
+    against the politeness budget. Gate on which provider actually answered, not just result size."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    cfg.discovery.subdivide_at = 2
+    cfg.discovery.max_subdivisions = 2
+    icp = _minimal_icp(max_leads=100_000)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    @register
+    class FakeUntiledSaturated(DiscoveryProvider):
+        name = "fakeuntiled_saturated_a2"
+        supports_tiles = False  # ignores query.tile entirely, like FallbackRestProvider
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": f"Shop {i}", "place_id": f"PID_{i}"}) for i in range(5)]  # >= subdivide_at
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    root_tile = Tile(bbox=(-2.4, 53.3, -2.0, 53.6), cell_km=5.0, depth=0)
+    db.add_queries(conn, run_id, [("shops in Manchester", root_tile.to_json())])
+
+    from leadforge.pipeline import run_discover
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakeuntiled_saturated_a2")
+
+    conn = db.connect(cfg.db_path)
+    rows = conn.execute("SELECT tile_json FROM queries WHERE run_id=?", (run_id,)).fetchall()
+    assert len(rows) == 1  # no children inserted — the answering provider never honoured the tile
+
+
+def test_crash_between_child_insert_and_parent_finish_does_not_duplicate_children(cfg, monkeypatch):
+    """A2 'idempotent on resume': the crash window the persist-before-finish ordering exists for is
+    children inserted, parent NOT yet marked done. If the process dies right there and a later
+    --resume re-fetches the still-pending parent, the parent saturates again and must NOT get a
+    second set of 4 children — db.add_queries has no uniqueness, so pipeline.py itself must dedupe
+    against tile_json rows already persisted for this (run_id, query_text)."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    cfg.discovery.subdivide_at = 2
+    cfg.discovery.max_subdivisions = 1
+    icp = _minimal_icp(max_leads=100_000)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    @register
+    class FakeCrashDupA2(DiscoveryProvider):
+        name = "fakecrashdup_a2"
+        supports_tiles = True
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            n = 2 if query.tile.depth == 0 else 0  # only the root saturates
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": f"Shop {query.tile.depth}-{i}", "place_id": f"PID_{query.tile.depth}_{i}"})
+                for i in range(n)]
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    root_tile = Tile(bbox=(-2.4, 53.3, -2.0, 53.6), cell_km=5.0, depth=0)
+    db.add_queries(conn, run_id, [("shops in Manchester", root_tile.to_json())])
+
+    # Simulate the crash: finish_query raises the FIRST time it is called (i.e. right after the
+    # children were persisted, before the parent itself is marked finished — the exact ordering
+    # docs/09 A2 prescribes so children survive a crash there).
+    real_finish = db.finish_query
+    state = {"crashed": False}
+
+    def crashing_finish(conn_, qid, status, count):
+        if not state["crashed"]:
+            state["crashed"] = True
+            raise RuntimeError("simulated crash after children persisted, before parent finished")
+        return real_finish(conn_, qid, status, count)
+
+    monkeypatch.setattr("leadforge.pipeline.db.finish_query", crashing_finish)
+
+    from leadforge.pipeline import run_discover
+    try:
+        run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecrashdup_a2")
+    except RuntimeError:
+        pass
+
+    conn = db.connect(cfg.db_path)
+    after_crash = Counter(json.loads(r["tile_json"])["depth"] for r in
+                          conn.execute("SELECT tile_json FROM queries WHERE run_id=?", (run_id,)))
+    assert after_crash[1] == 4  # children persisted before the simulated crash
+
+    # --resume: parent is still 'pending' (finish_query never completed for it), so run_discover
+    # re-fetches it, it saturates again, and must not insert a second batch of 4 children.
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecrashdup_a2")
+    conn = db.connect(cfg.db_path)
+    after_resume = Counter(json.loads(r["tile_json"])["depth"] for r in
+                           conn.execute("SELECT tile_json FROM queries WHERE run_id=?", (run_id,)))
+    assert after_resume[1] == 4, f"resume duplicated children: {dict(after_resume)}"
+    assert after_resume[0] == 1  # still just the one root
+
+
 # --------------------------------------------------------------------------------------- A3
 def test_resume_completes_discovery_from_exported_stage_with_pending_queries(cfg, monkeypatch):
     """docs/09 A3: the live campaign's run sat at stage 'exported' with 18 queries still pending.
@@ -260,6 +364,37 @@ def test_gbp_facts_extracted_from_gosom_raw_payload():
     assert gbp["review_names"] == ["Ali"]
     assert gbp["reviews_captured"] == 9
     assert gbp["description"] == "Family-run MOT and repair garage serving the local area since 1998."
+
+
+def test_reply_signatures_excludes_non_name_signoffs():
+    """A5 review (major): 'Thanks Customer', 'Thanks Car Care Team', 'Regards MS' are not owner first
+    names — the live-data leak the reviewer measured (Customer x6, Car x5, MS x5). MS is also an
+    all-caps acronym, rejected regardless of the stoplist."""
+    reviews = [
+        {"reply_text_original": "Thanks Customer"},
+        {"reply_text_original": "Thanks Car Care Team"},
+        {"reply_text_original": "Regards MS"},
+        {"reply_text_original": "Thanks so much for the kind words! Regards, Sam"},
+    ]
+    assert _reply_signatures(reviews) == ["Sam"]
+
+
+def test_review_credited_names_excludes_mot_and_all_caps():
+    """A5 review (major): 'MOT' surfaced as a credited review name on live data — it is an all-caps
+    acronym (vehicle test), not a person, even when it appears >= 3 times."""
+    reviews = [{"Description": "The MOT was quick and easy"} for _ in range(4)]
+    assert _review_credited_names(reviews) == []
+
+
+def test_appointments_from_about_respects_explicit_enabled_false():
+    """A5 review (minor): an explicit {'name': 'Appointment required', 'enabled': False} must not be
+    reported as 'required' — the enabled flag was previously ignored entirely."""
+    about = [{"id": "planning", "name": "Planning",
+              "options": [{"name": "Appointment required", "enabled": False}]}]
+    assert _appointments_from_about(about) == "none"
+    # absent 'enabled' still counts (gosom's own default for a listed option)
+    about2 = [{"id": "planning", "name": "Planning", "options": [{"name": "Appointment required"}]}]
+    assert _appointments_from_about(about2) == "required"
 
 
 def test_gbp_facts_default_to_empty_never_none_when_absent():

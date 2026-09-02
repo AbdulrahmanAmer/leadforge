@@ -128,25 +128,40 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
             last_err = e
             LOG.warning("geocode attempt %d/%d for '%s' failed: %s",
                         attempt + 1, _GEOCODE_ATTEMPTS, area, type(e).__name__)
+    _bbox_hint = (
+        f'or set discovery.area_bbox["{area}"] = [minLng, minLat, maxLng, maxLat] in config '
+        "to bypass the geocoder"
+    )
     if rows is None:
         raise InputError(
             f"could not geocode '{area}' in {country} after {_GEOCODE_ATTEMPTS} attempts: "
-            f"{type(last_err).__name__} — check spelling/network or set target.geography.bbox"
+            f"{type(last_err).__name__} — check spelling/network or set target.geography.bbox, {_bbox_hint}"
         ) from last_err
     if not rows:
         raise InputError(
             f"'{area}' not found in country {country}. Check the spelling, add a state/region "
-            f"(e.g. 'Springfield, IL'), or confirm the country code is right."
+            f"(e.g. 'Springfield, IL'), {_bbox_hint}."
         )
 
     rows = [r_ for r_ in rows if r_.get("boundingbox")]
     if not rows:
-        raise InputError(f"'{area}' returned no usable bounding box in {country}")
+        raise InputError(f"'{area}' returned no usable bounding box in {country}, {_bbox_hint}")
 
     # A1: a canal/amenity/tourist-spot row is never the resolved place and never counts toward
     # ambiguity — only real-place rows (or, failing that, whatever Nominatim gave us) compete.
     candidates = [r_ for r_ in rows if (r_.get("addresstype") or r_.get("type") or "").casefold()
                   not in _DISFAVORED_ADDRESSTYPES] or rows
+
+    # A1: among the survivors, a _PREFERRED_ADDRESSTYPES row (city/town/borough/...) always outranks
+    # a row that is merely not-disfavored (railway, shop, building, road, place, ...) even at lower
+    # Nominatim importance — "prefer city, town, ..." would otherwise let e.g. a high-importance
+    # "road" beat a lower one "city" row. Preferred rows are their own tier: like the disfavored
+    # exclusion above, a preferred row is never compared for ambiguity against a merely-not-disfavored
+    # one — only candidates within the SAME tier compete (this also keeps the ambiguity gap's
+    # importance-descending assumption intact, since each tier preserves Nominatim's own ordering).
+    preferred = [r_ for r_ in candidates if (r_.get("addresstype") or r_.get("type") or "").casefold()
+                 in _PREFERRED_ADDRESSTYPES]
+    candidates = preferred or candidates
 
     # Ambiguity guard: two near-equally strong, geographically distinct matches -> ask, don't guess.
     if len(candidates) > 1:
@@ -156,7 +171,7 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
             names = "; ".join(r_.get("display_name", "?") for r_ in candidates[:3])
             raise InputError(
                 f"'{area}' is ambiguous in {country} — candidates: {names}. "
-                f"Re-run with a more specific area (add state/region/county)."
+                f"Re-run with a more specific area (add state/region/county), {_bbox_hint}."
             )
 
     row = candidates[0]

@@ -27,7 +27,11 @@ _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm
 _SIGNOFF_RE = re.compile(
     r"(?:[Tt]hanks|[Tt]hank you|[Rr]egards|[Cc]heers|(?:[Bb]est |[Ww]arm )?[Ww]ishes)[,]?\s+([A-Z][a-zA-Z']+)"
 )
-_SIGNOFF_STOP = {"team", "thanks", "thank", "regards", "regard", "kind", "best", "warm", "the", "staff", "service", "you"}
+_SIGNOFF_STOP = {
+    "team", "thanks", "thank", "regards", "regard", "kind", "best", "warm", "the", "staff", "service", "you",
+    "customer", "customers", "car", "cars", "ms", "mr", "mrs", "dr", "mot", "again", "everyone", "all",
+    "guys", "sir", "madam",
+}
 _REVIEW_NAME_RE = re.compile(
     r"\b([A-Z][a-zA-Z']+)\s+(?:and his|and the|is|was|the owner|who|did|sorted|fixed|helped|looked)\b"
 )
@@ -35,7 +39,7 @@ _REVIEW_NAME_STOP = {
     "it", "this", "that", "they", "there", "here", "he", "she", "we", "you", "i", "team", "staff",
     "service", "car", "garage", "work", "nothing", "everything", "cash", "all", "very", "great",
     "excellent", "highly", "guys", "guy", "lady", "man", "woman", "friendly", "professional",
-    "amazing", "brilliant", "thanks", "thank",
+    "amazing", "brilliant", "thanks", "thank", "mot", "customer", "customers", "everyone",
 }
 
 COUNTRY_TO_REGION = {
@@ -183,7 +187,10 @@ def _appointments_from_about(about) -> str:
         if "planning" not in gid and "appointment" not in gid:
             continue
         for opt in grp.get("options") or []:
-            label = str((opt or {}).get("name") or "").casefold()
+            opt = opt or {}
+            if opt.get("enabled") is False:  # explicit False only — absent/None still counts (gosom's default)
+                continue
+            label = str(opt.get("name") or "").casefold()
             if "required" in label:
                 return "required"
             if "recommended" in label:
@@ -199,9 +206,28 @@ def _booking_links_from_order_online(order_online) -> list[str]:
     return [str(e["link"]) for e in order_online if isinstance(e, dict) and e.get("link")]
 
 
-def _reply_signatures(reviews: list) -> list[str]:
+def _name_token_set(business_name: str) -> set[str]:
+    return {t.casefold() for t in re.findall(r"[A-Za-z']+", business_name or "")}
+
+
+def _is_plausible_name(name: str, name_tokens: set[str]) -> bool:
+    """Reject SHOUTY acronyms ('MS', 'MOT' — matched by the regex because it allows any-case letters
+    after the first) and a word that is just a token of the business's own name ('Car' from 'XYZ Car
+    Care', 'Customer' where the stoplist alone missed a variant) — review noise the GBP side must not
+    re-create (docs/09 A5 review, major)."""
+    if len(name) > 1 and name == name.upper():
+        return False
+    if name.casefold() in name_tokens:
+        return False
+    return True
+
+
+def _reply_signatures(reviews: list, business_name: str = "") -> list[str]:
     """First names an owner signed their review replies with (reply_text_original), e.g. 'Thanks Sam' —
-    the LAST sign-off in a reply is kept (sign-offs sit at the end); one entry per distinct name."""
+    the LAST sign-off in a reply is kept (sign-offs sit at the end, so requiring it near the end of the
+    text avoids matching a sign-off word used mid-sentence earlier in a long reply); one entry per
+    distinct name."""
+    name_tokens = _name_token_set(business_name)
     names: list[str] = []
     for r in reviews:
         if not isinstance(r, dict):
@@ -212,18 +238,22 @@ def _reply_signatures(reviews: list) -> list[str]:
         matches = list(_SIGNOFF_RE.finditer(text))
         if not matches:
             continue
-        name = matches[-1].group(1)
-        if name.casefold() in _SIGNOFF_STOP:
+        last = matches[-1]
+        if len(text) - last.start() > 40:  # a real sign-off sits at the tail of the reply
+            continue
+        name = last.group(1)
+        if name.casefold() in _SIGNOFF_STOP or not _is_plausible_name(name, name_tokens):
             continue
         if name not in names:
             names.append(name)
     return names
 
 
-def _review_credited_names(reviews: list) -> list[str]:
+def _review_credited_names(reviews: list, business_name: str = "") -> list[str]:
     """First names a reviewer credits ('Ali the owner', 'Sam sorted...'), kept only when they show up
     in >= 3 DISTINCT reviews — a name mentioned once or twice is more likely a sentence-initial common
     word (It was.../This is...) than a real credit."""
+    name_tokens = _name_token_set(business_name)
     counts: dict[str, int] = {}
     for r in reviews:
         if not isinstance(r, dict):
@@ -234,14 +264,14 @@ def _review_credited_names(reviews: list) -> list[str]:
         seen_in_review: set[str] = set()
         for m in _REVIEW_NAME_RE.finditer(text):
             name = m.group(1)
-            if name.casefold() not in _REVIEW_NAME_STOP:
+            if name.casefold() not in _REVIEW_NAME_STOP and _is_plausible_name(name, name_tokens):
                 seen_in_review.add(name)
         for name in seen_in_review:
             counts[name] = counts.get(name, 0) + 1
     return [n for n, c in counts.items() if c >= 3]
 
 
-def gbp_facts(d: dict, g: dict) -> dict:
+def gbp_facts(d: dict, g: dict, business_name: str = "") -> dict:
     """Business.enrich["gbp"] (A5, docs/09): Google Business Profile facts the raw provider payload
     already carries. Empty defaults, never None, so export/scoring never has to null-check this."""
     about = _pick(d, g["about"])
@@ -257,8 +287,8 @@ def gbp_facts(d: dict, g: dict) -> dict:
         "booking_links": _booking_links_from_order_online(order_online),
         "status": str(status),
         "owner_name": str(owner_name or ""),
-        "reply_signatures": _reply_signatures(reviews),
-        "review_names": _review_credited_names(reviews),
+        "reply_signatures": _reply_signatures(reviews, business_name),
+        "review_names": _review_credited_names(reviews, business_name),
         "reviews_captured": len(reviews),
         "description": str(description)[:300],
     }
@@ -303,7 +333,7 @@ def to_business(raw: RawListing, run_id: str, icp: ICP | None, default_region: s
     review_count = _pick(d, g["review_count"])
     hours = _pick(d, g["hours"])
     return Business(
-        enrich={"gbp": gbp_facts(d, g)},
+        enrich={"gbp": gbp_facts(d, g, name)},
         id=f"biz_{sha1_hex(dedupe_key)}",
         place_id=str(place_id) if place_id else None,
         cid=str(_pick(d, g["cid"])) if _pick(d, g["cid"]) else None,

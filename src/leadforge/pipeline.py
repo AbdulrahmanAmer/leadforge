@@ -7,6 +7,7 @@ for the agent (stage=dm_pending).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -82,7 +83,7 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             break
         pq = PlannedQuery(text=q["query_text"], category="", area="",
                           tile=_tile_from_json(q["tile_json"]))
-        listings, status = _fetch_with_chain(chain, pq, limit, warns)
+        listings, status, tiled_honoured = _fetch_with_chain(chain, pq, limit, warns)
         if status == "degraded":
             degraded += 1
         per_query_new = 0
@@ -105,10 +106,23 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
         # A2 saturation subdivision: a tiled query that came back saturated is split into 4 quadrant
         # queries at the next depth, persisted BEFORE the parent is marked finished (so a crash right
         # after this point still has the children on --resume), capped at max_subdivisions deep.
-        if status == "done" and pq.tile is not None and len(listings) >= cfg.discovery.subdivide_at \
+        # Dedupe against already-persisted rows for this (run_id, query_text): a crash between the
+        # children insert and finish_query(parent) leaves the parent 'pending', so a later --resume
+        # re-fetches it, saturates again, and would otherwise insert a second set of 4 children —
+        # quarter_tile(pq.tile) is deterministic (same parent bbox -> same 4 quadrant dicts), so the
+        # json.dumps of a child's to_json() matches the tile_json string already on disk byte-for-byte.
+        if status == "done" and tiled_honoured and len(listings) >= cfg.discovery.subdivide_at \
                 and pq.tile.depth < cfg.discovery.max_subdivisions:
             children = quarter_tile(pq.tile)
-            db.add_queries(conn, run_id, [(q["query_text"], c.to_json()) for c in children])
+            existing_tiles = {
+                row["tile_json"] for row in conn.execute(
+                    "SELECT tile_json FROM queries WHERE run_id=? AND query_text=?",
+                    (run_id, q["query_text"]),
+                )
+            }
+            new_children = [c for c in children if json.dumps(c.to_json()) not in existing_tiles]
+            if new_children:
+                db.add_queries(conn, run_id, [(q["query_text"], c.to_json()) for c in new_children])
             for nr in db.pending_queries(conn, run_id):
                 if nr["id"] not in known_ids:
                     known_ids.add(nr["id"])
@@ -130,21 +144,27 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     return run_id, counts, warns[:5]
 
 
-def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str]:
+def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str, bool]:
+    """Returns (listings, status, tiled_honoured). tiled_honoured is True only when the provider that
+    actually answered declares supports_tiles=True — a chain fallback that ignores query.tile (e.g.
+    FallbackRestProvider) must never be treated as having constrained the search to that tile, or A2
+    saturation subdivision would split a whole-area answer into quadrants that get the exact same
+    whole-area rows back, recursing pointlessly against the politeness budget (docs/09 A2 review)."""
     last_degraded = False
     for provider in chain:
         ok, reason = provider.available()
         if not ok:
             warns.append(f"{provider.name}: {reason}")
             continue
-        if pq.tile is not None and not getattr(provider, "supports_tiles", False):
+        tiled_honoured = pq.tile is not None and getattr(provider, "supports_tiles", False)
+        if pq.tile is not None and not tiled_honoured:
             # say it out loud: this provider searches the query TEXT only, so a tiled plan silently
             # loses its per-cell geographic constraint (and with it the point of tiling)
             msg = f"{provider.name} ignores grid tiles — geo constraint dropped for tiled queries"
             if msg not in warns:
                 warns.append(msg)
         try:
-            return provider.fetch(pq, limit=limit), "done"
+            return provider.fetch(pq, limit=limit), "done", tiled_honoured
         except ProviderDegraded as e:
             LOG.warning("provider %s degraded: %s", provider.name, e)
             last_degraded = True
@@ -152,7 +172,7 @@ def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str]:
         except ProviderFailed as e:
             warns.append(f"{provider.name} failed: {e}")
             continue
-    return [], "degraded" if last_degraded else "failed"
+    return [], "degraded" if last_degraded else "failed", False
 
 
 def _plan_into_db(conn: sqlite3.Connection, cfg: Config, icp: ICP, run_id: str) -> None:
@@ -164,8 +184,6 @@ def _plan_into_db(conn: sqlite3.Connection, cfg: Config, icp: ICP, run_id: str) 
 def _tile_from_json(tile_json: str | None):
     if not tile_json:
         return None
-    import json
-
     from leadforge.grid import Tile
 
     return Tile.from_json(json.loads(tile_json))
