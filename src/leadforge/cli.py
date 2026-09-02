@@ -292,7 +292,7 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
     formats = [f.strip() for f in format_.split(",") if f.strip()] if format_ else cfg.export.formats
     try:
         artifacts = export_run(conn, load_icp(Path(icp)), run["id"], out_dir, formats,
-                               staleness_days=cfg.validation.staleness_days)
+                               staleness_days=cfg.validation.staleness_days, cfg=cfg)
     except LeadForgeError as e:
         emit_digest(False, "export", warnings=[str(e)[:120]])
         raise typer.Exit(e.exit_code) from e
