@@ -64,6 +64,20 @@ def test_cfemail_still_read_despite_noise_stripping():
     assert "real@shop.com" in out
 
 
+def test_unclosed_script_content_does_not_leak_an_email():
+    """A malformed/truncated document with a <script> that has no matching </script> — a real parser
+    (or a browser) would implicitly close it at end-of-document; the noise-stripping regex must do the
+    same instead of leaving the tail (and any email inside it) in the raw-markup pass."""
+    html = (
+        "<html><body><p>Contact real@shop.com for a quote.</p>"
+        '<script>var config = {"support": "leak@gmail.com"};'
+        # deliberately no closing </script> tag
+    )
+    out = extract_emails(html, "Contact real@shop.com for a quote.")
+    assert "leak@gmail.com" not in out, f"unclosed <script> content leaked: {out}"
+    assert "real@shop.com" in out
+
+
 # --- JUNK_LOCALPARTS dropped at extraction (not just at validation) ------------------------------------
 def test_junk_localparts_dropped_at_extraction():
     html = '<a href="mailto:noreply@shop.com">x</a>'
@@ -113,6 +127,30 @@ def test_booking_hint_false_when_no_booking_language():
     assert "booking_source" not in signals
 
 
+def test_booking_hint_nav_anchor_survives_trafilatura_boilerplate_stripping():
+    """v0.3 fix regression test: trafilatura treats nav/header anchors as boilerplate and strips them
+    from Page.text — on a document with enough real paragraph content that trafilatura's extraction
+    is the ACTIVE path (not the selectolax fallback), a "Book Online" nav anchor must still be found.
+    Before the fix, compute_signals ran the word-distance regex over Page.text and this went False."""
+    html = (
+        '<html><body><nav><a href="/booking">Book Online</a></nav><main>'
+        "<p>We are a family-run garage in the heart of town, serving the local community for over "
+        "twenty years with honest, reliable car repair and servicing. Our fully qualified technicians "
+        "handle everything from routine maintenance to major mechanical work, and we pride ourselves "
+        "on clear communication and fair pricing for every customer who walks through our doors.</p>"
+        "<p>Whether you need an MOT test, a full service, brake repairs, or diagnostic work, our team "
+        "has the experience and equipment to get the job done right the first time, every time, with "
+        "a genuine commitment to customer satisfaction that keeps people coming back year after "
+        "year.</p></main></body></html>"
+    )
+    pages = _pages(html)
+    assert len(pages[0].text) >= 400, "fixture must be long enough that trafilatura is the active path"
+    assert "book" not in pages[0].text.casefold(), "trafilatura must have actually dropped the nav anchor"
+    signals = SiteCrawler.compute_signals(pages, stale_after_years=3)
+    assert signals["booking_hint"] is True
+    assert signals["booking_source"] == "regex"
+
+
 def test_booking_hint_word_distance_bounded_at_four_words():
     """"book" and a target word more than 4 words apart must NOT trigger — otherwise any page
     mentioning both "book" and "service" anywhere would false-positive."""
@@ -143,6 +181,31 @@ def test_non_team_page_defaults_to_other_context():
     people = extract_people(text, "https://shop.example/news")
     assert len(people) == 1
     assert people[0].context == "other"
+
+
+def test_company_history_years_ago_does_not_suppress_a_confirmed_owner():
+    """v0.3 fix: "N years ago" in a company-history paragraph is not review-shaped and must not trip
+    the 'ago' marker (which is now restricted to days/weeks/months, review-timestamp units)."""
+    text = "Our Story. Gary Robertson, Owner, started the garage 45 years ago and still runs it today."
+    people = extract_people(text, "https://shop.example/about")
+    assert len(people) == 1, f"a real owner was suppressed by the loosened 'ago' marker: {people}"
+    assert people[0].name == "Gary Robertson"
+
+
+def test_single_weak_marker_alone_does_not_suppress_a_team_candidate():
+    """v0.3 fix: a lone weak marker ("thank you") used to suppress on its own — "Paul says thank you"
+    on an otherwise ordinary team page is not review noise without a second co-occurring marker."""
+    text = "Meet the Team. Paul Smith, Owner. Paul says thank you to everyone who supports the shop."
+    people = extract_people(text, "https://shop.example/team")
+    assert len(people) == 1, f"a single weak marker wrongly suppressed a team candidate: {people}"
+    assert people[0].name == "Paul Smith"
+
+
+def test_single_weak_marker_google_alone_does_not_suppress_a_team_candidate():
+    text = "Our Team. Jane Doe - Managing Director. Find us on Google for directions to the workshop."
+    people = extract_people(text, "https://shop.example/team")
+    assert len(people) == 1, f"a single weak marker wrongly suppressed a team candidate: {people}"
+    assert people[0].name == "Jane Doe"
 
 
 def test_person_candidate_context_defaults_to_other():
@@ -198,6 +261,32 @@ def test_affinity_hyphen_folding_joins_pieces_too_short_alone():
     assert classify_email_affinity("joelrepairs@gmail.com", "somewhere.co.uk", "Jo-El") == "freemail_linked"
 
 
+def test_affinity_typographic_apostrophe_folding():
+    """The typographic right single quote (U+2019) is what real sites actually emit for "O'Brien",
+    not the ASCII apostrophe — must fold the same way."""
+    name = "O" + "’" + "Brien Auto Repair"
+    assert classify_email_affinity("obrienauto99@gmail.com", "somewhere.co.uk", name) == "freemail_linked"
+
+
+def test_affinity_generic_stopword_token_does_not_link_unrelated_name():
+    """"The Car Garage" -> "the"/"car"/"garage" as raw tokens; "matthew" contains "the" as a bare
+    substring but is an unrelated person's own gmail, not a link to this business."""
+    assert classify_email_affinity("matthew@gmail.com", "somewhere.co.uk", "The Car Garage") == "freemail_unlinked"
+
+
+def test_affinity_short_trade_token_still_links_as_bare_substring():
+    """Documents a deliberate trade-off, not a gap: a stricter "token must sit at a local-part word
+    boundary" rule was tried to close the ("oscar" contains "car") collision below, but measured
+    against the real campaign DB it lost 15 of 81 (~18%) already-correct freemail_linked matches —
+    "birminghammots@gmail.com" x "mot or repairs", "sngmotorsalesltd@gmail.com" x "sg motors" — where
+    the trade-name token legitimately sits mid-word with no separator. A real, measured regression to
+    guard a hypothetical collision that produced zero false links on the same data is the wrong trade,
+    so "car"/"mot"/"motors" etc. still match anywhere in the local part; only the explicit generic
+    stopword list (test_affinity_generic_stopword_token_does_not_link_unrelated_name) is excluded."""
+    assert classify_email_affinity("oscar77@gmail.com", "somewhere.co.uk", "Car Care Centre") == "freemail_linked"
+    assert classify_email_affinity("car.care@gmail.com", "somewhere.co.uk", "Car Care Centre") == "freemail_linked"
+
+
 # --- rank_email_contacts: ordering + dict/sqlite3.Row compatibility ------------------------------------
 def _row(conn, **fields):
     keys = ", ".join(fields)
@@ -228,14 +317,39 @@ def test_rank_email_contacts_own_domain_role_above_freemail_valid():
 
 
 def test_rank_email_contacts_inferred_ranks_below_own_domain_and_freemail_linked():
+    """affinity='own_domain' here (an inferred guess is on the business domain BY CONSTRUCTION) — the
+    v0.3 fix bug was exactly that "own_domain" affinity alone used to let an inferred/invalid/unknown/
+    risky own-domain row outrank a validated freemail_linked one; the old fixture (affinity='') never
+    exercised that path at all."""
     contacts = [
-        {"kind": "email", "value": "guess@shop.com", "tier": "inferred", "affinity": ""},
+        {"kind": "email", "value": "guess@shop.com", "tier": "inferred", "affinity": "own_domain"},
         {"kind": "email", "value": "info@shop.com", "tier": "role", "affinity": "own_domain"},
         {"kind": "email", "value": "owner@gmail.com", "tier": "valid", "affinity": "freemail_linked"},
     ]
     ranked = [c["value"] for c in rank_email_contacts(contacts)]
     assert ranked.index("guess@shop.com") > ranked.index("info@shop.com")
     assert ranked.index("guess@shop.com") > ranked.index("owner@gmail.com")
+
+
+def test_rank_email_contacts_own_domain_invalid_below_freemail_linked_valid():
+    """The exact violation the reviewer measured: affinity alone as the primary key let an own-domain
+    address of ANY tier (including invalid) outrank a validated freemail_linked mailbox."""
+    contacts = [
+        {"kind": "email", "value": "dead@shop.com", "tier": "invalid", "affinity": "own_domain"},
+        {"kind": "email", "value": "owner@gmail.com", "tier": "valid", "affinity": "freemail_linked"},
+    ]
+    ranked = [c["value"] for c in rank_email_contacts(contacts)]
+    assert ranked == ["owner@gmail.com", "dead@shop.com"], ranked
+
+
+def test_rank_email_contacts_own_domain_unknown_and_risky_below_freemail_linked_valid():
+    contacts = [
+        {"kind": "email", "value": "timeout@shop.com", "tier": "unknown", "affinity": "own_domain"},
+        {"kind": "email", "value": "risky@shop.com", "tier": "risky", "affinity": "own_domain"},
+        {"kind": "email", "value": "owner@gmail.com", "tier": "valid", "affinity": "freemail_linked"},
+    ]
+    ranked = [c["value"] for c in rank_email_contacts(contacts)]
+    assert ranked[0] == "owner@gmail.com", ranked
 
 
 def test_rank_email_contacts_works_on_sqlite3_row():

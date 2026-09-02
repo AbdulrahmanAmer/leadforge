@@ -113,11 +113,47 @@ _AFFINITY_RANK = {"own_domain": 0, "freemail_linked": 1, "": 2, "freemail_unlink
 _TIER_RANK = {t: i for i, t in enumerate(TIER_ORDER)}
 
 
+def _sendability_group(affinity: str, tier: str) -> int:
+    """Coarse "can we actually use this address" bucket — the PRIMARY sort key for rank_email_contacts.
+
+    v0.3 fix: affinity used to be the sole primary key, which let an own-domain address of ANY tier
+    (invalid/unknown/risky/inferred) outrank a validated freemail_linked mailbox — docs/09 puts
+    freemail_linked-valid ABOVE inferred, and a validated address of any affinity above an unvalidated
+    one on the "right" domain. Grouping by tier-shaped sendability first, with the own_domain/
+    freemail_linked distinction only breaking the TOP group, restores that order while still keeping
+    "never freemail above own-domain" true inside every group (affinity is the secondary key).
+
+    0: own-domain, confirmed deliverable (valid/role) — the address to actually use.
+    1: freemail linked to the business by name/initials/person-match, confirmed deliverable.
+    2: inferred — a guess from the domain's own naming convention; never independently observed.
+    3: confirmed-deliverable but not usefully linked (freemail_unlinked/foreign valid or role), or
+       risky/catch_all (observed but deliverability is uncertain either way).
+    4: unknown — a DNS timeout, retryable, not a verdict.
+    5: invalid — worst, but still stored for the record.
+    """
+    if tier == "inferred":
+        return 2
+    if tier in ("valid", "role"):
+        if affinity == "own_domain":
+            return 0
+        if affinity == "freemail_linked":
+            return 1
+        return 3
+    if tier in ("risky", "catch_all"):
+        return 3
+    if tier == "unknown":
+        return 4
+    if tier == "invalid":
+        return 5
+    return 4  # unrecognized tier -> treat like a DNS-timeout unknown, not a verdict
+
+
 def rank_email_contacts(contacts: list) -> list:
-    """Email contact rows, best first: own-domain valid > own-domain role > linked freemail valid >
+    """Email contact rows, best first: own-domain valid > own-domain role > freemail_linked valid >
     inferred > risky > unknown > invalid. A freemail box never outranks the business's own mailbox
-    (the v0.2 sheet exported a font designer's gmail above a real info@ three times) because affinity
-    is the PRIMARY sort key — any own_domain tier beats any freemail_linked tier, full stop.
+    (the v0.2 sheet exported a font designer's gmail above a real info@ three times), AND an own-domain
+    address that is invalid/unknown/risky/inferred never outranks a validated freemail_linked one
+    either — the PRIMARY sort key is a sendability group (see _sendability_group), not affinity alone.
 
     Works on sqlite3.Row and plain dict inputs alike (both support `in .keys()` and `[]`); contacts
     from an old DB that predates the affinity column simply have none and sort as '' (mid-table, below
@@ -125,8 +161,8 @@ def rank_email_contacts(contacts: list) -> list:
     rows = [c for c in contacts if c["kind"] == "email"]
 
     def key(c):
-        affinity = c["affinity"] if "affinity" in c.keys() else ""
+        affinity = (c["affinity"] if "affinity" in c.keys() else "") or ""
         tier = c["tier"] or "unknown"
-        return (_AFFINITY_RANK.get(affinity or "", 2), _TIER_RANK.get(tier, 99), c["value"])
+        return (_sendability_group(affinity, tier), _AFFINITY_RANK.get(affinity, 2), _TIER_RANK.get(tier, 99), c["value"])
 
     return sorted(rows, key=key)

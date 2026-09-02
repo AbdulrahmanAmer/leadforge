@@ -45,7 +45,11 @@ JUNK_EMAIL_HOSTS = ("example.", "sentry.", "wixpress.", "@2x", ".png", ".jpg", "
 # <style>/<script>/<noscript>/<template> CONTENT must never feed the raw-markup email regex pass — but
 # mailto: hrefs and data-cfemail spans are always deliberate published contact points, so those are still
 # read from the FULL, unstripped document (extract_emails() below does exactly that).
-_NOISE_TAGS_RE = re.compile(r"<(style|script|noscript|template)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL)
+# v0.3 fix: an UNCLOSED <script> (no matching </script>) used to leave its whole tail — including any
+# email inside it — in the raw-markup pass, because .*?</\1\s*> requires a closing tag to match at all.
+# `(?:</\1\s*>|\Z)` makes end-of-document an acceptable second boundary, same as a browser/parser would
+# implicitly close an unclosed element at EOF.
+_NOISE_TAGS_RE = re.compile(r"<(style|script|noscript|template)\b[^>]*>.*?(?:</\1\s*>|\Z)", re.IGNORECASE | re.DOTALL)
 
 
 def _strip_noise_elements(html: str) -> str:
@@ -78,9 +82,17 @@ NAME_WORD_STOPLIST = {
 # Review/testimonial noise: a title word can sit right next to a REVIEWER's name too — Google/third-party
 # review widgets commonly render "Response from the owner" beside the reviewer's own name and star rating.
 # These markers say the window is about a review, not a team member, so no candidate is emitted from it.
-_REVIEW_MARKER_RE = re.compile(
-    r"\breviews?\b|\brating\b|\bstars?\b|★|\brecommend\b|\bthank you\b|\bgreat service\b|\bgoogle\b|"
-    r"\btrustpilot\b|/5\b|\b\d+\s+\S+\s+ago\b",
+#
+# v0.3 fix: a single occurrence of a WEAK marker (google/thank you/recommend/reviews/...) used to be
+# enough on its own — "Find us on Google" or "thank you to our customers" on an ordinary team page
+# wrongly suppressed a real candidate. STRONG markers (a star glyph, "/5", "rating", or a genuinely
+# review-shaped "N days/weeks/months ago") are unambiguous on their own; weak markers now need a SECOND
+# marker (weak or strong) co-occurring in the same window before they count as noise. The "ago" marker
+# is also now unit-restricted to days/weeks/months — "started 45 years ago" in a company-history
+# paragraph is not review-shaped and must not match.
+_STRONG_REVIEW_RE = re.compile(r"★|/5\b|\brating\b|\b\d+\s+(?:days?|weeks?|months?)\s+ago\b", re.IGNORECASE)
+_WEAK_REVIEW_RE = re.compile(
+    r"\breviews?\b|\bstars?\b|\brecommend\b|\bthank you\b|\bgreat service\b|\bgoogle\b|\btrustpilot\b",
     re.IGNORECASE,
 )
 _FIRST_PERSON_PRAISE_RE = re.compile(r"\bi took\b|\bmy car\b|\bthey fixed\b|\bwould recommend\b", re.IGNORECASE)
@@ -90,7 +102,9 @@ _TEAM_URL_RE = re.compile(r"/(team|staff|about|people)\b", re.IGNORECASE)
 
 
 def _is_review_noise(window: str) -> bool:
-    return bool(_REVIEW_MARKER_RE.search(window) or _FIRST_PERSON_PRAISE_RE.search(window))
+    if _STRONG_REVIEW_RE.search(window) or _FIRST_PERSON_PRAISE_RE.search(window):
+        return True
+    return len(_WEAK_REVIEW_RE.findall(window)) >= 2
 
 
 def _context_for(window: str, source_url: str) -> str:
@@ -200,8 +214,10 @@ def email_matches_business(email: str, business_domain: str | None) -> bool:
 
 # Apostrophes/hyphens are FOLDED, not treated as separators: "o'brien" -> "obrien" (one token), never
 # split into "o" + "brien". This is what lets a hyphenated/apostrophed business or person name still
-# match a freemail local part that (as local parts must) has no punctuation at all.
-_NAME_PUNCT_RE = re.compile(r"[''`\-]")
+# match a freemail local part that (as local parts must) has no punctuation at all. Includes the
+# typographic apostrophes (U+2019 right single quote, U+2018 left single quote) real sites actually
+# emit for "O'Brien" — written as \u escapes so this file stays plain ASCII.
+_NAME_PUNCT_RE = re.compile(r"[''`\u2019\u2018\-]")
 
 
 def _name_tokens(name: str) -> tuple[list[str], str]:
@@ -215,6 +231,24 @@ def _name_tokens(name: str) -> tuple[list[str], str]:
     tokens = [w for w in words if len(w) >= 3 or (len(w) >= 2 and any(c.isdigit() for c in w))]
     initials = "".join(w[0] for w in words)
     return tokens, initials
+
+
+# v0.3 fix: these words are common enough as substrings of an ORDINARY personal name that a bare
+# substring match false-links unrelated freemail boxes to a business — "matthew" contains "the",
+# "sandra" contains "and", "a and b autos" -> "and" also matches "leonard". None of these is itself
+# a plausible trade-name token, so they are simply never linkage tokens.
+#
+# v0.3 fix, tried-and-reverted: a stricter "token must sit at a local-part word boundary or be a
+# prefix" rule (no bare substring anywhere) was also tried, to close a purely PROSPECTIVE risk the
+# reviewer flagged (a hypothetical "oscar" / "car" collision that never actually occurred). Measured
+# against the real campaign DB copy it lost 15 of 81 (~18%) already-correct freemail_linked matches —
+# "birminghammots@gmail.com" x "mot or repairs" ("mot" mid-word), "sngmotorsalesltd@gmail.com" x
+# "sg motors" ("motors" mid-word), "jc-autorepairs@outlook.com" x "j c auto repairs" ("auto" mid-word)
+# — i.e. it broke the exact "car/auto/motors as real trade-name signal" cases the finding said to
+# KEEP. A real, measured 18% regression to guard a risk that produced zero false links on the same
+# data is the wrong trade, so only the (zero-risk) stopword exclusion below is kept; substring
+# matching for every other token is unchanged. See probe_affinity.py in the fix session's scratchpad.
+_GENERIC_AFFINITY_STOPWORDS = {"the", "and", "for", "ltd", "limited", "plc", "llp", "co", "company"}
 
 
 def classify_email_affinity(email: str, business_domain: str | None, business_name_norm: str = "",
@@ -237,13 +271,15 @@ def classify_email_affinity(email: str, business_domain: str | None, business_na
     if dom not in FREEMAIL_DOMAINS:
         return "own_domain" if not business_domain else "foreign"
     tokens, initials = _name_tokens(business_name_norm)
-    if any(t in local_alnum for t in tokens):
+    sig_tokens = [t for t in tokens if t not in _GENERIC_AFFINITY_STOPWORDS]
+    if any(t in local_alnum for t in sig_tokens):
         return "freemail_linked"
     if len(initials) >= 2 and local_alnum.startswith(initials):
         return "freemail_linked"
     for raw in people_names or []:
         p_tokens, _p_initials = _name_tokens(str(raw))
-        if any(t in local_alnum for t in p_tokens):
+        p_sig_tokens = [t for t in p_tokens if t not in _GENERIC_AFFINITY_STOPWORDS]
+        if any(t in local_alnum for t in p_sig_tokens):
             return "freemail_linked"
     return "freemail_unlinked"
 
@@ -305,7 +341,7 @@ def extract_people(text: str, source_url: str, max_candidates: int = 8) -> list[
 
     We scan the zones AROUND each title (after it for "Owner Jane Doe", before it for "Jane Doe, Owner")
     rather than a window spanning the title, so the title word is never captured as part of the name.
-    A +-200-char window around the title match is checked for review/testimonial markers first — a
+    A +-120-char window around the title match is checked for review/testimonial markers first — a
     review widget's "Response from the owner" sits right next to the REVIEWER's name and star rating,
     not a team member's.
     """
@@ -321,7 +357,7 @@ def extract_people(text: str, source_url: str, max_candidates: int = 8) -> list[
         key = name.casefold()
         if key in seen:
             continue
-        win_start, win_end = max(0, m.start() - 200), min(len(text), m.end() + 200)
+        win_start, win_end = max(0, m.start() - 120), min(len(text), m.end() + 120)
         window = text[win_start:win_end]
         if _is_review_noise(window):
             continue
@@ -381,7 +417,7 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         key = name.casefold()
         if key in seen or not _plausible_name(name):
             continue
-        win_start, win_end = max(0, n["start"] - 200), min(len(text), n["end"] + 200)
+        win_start, win_end = max(0, n["start"] - 120), min(len(text), n["end"] + 120)
         window = text[win_start:win_end]
         if _is_review_noise(window):
             continue

@@ -44,6 +44,24 @@ _BOOKING_PLATFORMS = {
 }
 
 
+def _booking_html_text(pages: list) -> str:
+    """Text for the booking word-distance regex, derived from HTML — not trafilatura's boilerplate-
+    stripped Page.text. trafilatura throws away nav/header/footer anchors as "boilerplate" (that IS
+    where "Book Online"/"Book Now" nav links actually live), and on a short/single-anchor page it can
+    return '' entirely. Parsing the raw HTML directly and keeping nav/header/footer content is what a
+    real site's booking language requires; script/style/noscript/template content is decomposed first
+    so it never contributes stray words."""
+    parts = []
+    for p in pages:
+        tree = HTMLParser(p.html)
+        for sel in ("script", "style", "noscript", "template"):
+            for node in tree.css(sel):
+                node.decompose()
+        if tree.body:
+            parts.append(tree.body.text(separator=" "))
+    return "\n".join(parts)
+
+
 def _booking_regex_hint(text_blob: str) -> bool:
     words = [w.casefold() for w in _BOOKING_WORD_RE.findall(text_blob)]
     for i, w in enumerate(words):
@@ -253,7 +271,10 @@ class SiteCrawler:
         """Content-derived signals; shared by the static path and the rendered-browser fallback,
         so a rescued site scores on the same evidence as a normally crawled one."""
         blob = "\n".join(p.html for p in pages)
-        text_blob = "\n".join(p.text for p in pages)
+        # v0.3 fix: the word-distance regex must read HTML-derived text (keeps nav anchors), NOT
+        # trafilatura's Page.text — trafilatura strips nav/header/footer as boilerplate, which is
+        # exactly where "Book Online"/"Book Now" nav links live (regressed True->False vs d7eb4ce).
+        booking_text_blob = _booking_html_text(pages)
         signals: dict = {}
         years = [int(y) for y in re.findall(r"(?:©|&copy;|copyright)\D{0,20}(20\d{2})", blob, re.IGNORECASE)]
         if years:
@@ -268,7 +289,7 @@ class SiteCrawler:
         if platform:
             signals["booking_hint"] = True
             signals["booking_source"] = f"platform:{platform}"
-        elif _booking_regex_hint(text_blob) or re.search(r"schedule (an )?appointment", blob, re.IGNORECASE):
+        elif _booking_regex_hint(booking_text_blob) or re.search(r"schedule (an )?appointment", blob, re.IGNORECASE):
             signals["booking_hint"] = True
             signals["booking_source"] = "regex"
         else:
