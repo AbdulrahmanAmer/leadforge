@@ -26,8 +26,14 @@ from leadforge.util import LOG, InputError
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
 _KM_PER_DEG_LAT = 110.574
 _GEOCODE_ATTEMPTS = 3
-# observed live (2026-08-31): a full-depth gosom query runs ~2-35 min; used only for a plan estimate
-_EST_MIN_PER_QUERY = 8.0
+
+# A1 (docs/09): Nominatim addresstype values that are real inhabited places vs. incidental hits
+# (a canal, a tourist attraction, a shop) that outrank the place we actually want by importance
+# alone. Disfavored rows are excluded from both the resolved pick and the ambiguity comparison.
+_PREFERRED_ADDRESSTYPES = {
+    "city", "town", "borough", "administrative", "suburb", "village", "county", "municipality",
+}
+_DISFAVORED_ADDRESSTYPES = {"waterway", "amenity", "tourism", "information", "canal"}
 
 # ISO2 -> plain name, used to country-qualify query text (not exhaustive; falls back to the code itself).
 COUNTRY_NAMES = {
@@ -46,9 +52,16 @@ COUNTRY_NAMES = {
 class Tile:
     bbox: tuple[float, float, float, float]  # minLng, minLat, maxLng, maxLat
     cell_km: float
+    depth: int = 0  # A2: 0 = the plan's original tile, N = the Nth saturation-subdivision generation
 
-    def as_json(self) -> dict:
-        return {"bbox": list(self.bbox), "cell_km": self.cell_km}
+    def to_json(self) -> dict:
+        return {"bbox": list(self.bbox), "cell_km": self.cell_km, "depth": self.depth}
+
+    as_json = to_json  # back-compat alias (pre-v0.3 callers)
+
+    @classmethod
+    def from_json(cls, d: dict) -> Tile:
+        return cls(bbox=tuple(d["bbox"]), cell_km=d["cell_km"], depth=d.get("depth", 0))
 
 
 @dataclass
@@ -59,6 +72,20 @@ class PlannedQuery:
     tile: Tile | None = None
 
 
+def _area_bbox_override(area: str, cfg: Config) -> list[float] | None:
+    """cfg.discovery.area_bbox[area] (exact or casefolded) bypasses Nominatim entirely (docs/09 A1) —
+    for areas the geocoder gets wrong (e.g. 'Manchester' resolving to a canal) or that the operator
+    already knows the box for. [minLng, minLat, maxLng, maxLat], same convention as Tile.bbox."""
+    d = cfg.discovery.area_bbox
+    if area in d:
+        return d[area]
+    cf = area.strip().casefold()
+    for k, v in d.items():
+        if k.strip().casefold() == cf:
+            return v
+    return None
+
+
 def geocode(area: str, cfg: Config, country: str) -> dict:
     """Resolve one area WITHIN a country -> {"lat","lng","bbox","display"} ; cached forever.
 
@@ -66,6 +93,14 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
     country. Genuinely ambiguous matches inside the country raise InputError listing the candidates so the
     operator can disambiguate, rather than the run quietly scraping the wrong place.
     """
+    override = _area_bbox_override(area, cfg)
+    if override is not None:
+        min_lng, min_lat, max_lng, max_lat = (float(x) for x in override)
+        out = {"lat": (min_lat + max_lat) / 2, "lng": (min_lng + max_lng) / 2,
+               "bbox": [min_lng, min_lat, max_lng, max_lat], "display": area, "type": "override"}
+        LOG.info("geocode override for '%s' -> %s (Nominatim skipped)", area, out["bbox"])
+        return out
+
     cache_file = cfg.cache_dir / "geocode.json"
     cache: dict = {}
     if cache_file.is_file():
@@ -108,18 +143,23 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
     if not rows:
         raise InputError(f"'{area}' returned no usable bounding box in {country}")
 
+    # A1: a canal/amenity/tourist-spot row is never the resolved place and never counts toward
+    # ambiguity — only real-place rows (or, failing that, whatever Nominatim gave us) compete.
+    candidates = [r_ for r_ in rows if (r_.get("addresstype") or r_.get("type") or "").casefold()
+                  not in _DISFAVORED_ADDRESSTYPES] or rows
+
     # Ambiguity guard: two near-equally strong, geographically distinct matches -> ask, don't guess.
-    if len(rows) > 1:
-        top, second = rows[0], rows[1]
+    if len(candidates) > 1:
+        top, second = candidates[0], candidates[1]
         gap = float(top.get("importance", 0) or 0) - float(second.get("importance", 0) or 0)
         if gap < 0.05 and _distinct_places(top, second):
-            names = "; ".join(r_.get("display_name", "?") for r_ in rows[:3])
+            names = "; ".join(r_.get("display_name", "?") for r_ in candidates[:3])
             raise InputError(
                 f"'{area}' is ambiguous in {country} — candidates: {names}. "
                 f"Re-run with a more specific area (add state/region/county)."
             )
 
-    row = rows[0]
+    row = candidates[0]
     bb = [float(x) for x in row["boundingbox"]]  # Nominatim: [minLat, maxLat, minLng, maxLng]
     out = {"lat": float(row["lat"]), "lng": float(row["lon"]), "bbox": [bb[2], bb[0], bb[3], bb[1]],
            "display": row.get("display_name", area), "type": row.get("addresstype") or row.get("type", "")}
@@ -132,18 +172,45 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
     return out
 
 
+def _bboxes_overlap(bb_a, bb_b) -> bool:
+    """Nominatim boundingbox order: [minLat, maxLat, minLng, maxLng] (strings)."""
+    if not bb_a or not bb_b:
+        return False
+    try:
+        a_min_lat, a_max_lat, a_min_lng, a_max_lng = (float(x) for x in bb_a)
+        b_min_lat, b_max_lat, b_min_lng, b_max_lng = (float(x) for x in bb_b)
+    except (TypeError, ValueError):
+        return False
+    return a_min_lat <= b_max_lat and b_min_lat <= a_max_lat and a_min_lng <= b_max_lng and b_min_lng <= a_max_lng
+
+
 def _distinct_places(a: dict, b: dict) -> bool:
-    """True when two Nominatim hits are different real places (not the same city returned twice)."""
+    """True when two Nominatim hits are different real places (not the same city returned twice).
+
+    A1 (docs/09): coordinates are compared FIRST. Two hits within 0.15 degrees of each other whose
+    bounding boxes overlap are the same place regardless of how their address dicts differ — a
+    city-boundary row and an administrative-boundary row for the same city carry different address
+    component keys (one may have no 'city' key at all) but sit at (almost) the same point. Only when
+    the coordinates don't already prove sameness do address labels get a say.
+    """
+    try:
+        lat_a, lon_a = float(a["lat"]), float(a["lon"])
+        lat_b, lon_b = float(b["lat"]), float(b["lon"])
+    except (KeyError, TypeError, ValueError):
+        lat_a = lon_a = lat_b = lon_b = None
+    if lat_a is not None and abs(lat_a - lat_b) <= 0.15 and abs(lon_a - lon_b) <= 0.15:
+        if _bboxes_overlap(a.get("boundingbox"), b.get("boundingbox")):
+            return False
+
     ad, bd = a.get("address", {}) or {}, b.get("address", {}) or {}
     keys = ("state", "county", "city", "town", "village")
     av = tuple(ad.get(k) for k in keys)
     bv = tuple(bd.get(k) for k in keys)
     if av != bv:
         return True
-    try:
-        return abs(float(a["lat"]) - float(b["lat"])) > 0.3 or abs(float(a["lon"]) - float(b["lon"])) > 0.3
-    except (KeyError, TypeError, ValueError):
-        return True
+    if lat_a is not None:
+        return abs(lat_a - lat_b) > 0.3 or abs(lon_a - lon_b) > 0.3
+    return True
 
 
 def make_tiles(bbox: list[float], cell_km: float, max_tiles: int) -> list[Tile]:
@@ -171,6 +238,21 @@ def make_tiles(bbox: list[float], cell_km: float, max_tiles: int) -> list[Tile]:
             t_max_lat = min_lat + (max_lat - min_lat) * (iy + 1) / ny
             tiles.append(Tile(bbox=(t_min_lng, t_min_lat, t_max_lng, t_max_lat), cell_km=cell_km))
     return tiles
+
+
+def quarter_tile(tile: Tile) -> list[Tile]:
+    """Split a saturated tile into 4 equal quadrants, one depth deeper (A2 saturation subdivision)."""
+    min_lng, min_lat, max_lng, max_lat = tile.bbox
+    mid_lng = (min_lng + max_lng) / 2
+    mid_lat = (min_lat + max_lat) / 2
+    depth = tile.depth + 1
+    cell = tile.cell_km / 2
+    return [
+        Tile(bbox=(min_lng, min_lat, mid_lng, mid_lat), cell_km=cell, depth=depth),
+        Tile(bbox=(mid_lng, min_lat, max_lng, mid_lat), cell_km=cell, depth=depth),
+        Tile(bbox=(min_lng, mid_lat, mid_lng, max_lat), cell_km=cell, depth=depth),
+        Tile(bbox=(mid_lng, mid_lat, max_lng, max_lat), cell_km=cell, depth=depth),
+    ]
 
 
 def qualify_area(area: str, country: str) -> str:
@@ -234,14 +316,23 @@ def build_plan(icp: ICP, cfg: Config) -> list[PlannedQuery]:
 
 
 def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
-    """cfg is accepted for signature stability; runtime is estimated from the observed per-query
-    average, which depends on gosom's depth behaviour rather than on any single config value."""
+    """A4 (docs/09): tiled and untiled queries cost different amounts of gosom time (a tiled query
+    visits a smaller area more thoroughly), so each is estimated with its own configured average
+    rather than one blended constant. cfg is optional — defaults to the config's own defaults."""
+    if cfg is None:
+        cfg = Config()
+    untiled = sum(1 for q in queries if not q.tile)
+    tiled = sum(1 for q in queries if q.tile)
+    cells = len({q.tile.bbox for q in queries if q.tile})  # distinct map cells, not tiled queries
+    est_runtime = untiled * cfg.discovery.est_min_per_query + tiled * cfg.discovery.est_min_per_tiled_query
     return {
         "queries": len(queries),
-        "tiles": len({q.tile.bbox for q in queries if q.tile}),  # distinct map cells, not tiled queries
-        "tiled_queries": sum(1 for q in queries if q.tile),
+        "tiles": cells,
+        "cells": cells,
+        "untiled_queries": untiled,
+        "tiled_queries": tiled,
         "est_max_results": len(queries) * 120,  # Google Maps ~120-results-per-query ceiling (docs/01 §2)
-        "est_runtime_min": round(len(queries) * _EST_MIN_PER_QUERY),
+        "est_runtime_min": round(est_runtime),
     }
 
 

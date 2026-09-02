@@ -22,6 +22,22 @@ _LEGAL_SUFFIX = re.compile(
 _WS = re.compile(r"\s+")
 _TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "ref"}
 
+# A5 (docs/09): GBP owner-reply signatures and review-credited names. Case-sensitive on purpose —
+# only an actually-capitalised token is treated as a candidate first name.
+_SIGNOFF_RE = re.compile(
+    r"(?:[Tt]hanks|[Tt]hank you|[Rr]egards|[Cc]heers|(?:[Bb]est |[Ww]arm )?[Ww]ishes)[,]?\s+([A-Z][a-zA-Z']+)"
+)
+_SIGNOFF_STOP = {"team", "thanks", "thank", "regards", "regard", "kind", "best", "warm", "the", "staff", "service", "you"}
+_REVIEW_NAME_RE = re.compile(
+    r"\b([A-Z][a-zA-Z']+)\s+(?:and his|and the|is|was|the owner|who|did|sorted|fixed|helped|looked)\b"
+)
+_REVIEW_NAME_STOP = {
+    "it", "this", "that", "they", "there", "here", "he", "she", "we", "you", "i", "team", "staff",
+    "service", "car", "garage", "work", "nothing", "everything", "cash", "all", "very", "great",
+    "excellent", "highly", "guys", "guy", "lady", "man", "woman", "friendly", "professional",
+    "amazing", "brilliant", "thanks", "thank",
+}
+
 COUNTRY_TO_REGION = {
     "united states": "US", "usa": "US", "united states of america": "US", "canada": "CA",
     "united kingdom": "GB", "uk": "GB", "england": "GB", "scotland": "GB", "wales": "GB",
@@ -149,6 +165,105 @@ def map_category(raw_cat: str | None, raw_cats, icp: ICP | None) -> tuple[str | 
     return primary, cats
 
 
+def _appointments_from_about(about) -> str:
+    """"about" is gosom's Google Business Profile attribute list: [{id,name,options:[{name,enabled}]}].
+    The 'Planning' group's option text ("Appointments recommended"/"Appointment required") is the
+    only signal for this; anything else defaults to 'none' rather than guessing.
+
+    Measured on the live campaign's raw cache (848 places): ~8% of places list BOTH options as true
+    at once (Google shows both chips) — 'required' is checked first and wins as the stricter, more
+    informative claim (every place that requires an appointment can also, trivially, be described as
+    one where appointments are recommended, but not the reverse)."""
+    if not isinstance(about, list):
+        return "none"
+    for grp in about:
+        if not isinstance(grp, dict):
+            continue
+        gid = str(grp.get("id") or grp.get("name") or "").casefold()
+        if "planning" not in gid and "appointment" not in gid:
+            continue
+        for opt in grp.get("options") or []:
+            label = str((opt or {}).get("name") or "").casefold()
+            if "required" in label:
+                return "required"
+            if "recommended" in label:
+                return "recommended"
+    return "none"
+
+
+def _booking_links_from_order_online(order_online) -> list[str]:
+    """order_online: [{"link": url, "source": host}, ...]; a wa.me link is a WhatsApp booking channel
+    but the url itself is kept exactly as scraped either way."""
+    if not isinstance(order_online, list):
+        return []
+    return [str(e["link"]) for e in order_online if isinstance(e, dict) and e.get("link")]
+
+
+def _reply_signatures(reviews: list) -> list[str]:
+    """First names an owner signed their review replies with (reply_text_original), e.g. 'Thanks Sam' —
+    the LAST sign-off in a reply is kept (sign-offs sit at the end); one entry per distinct name."""
+    names: list[str] = []
+    for r in reviews:
+        if not isinstance(r, dict):
+            continue
+        text = str(r.get("reply_text_original") or "")
+        if not text:
+            continue
+        matches = list(_SIGNOFF_RE.finditer(text))
+        if not matches:
+            continue
+        name = matches[-1].group(1)
+        if name.casefold() in _SIGNOFF_STOP:
+            continue
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def _review_credited_names(reviews: list) -> list[str]:
+    """First names a reviewer credits ('Ali the owner', 'Sam sorted...'), kept only when they show up
+    in >= 3 DISTINCT reviews — a name mentioned once or twice is more likely a sentence-initial common
+    word (It was.../This is...) than a real credit."""
+    counts: dict[str, int] = {}
+    for r in reviews:
+        if not isinstance(r, dict):
+            continue
+        text = str(r.get("Description") or r.get("description") or r.get("text_original") or "")
+        if not text:
+            continue
+        seen_in_review: set[str] = set()
+        for m in _REVIEW_NAME_RE.finditer(text):
+            name = m.group(1)
+            if name.casefold() not in _REVIEW_NAME_STOP:
+                seen_in_review.add(name)
+        for name in seen_in_review:
+            counts[name] = counts.get(name, 0) + 1
+    return [n for n, c in counts.items() if c >= 3]
+
+
+def gbp_facts(d: dict, g: dict) -> dict:
+    """Business.enrich["gbp"] (A5, docs/09): Google Business Profile facts the raw provider payload
+    already carries. Empty defaults, never None, so export/scoring never has to null-check this."""
+    about = _pick(d, g["about"])
+    order_online = _pick(d, g["order_online"])
+    reviews = _pick(d, g["reviews"])
+    reviews = reviews if isinstance(reviews, list) else []
+    status = _pick(d, g["status"]) or ""
+    owner = _pick(d, g["owner"])
+    owner_name = owner.get("name") if isinstance(owner, dict) else ""
+    description = _pick(d, g["description"]) or ""
+    return {
+        "appointments": _appointments_from_about(about),
+        "booking_links": _booking_links_from_order_online(order_online),
+        "status": str(status),
+        "owner_name": str(owner_name or ""),
+        "reply_signatures": _reply_signatures(reviews),
+        "review_names": _review_credited_names(reviews),
+        "reviews_captured": len(reviews),
+        "description": str(description)[:300],
+    }
+
+
 def region_for(data_country: str | None, default_region: str) -> str:
     if data_country:
         return COUNTRY_TO_REGION.get(str(data_country).strip().casefold(), default_region)
@@ -188,6 +303,7 @@ def to_business(raw: RawListing, run_id: str, icp: ICP | None, default_region: s
     review_count = _pick(d, g["review_count"])
     hours = _pick(d, g["hours"])
     return Business(
+        enrich={"gbp": gbp_facts(d, g)},
         id=f"biz_{sha1_hex(dedupe_key)}",
         place_id=str(place_id) if place_id else None,
         cid=str(_pick(d, g["cid"])) if _pick(d, g["cid"]) else None,
