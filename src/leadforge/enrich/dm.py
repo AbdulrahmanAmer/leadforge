@@ -24,12 +24,15 @@ def export_batch(conn: sqlite3.Connection, icp: ICP, out_path: Path, max_biz: in
         people = [p for p in db.people_for(conn, b["id"]) if p["is_dm"] == 0]
         if not people:
             continue
-        cands = [{"i": i, "name": p["name"], "title": p["title"], "snippet": p["snippet"]}
+        cands = [{"i": i, "name": p["name"], "title": p["title"], "snippet": p["snippet"],
+                  # v0.3: where the candidate came from (heuristic|registry|gbp) — survives agent labeling
+                  "origin": p["origin"] or p["labeled_by"]}
                  for i, p in enumerate(people)]
         if tsv:
             # one row per candidate for terse review; label file still keyed by biz
             for c in cands:
-                lines.append("\t".join([b["id"], b["name"], str(c["i"]), c["title"], c["name"], c["snippet"][:160]]))
+                lines.append("\t".join([b["id"], b["name"], str(c["i"]), c["title"], c["name"],
+                                        c["snippet"][:160], c["origin"]]))
         else:
             lines.append(json.dumps({
                 "biz": b["id"], "name": b["name"], "category": b["category"],
