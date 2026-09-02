@@ -442,8 +442,19 @@ def watch(ctx: typer.Context):
     import os as _os
     if _os.name == "nt":
         _os.system("")  # enables VT escape processing on legacy conhost (documented side effect)
-    feed = cfg.data_path / "progress.jsonl"
-    typer.echo(f"watching {feed} — Ctrl+C to close (the run itself is unaffected)", err=True)
+    # no side effects here: cfg.data_path would mkdir leadforge_data/ in whatever folder this was run from
+    data_dir = Path(cfg.workspace) / cfg.data_dir
+    feed = data_dir / "progress.jsonl"
+    if not (data_dir / "db.sqlite3").is_file() and not feed.is_file():
+        # a human in the wrong folder used to see one line and then silence for 15 minutes
+        hint = (f"no LeadForge workspace in {Path(cfg.workspace).resolve()} — run `leadforge watch` inside the "
+                f"campaign folder, or pass --data-dir <path-to-leadforge_data>")
+        typer.echo(hint, err=True)
+        emit_digest(False, "watch", warnings=[hint[:120]], next_="cd <campaign workspace> && leadforge watch")
+        raise typer.Exit(4)
+    typer.echo(f"watching {feed.resolve()} — Ctrl+C to close (the run itself is unaffected)", err=True)
+    if not feed.is_file():
+        typer.echo("no run in progress yet in this workspace — waiting for `leadforge run` to start one", err=True)
     pos = 0
     idle = 0.0
     last = None
