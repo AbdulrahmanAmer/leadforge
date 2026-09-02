@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 
 from leadforge import db
@@ -110,7 +111,9 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             biz = to_business(raw, run_id, icp, icp.target.geography.country or cfg.default_region)
             if biz is None:
                 continue
-            enrich_fn = getattr(providers_base.PROVIDERS.get(raw.provider), "enrich_for", None)
+            cls_ = providers_base.PROVIDERS.get(raw.provider)
+            enrich_fn = getattr(cls_, "enrich_for", None) or (
+                getattr(sys.modules.get(cls_.__module__), "enrich_for", None) if cls_ else None)  # module-level fallback
             if enrich_fn:
                 biz.enrich.update(enrich_fn(raw.data))
             if db.is_suppressed(conn, biz.domain, biz.place_id):

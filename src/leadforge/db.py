@@ -222,23 +222,36 @@ _RICH_FIELDS = [
 ]
 
 
-def _phone_match(conn: sqlite3.Connection, biz: Business) -> sqlite3.Row | None:
-    """A registry row (no place_id) merges into the row that already carries its phone number, when the
-    two look like the same business: shared name token or same postcode district. A shared switchboard
-    across genuinely different businesses (a chain, a serviced office) is left alone."""
+def _same_business(name_norm: str, postal: str | None, r: sqlite3.Row) -> bool:
+    """Shared significant name token, or the same postcode district — the rule that separates one garage
+    listed twice from two businesses behind one switchboard."""
+    tokens = {t for t in (name_norm or "").split() if len(t) >= 3}
+    r_tokens = {t for t in (r["name_norm"] or "").split() if len(t) >= 3}
+    p = (postal or "").split(" ")[0].casefold()
+    r_p = (r["address_postal"] or "").split(" ")[0].casefold()
+    return bool(tokens & r_tokens) or bool(p and p == r_p)
+
+
+def _phone_match(conn: sqlite3.Connection, biz: Business, registry_only: bool = False) -> sqlite3.Row | None:
+    """The row that already carries this phone number and looks like the same business.
+
+    Two directions (found live 2026-09-03: register queries run FIRST, so 197 DVSA rows sat beside their
+    Maps twin because the merge only ran one way):
+      - a register row (no place_id) merges into any row with its phone;
+      - a Maps row (has a place_id) merges only into a row WITHOUT a place_id — a register row — never
+        into another Maps listing (two branches of a chain share a switchboard and must stay two rows).
+    A shared phone with no name/postcode agreement is left alone unless it is the only candidate and the
+    incoming row is a register row."""
     if not biz.phone_e164:
         return None
-    rows = conn.execute("SELECT * FROM businesses WHERE phone_e164=?", (biz.phone_e164,)).fetchall()
+    sql = "SELECT * FROM businesses WHERE phone_e164=?" + (" AND place_id IS NULL" if registry_only else "")
+    rows = conn.execute(sql, (biz.phone_e164,)).fetchall()
     if not rows:
         return None
-    tokens = {t for t in biz.name_norm.split() if len(t) >= 3}
-    postal = (biz.address_postal or "").split(" ")[0].casefold()
     for r in rows:
-        r_tokens = {t for t in (r["name_norm"] or "").split() if len(t) >= 3}
-        r_postal = (r["address_postal"] or "").split(" ")[0].casefold()
-        if (tokens & r_tokens) or (postal and postal == r_postal):
+        if _same_business(biz.name_norm, biz.address_postal, r):
             return r
-    return rows[0] if len(rows) == 1 else None
+    return rows[0] if (len(rows) == 1 and not registry_only) else None
 
 
 def upsert_business(conn: sqlite3.Connection, biz: Business) -> tuple[str, bool]:
@@ -250,8 +263,8 @@ def upsert_business(conn: sqlite3.Connection, biz: Business) -> tuple[str, bool]
     existing = conn.execute("SELECT * FROM businesses WHERE dedupe_key=?", (biz.dedupe_key,)).fetchone()
     if existing is None and biz.place_id:
         existing = conn.execute("SELECT * FROM businesses WHERE place_id=?", (biz.place_id,)).fetchone()
-    if existing is None and not biz.place_id:
-        existing = _phone_match(conn, biz)
+    if existing is None:
+        existing = _phone_match(conn, biz, registry_only=bool(biz.place_id))
 
     if existing is None:
         conn.execute(
@@ -341,6 +354,50 @@ def chain_map(conn: sqlite3.Connection) -> dict[str, str]:
         for r in rows:
             out.setdefault(r["id"], f"{key_col}:{r['k']}")
     return out
+
+
+def merge_phone_duplicates(conn: sqlite3.Connection, dry_run: bool = False) -> dict:
+    """Repair pass for rows that should have merged on phone but did not (register row inserted before
+    its Maps twin, pre-v0.3.1). For every phone shared by at least one Maps row (place_id) and one
+    register row (no place_id): the Maps row is kept (richest: place_id, website, rating), each register
+    row that passes the same-business rule fills the keeper's empty columns and enrich facts, then folds
+    in (contacts/people/evidence/scores re-pointed). Chains — several Maps rows on one switchboard — are
+    never touched. Returns counts; dry_run only counts."""
+    groups = conn.execute(
+        """SELECT phone_e164 FROM businesses WHERE phone_e164 IS NOT NULL GROUP BY phone_e164
+           HAVING SUM(place_id IS NOT NULL) >= 1 AND SUM(place_id IS NULL) >= 1"""
+    ).fetchall()
+    counts = {"groups": len(groups), "merged": 0, "skipped_unrelated": 0}
+    for g in groups:
+        rows = conn.execute("SELECT * FROM businesses WHERE phone_e164=? ORDER BY (place_id IS NULL), "
+                            "COALESCE(review_count, 0) DESC", (g["phone_e164"],)).fetchall()
+        keep = rows[0]
+        for r in rows[1:]:
+            if r["place_id"] is not None:
+                continue  # another Maps listing on the same switchboard: a chain, keep both
+            if not _same_business(r["name_norm"] or "", r["address_postal"], keep):
+                counts["skipped_unrelated"] += 1
+                continue
+            counts["merged"] += 1
+            if dry_run:
+                continue
+            updates, params = [], []
+            for col in _RICH_FIELDS:
+                if keep[col] in (None, "") and r[col] not in (None, ""):
+                    updates.append(f"{col}=?")
+                    params.append(r[col])
+            merged = json.loads(keep["enrich_json"] or "{}")
+            for k, v in json.loads(r["enrich_json"] or "{}").items():
+                merged.setdefault(k, v)
+            sources = {s for s in str(merged.get("sources") or "").split(",") if s} | {keep["source"] or "", r["source"] or ""}
+            merged["sources"] = ",".join(sorted(s for s in sources if s))
+            cats = set(json.loads(keep["categories_json"] or "[]")) | set(json.loads(r["categories_json"] or "[]"))
+            updates += ["enrich_json=?", "categories_json=?"]
+            params += [json.dumps(merged), json.dumps(sorted(cats)), keep["id"]]
+            conn.execute(f"UPDATE businesses SET {', '.join(updates)} WHERE id=?", params)
+            merge_business_into(conn, keep["id"], r["id"])
+    conn.commit()
+    return counts
 
 
 def merge_business_into(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:

@@ -544,6 +544,18 @@ def dashboard(ctx: typer.Context, port: int = typer.Option(8765, "--port"),
     emit_digest(True, "dashboard", counts={}, warnings=[], next_=None)
 
 
+@app.command()
+def dedupe(ctx: typer.Context, dry_run: bool = typer.Option(False, "--dry-run", help="count only, change nothing")):
+    """Fold register rows (DVSA, Companies House) into the Maps row that carries the same phone and looks
+    like the same business. Chains sharing a switchboard are never merged. Safe to re-run."""
+    cfg = _cfg(ctx)
+    conn = db.connect(cfg.db_path)
+    counts = db.merge_phone_duplicates(conn, dry_run=dry_run)
+    _say(ctx, f"{counts['groups']} shared-phone groups; {'would merge' if dry_run else 'merged'} {counts['merged']} "
+              f"register rows into their Maps twin; {counts['skipped_unrelated']} left alone (different business)")
+    emit_digest(True, "dedupe", counts=counts, warnings=[], next_=None if dry_run else "leadforge export --icp icp.yaml")
+
+
 @app.command("render-check")
 def render_check(ctx: typer.Context, url: str = typer.Argument(..., help="one site URL to diagnose"),
                  force: bool = typer.Option(False, "--force", help="render even if the plain client succeeded")):

@@ -7,6 +7,7 @@ honored across a second fetch and that a stale cache triggers exactly one re-dow
 from __future__ import annotations
 
 import logging
+import pathlib
 from pathlib import Path
 
 import httpx
@@ -418,3 +419,36 @@ def test_dvsa_rows_reparsed_after_cache_file_changes_mtime(tmp_path, monkeypatch
     monkeypatch.setattr(dvsa.csv, "DictReader", counting_dict_reader)
     prov.fetch(query)
     assert parse_calls[0] == 1  # different mtime: re-parsed, not served from the stale memo entry
+
+
+
+def test_pipeline_persists_dvsa_register_facts(cfg, sample_icp, monkeypatch, tmp_path):
+    """Found live 2026-09-03: enrich_for was a module function, the pipeline hook read the class attribute,
+    so 1,862 register rows carried no site number or test classes."""
+    import shutil
+
+    from leadforge import db
+    from leadforge.pipeline import _plan_into_db, run_discover
+    from leadforge.providers import base as pbase
+    from leadforge.providers import dvsa as dvsa_mod
+
+    fixture = pathlib.Path(__file__).parent / "fixtures" / "dvsa_sample.csv"
+    cache = cfg.cache_dir / "dvsa"
+    cache.mkdir(parents=True, exist_ok=True)
+    shutil.copy(fixture, cache / "active-mot-stations.csv")
+    monkeypatch.setattr(dvsa_mod, "_download_csv", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no network")))
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda cfg: None)
+    assert pbase.PROVIDERS["dvsa"] is dvsa_mod.DvsaProvider
+    cfg.discovery.providers = ["dvsa"]
+    cfg.discovery.grid_mode = "off"
+    geo = sample_icp.target.geography.model_copy(update={"areas": ["Leeds"], "country": "GB", "grid": "off"})
+    icp = sample_icp.model_copy(update={"target": sample_icp.target.model_copy(update={"geography": geo})})
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, "icp.yaml", icp.icp_hash())
+    _plan_into_db(conn, cfg, icp, run_id)
+    run_discover(cfg, icp, tmp_path / "icp.yaml", provider="dvsa", run_id=run_id)
+    rows = conn.execute("SELECT enrich_json FROM businesses WHERE source='dvsa'").fetchall()
+    assert rows, "the Leeds fixture rows were not upserted"
+    import json as _json
+    facts = [_json.loads(r[0]).get("dvsa") for r in rows]
+    assert all(f and f.get("site_number") for f in facts), facts

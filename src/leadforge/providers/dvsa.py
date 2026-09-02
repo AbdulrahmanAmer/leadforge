@@ -194,7 +194,9 @@ def enrich_for(raw_data: dict) -> dict:
     Any caller (pipeline stage, a future normalize.py change, a test) can pull the same dict straight
     out of a RawListing.data via this helper without re-deriving the shape.
     """
-    return dict(raw_data.get("enrich", {}).get("dvsa", {}))
+    # the whole enrich payload ({"dvsa": {...}}), merged into Business.enrich by pipeline.run_discover —
+    # same contract as companies_house.enrich_for ({"registry_profile": ..., "registry_checked": True})
+    return dict(raw_data.get("enrich", {}))
 
 
 def _row_to_listing(row: dict, register_date: str, fetched_at: str) -> RawListing | None:
@@ -300,3 +302,8 @@ class DvsaProvider(DiscoveryProvider):
             LOG.warning("dvsa: 0 rows matched locality '%s' (query.text=%r)", locality, query.text)
         LOG.info("dvsa: %d listing(s) for locality '%s'", len(out), locality)
         return out
+
+
+# the pipeline's provider hook reads the CLASS attribute (pipeline.run_discover); the module-level
+# function above is the implementation — without this line no register fact ever reached enrich_json
+DvsaProvider.enrich_for = staticmethod(enrich_for)
