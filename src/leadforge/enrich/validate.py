@@ -9,6 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from leadforge.config import Config
+from leadforge.enrich.extract import JUNK_LOCALPARTS
 
 try:
     from disposable_email_domains import blocklist as _DISPOSABLE
@@ -71,6 +72,13 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     except Exception as e:  # noqa: BLE001 — any syntax/parse failure => invalid
         return "invalid", {"reason": type(e).__name__}
 
+    # Placeholder localparts (test@, sample@, noreply@, ...) are invalid regardless of MX — a domain
+    # can have perfectly good mail servers and still never deliver to "test@" as a real contact. Checked
+    # BEFORE any DNS call: extract_emails() already drops these at extraction, but an inferred guess or
+    # a manually-added contact can still reach validate_email() directly.
+    if email.split("@", 1)[0].casefold() in JUNK_LOCALPARTS:
+        return "invalid", {"reason": "placeholder_localpart"}
+
     if _DISPOSABLE and domain.lower() in _DISPOSABLE:
         return "risky", {"reason": "disposable_domain"}
 
@@ -85,7 +93,13 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     return "valid", meta
 
 
-# A guess ranks below anything actually observed. Kept in sync with export._EMAIL_TIER_ORDER.
+# Why this order (kept in sync with export._EMAIL_TIER_ORDER): valid/role are directly confirmed —
+# syntax + MX resolved, so mail *can* be delivered there. risky/catch_all are observed but uncertain
+# (disposable domain; a catch-all that accepts anything, proving nothing). inferred is never observed
+# at all — a guess from the domain's demonstrated naming convention — so it must rank BELOW every tier
+# that came from a real, found address, however uncertain that address's deliverability is. unknown is
+# a DNS timeout (retryable, not a verdict). invalid is worst but still stored for the record (a
+# placeholder localpart, bad syntax, or a domain with no mail servers at all).
 TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown", "invalid"]
 
 
@@ -99,15 +113,56 @@ _AFFINITY_RANK = {"own_domain": 0, "freemail_linked": 1, "": 2, "freemail_unlink
 _TIER_RANK = {t: i for i, t in enumerate(TIER_ORDER)}
 
 
+def _sendability_group(affinity: str, tier: str) -> int:
+    """Coarse "can we actually use this address" bucket — the PRIMARY sort key for rank_email_contacts.
+
+    v0.3 fix: affinity used to be the sole primary key, which let an own-domain address of ANY tier
+    (invalid/unknown/risky/inferred) outrank a validated freemail_linked mailbox — docs/09 puts
+    freemail_linked-valid ABOVE inferred, and a validated address of any affinity above an unvalidated
+    one on the "right" domain. Grouping by tier-shaped sendability first, with the own_domain/
+    freemail_linked distinction only breaking the TOP group, restores that order while still keeping
+    "never freemail above own-domain" true inside every group (affinity is the secondary key).
+
+    0: own-domain, confirmed deliverable (valid/role) — the address to actually use.
+    1: freemail linked to the business by name/initials/person-match, confirmed deliverable.
+    2: inferred — a guess from the domain's own naming convention; never independently observed.
+    3: confirmed-deliverable but not usefully linked (freemail_unlinked/foreign valid or role), or
+       risky/catch_all (observed but deliverability is uncertain either way).
+    4: unknown — a DNS timeout, retryable, not a verdict.
+    5: invalid — worst, but still stored for the record.
+    """
+    if tier == "inferred":
+        return 2
+    if tier in ("valid", "role"):
+        if affinity == "own_domain":
+            return 0
+        if affinity == "freemail_linked":
+            return 1
+        return 3
+    if tier in ("risky", "catch_all"):
+        return 3
+    if tier == "unknown":
+        return 4
+    if tier == "invalid":
+        return 5
+    return 4  # unrecognized tier -> treat like a DNS-timeout unknown, not a verdict
+
+
 def rank_email_contacts(contacts: list) -> list:
-    """Email contact rows, best first: own-domain valid > own-domain role > linked freemail valid >
+    """Email contact rows, best first: own-domain valid > own-domain role > freemail_linked valid >
     inferred > risky > unknown > invalid. A freemail box never outranks the business's own mailbox
-    (the v0.2 sheet exported a font designer's gmail above a real info@ three times)."""
+    (the v0.2 sheet exported a font designer's gmail above a real info@ three times), AND an own-domain
+    address that is invalid/unknown/risky/inferred never outranks a validated freemail_linked one
+    either — the PRIMARY sort key is a sendability group (see _sendability_group), not affinity alone.
+
+    Works on sqlite3.Row and plain dict inputs alike (both support `in .keys()` and `[]`); contacts
+    from an old DB that predates the affinity column simply have none and sort as '' (mid-table, below
+    freemail_linked, above freemail_unlinked/foreign)."""
     rows = [c for c in contacts if c["kind"] == "email"]
 
     def key(c):
-        affinity = c["affinity"] if "affinity" in c.keys() else ""
+        affinity = (c["affinity"] if "affinity" in c.keys() else "") or ""
         tier = c["tier"] or "unknown"
-        return (_AFFINITY_RANK.get(affinity or "", 2), _TIER_RANK.get(tier, 99), c["value"])
+        return (_sendability_group(affinity, tier), _AFFINITY_RANK.get(affinity, 2), _TIER_RANK.get(tier, 99), c["value"])
 
     return sorted(rows, key=key)

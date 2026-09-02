@@ -24,6 +24,68 @@ PAGE_KEYWORDS = re.compile(
 )
 _CURRENT_YEAR = date.today().year  # staleness threshold = current - crawl.stale_after_years
 
+# v0.3 unit C1: broadened booking_hint — "book" + a booking-shaped word within 4 words either side
+# ("Book A Service", "Book an MOT" — the article "a"/"an" itself counts toward the 4-word distance).
+_BOOKING_WORD_RE = re.compile(r"[A-Za-z']+")
+_BOOKING_NEARBY_WORDS = {"now", "online", "appointment", "service", "mot", "your", "slot", "test"}
+# Known booking platforms, matched against an anchor href or an iframe src (host or path substring).
+_BOOKING_PLATFORMS = {
+    "bookmygarage": ("bookmygarage",),
+    "whocanfixmycar": ("whocanfixmycar",),
+    "autodata": ("autodata",),
+    "kwik-fit": ("kwik-fit", "kwikfit"),
+    "calendly": ("calendly.com",),
+    "acuity": ("acuityscheduling.com",),
+    "squarespace-scheduling": ("squarespacescheduling.com", "squarespace-scheduling"),
+    "setmore": ("setmore.com",),
+    "simplybook": ("simplybook.me", "simplybook.it", "simplybook.com"),
+    "fresha": ("fresha.com",),
+    "treatwell": ("treatwell.co.uk", "treatwell.com", "treatwell.de", "treatwell.fr"),
+}
+
+
+def _booking_html_text(pages: list) -> str:
+    """Text for the booking word-distance regex, derived from HTML — not trafilatura's boilerplate-
+    stripped Page.text. trafilatura throws away nav/header/footer anchors as "boilerplate" (that IS
+    where "Book Online"/"Book Now" nav links actually live), and on a short/single-anchor page it can
+    return '' entirely. Parsing the raw HTML directly and keeping nav/header/footer content is what a
+    real site's booking language requires; script/style/noscript/template content is decomposed first
+    so it never contributes stray words."""
+    parts = []
+    for p in pages:
+        tree = HTMLParser(p.html)
+        for sel in ("script", "style", "noscript", "template"):
+            for node in tree.css(sel):
+                node.decompose()
+        if tree.body:
+            parts.append(tree.body.text(separator=" "))
+    return "\n".join(parts)
+
+
+def _booking_regex_hint(text_blob: str) -> bool:
+    words = [w.casefold() for w in _BOOKING_WORD_RE.findall(text_blob)]
+    for i, w in enumerate(words):
+        if w != "book":
+            continue
+        window = words[max(0, i - 4) : i] + words[i + 1 : i + 5]
+        if any(x in _BOOKING_NEARBY_WORDS for x in window):
+            return True
+    return False
+
+
+def _booking_platform_hit(pages: list) -> str | None:
+    """A known booking platform linked as an anchor href or embedded as an iframe src."""
+    for p in pages:
+        tree = HTMLParser(p.html)
+        urls = [a.attributes.get("href") or "" for a in tree.css("a[href]")]
+        urls += [f.attributes.get("src") or "" for f in tree.css("iframe[src]")]
+        for url in urls:
+            low = url.casefold()
+            for name, needles in _BOOKING_PLATFORMS.items():
+                if any(n in low for n in needles):
+                    return name
+    return None
+
 
 @dataclass
 class Page:
@@ -160,7 +222,10 @@ class SiteCrawler:
         return links[: max(0, self.cfg.crawl.pages_per_site - 1)]
 
     # --- main --------------------------------------------------------------------
-    def crawl(self, website: str) -> CrawlResult:
+    def crawl(self, website: str, business_domain: str | None = None) -> CrawlResult:
+        """business_domain (v0.3, optional): the listing's own domain, used only to compute
+        signals["offsite_redirect"] (does the final URL's host differ, www-insensitive?). Existing
+        callers that omit it keep working — offsite_redirect just reads False."""
         result = CrawlResult(ok=False)
         if not self._allowed(website):
             result.error = "robots-disallowed"  # the site said no — the browser must not go either
@@ -180,6 +245,12 @@ class SiteCrawler:
         result.pages.append(Page(str(resp.url), home_html, home_text))
         result.signals["https"] = str(resp.url).startswith("https://")
         result.signals["status"] = resp.status_code
+        result.signals["http_status"] = resp.status_code
+        final_host = urlsplit(str(resp.url)).netloc.casefold().removeprefix("www.")
+        result.signals["final_host"] = final_host
+        result.signals["offsite_redirect"] = (
+            bool(business_domain) and final_host != business_domain.casefold().removeprefix("www.")
+        )
 
         if self.looks_js_shell(home_html, home_text):
             result.needs_browser = True
@@ -200,6 +271,10 @@ class SiteCrawler:
         """Content-derived signals; shared by the static path and the rendered-browser fallback,
         so a rescued site scores on the same evidence as a normally crawled one."""
         blob = "\n".join(p.html for p in pages)
+        # v0.3 fix: the word-distance regex must read HTML-derived text (keeps nav anchors), NOT
+        # trafilatura's Page.text — trafilatura strips nav/header/footer as boilerplate, which is
+        # exactly where "Book Online"/"Book Now" nav links live (regressed True->False vs d7eb4ce).
+        booking_text_blob = _booking_html_text(pages)
         signals: dict = {}
         years = [int(y) for y in re.findall(r"(?:©|&copy;|copyright)\D{0,20}(20\d{2})", blob, re.IGNORECASE)]
         if years:
@@ -207,7 +282,16 @@ class SiteCrawler:
             signals["copyright_year"] = latest
             signals["stale_site"] = latest < _CURRENT_YEAR - stale_after_years
         signals["careers"] = any(re.search(r"/(careers?|jobs?)\b", p.url) for p in pages)
-        signals["booking_hint"] = bool(
-            re.search(r"(book (now|online)|schedule (an )?appointment|calendly|acuity|squarespace-scheduling)", blob, re.IGNORECASE)
-        )
+        # v0.3: platform (iframe/anchor host) beats a plain text mention; text/word-distance regex is
+        # the fallback ("book" + a booking-shaped word within 4 words either side, or the older phrasing
+        # "schedule an appointment"). booking_source records which fired; "gbp" is set by unit C2.
+        platform = _booking_platform_hit(pages)
+        if platform:
+            signals["booking_hint"] = True
+            signals["booking_source"] = f"platform:{platform}"
+        elif _booking_regex_hint(booking_text_blob) or re.search(r"schedule (an )?appointment", blob, re.IGNORECASE):
+            signals["booking_hint"] = True
+            signals["booking_source"] = "regex"
+        else:
+            signals["booking_hint"] = False
         return signals
