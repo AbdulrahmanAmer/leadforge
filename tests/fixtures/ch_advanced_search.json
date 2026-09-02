@@ -1,0 +1,53 @@
+{
+  "etag": "abc123",
+  "top_hit": null,
+  "kind": "search#advanced-search",
+  "hits": 3,
+  "items": [
+    {
+      "company_name": "ACME CONSULTING LIMITED",
+      "company_number": "01234567",
+      "company_status": "active",
+      "company_type": "ltd",
+      "date_of_creation": "2019-06-15",
+      "registered_office_address": {
+        "address_line_1": "1 High Street",
+        "locality": "Stockport",
+        "postal_code": "SK1 1AA",
+        "region": "Greater Manchester",
+        "country": "United Kingdom"
+      },
+      "sic_codes": ["70229"]
+    },
+    {
+      "company_name": "STOCKPORT CALL CENTRE SOLUTIONS LTD",
+      "company_number": "07654321",
+      "company_status": "active",
+      "company_type": "ltd",
+      "date_of_creation": "2015-01-01",
+      "registered_office_address": {
+        "address_line_1": "2 Call Street",
+        "locality": "Stockport",
+        "postal_code": "SK2 2BB",
+        "region": "Greater Manchester",
+        "country": "United Kingdom"
+      },
+      "sic_codes": ["82200"]
+    },
+    {
+      "company_name": "DISSOLVED WIDGETS LIMITED",
+      "company_number": "09999999",
+      "company_status": "dissolved",
+      "company_type": "ltd",
+      "date_of_creation": "2010-01-01",
+      "registered_office_address": {
+        "address_line_1": "3 Gone Road",
+        "locality": "Stockport",
+        "postal_code": "SK3 3CC",
+        "region": "Greater Manchester",
+        "country": "United Kingdom"
+      },
+      "sic_codes": ["70229"]
+    }
+  ]
+}

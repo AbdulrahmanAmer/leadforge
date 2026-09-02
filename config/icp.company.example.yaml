@@ -1,0 +1,46 @@
+# Company-mode ICP (docs/09 Wave 2 H): GainLev's own client pipeline on Companies House, not Google Maps.
+# Also set, in leadforge.yaml (workspace config, not this file):
+#   discovery: { providers: [companies_house] }
+#   registry:  { companies_house_key: "<your free key>" }   # https://developer.company-information.service.gov.uk
+version: 1
+campaign: gainlev-own-pipeline
+offer:
+  what: "Outsourced outreach and lead-generation VAs"
+  value_prop: "A fully-run cold-outreach pipeline without hiring in-house"
+  sender: "GainLev"
+target:
+  mode: company
+  categories: []                 # company mode targets by SIC code, not Maps-style category phrasing
+  sic_codes:
+    # everyone who sells B2B: agencies, SaaS, consultancies, recruiters, wholesalers, estate/letting
+    # agents, accountants, solicitors — EXCLUDING 82200 (call centres, owner decision 7).
+    # See leadforge.company.GAINLEV_ICP_SIC for the canonical list this mirrors.
+    - "62012"   # business/domestic software development
+    - "62020"   # IT consultancy
+    - "62090"   # other IT service activities
+    - "63110"   # data processing/hosting
+    - "70229"   # management consultancy (other)
+    - "74909"   # other professional/scientific/technical n.e.c.
+    - "73110"   # advertising agencies
+    - "73120"   # media representation
+    - "74100"   # specialised design
+    - "78109"   # employment placement agencies
+    - "78200"   # temporary employment agency
+    - "68310"   # real estate agencies
+    - "68320"   # real estate management (fee/contract)
+    - "69201"   # accounting and auditing
+    - "69102"   # solicitors
+    - "71111"   # architectural activities
+    - "82110"   # combined office admin service
+    - "82990"   # other business support n.e.c.
+  # country is REQUIRED (ISO2); Companies House is UK-only, so this must be GB.
+  geography: { areas: ["Stockport, Greater Manchester"], country: GB }
+qualify:
+  hard: []
+  soft: [website_missing, stale_site, hiring]
+decision_maker:
+  titles_priority: ["Director", "Managing Director", "Owner"]
+scoring: { profile: company }
+caps: { max_leads: 500, max_sites: 600 }
+compliance: { region_profile: uk }
+notes: "GainLev's own client-acquisition pipeline, scored with the company rubric (leadforge/company.py) — SIC overlap, incorporation age, new-director triggers, hiring, domain resolution, data confidence."

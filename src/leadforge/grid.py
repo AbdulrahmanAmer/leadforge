@@ -309,6 +309,10 @@ def build_plan(icp: ICP, cfg: Config) -> list[PlannedQuery]:
     therefore rotated: tile index first, then area, then category — every category is served in
     every area before any tile advances.
     """
+    if getattr(icp.target, "mode", "local_business") == "company":
+        from leadforge.company import build_company_plan  # local import: keeps company-mode a fully optional path
+        return build_company_plan(icp, cfg)
+
     geo = icp.target.geography
     grid_on = cfg.discovery.grid_mode == "auto" and geo.grid == "auto"
     cats = icp.target.categories
