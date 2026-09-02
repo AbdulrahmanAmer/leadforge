@@ -1,36 +1,55 @@
-# Default scoring rubric (docs/01 §5, docs/03). ICP `scoring.weights_override` merges over `factors.*.weight`.
-version: 1
-tiers: { a_min: 75, b_min: 55 }
+# Default scoring rubric (docs/01 §5, docs/03, docs/09 "D — Scoring and export truth" v0.3).
+# ICP `scoring.weights_override` merges over `factors.*.weight`.
+#
+# v2 (v0.3): `fit` is the ONLY thing that feeds `total`/tier. Reachability (DM/email/phone/registry) is
+# no longer blended into fit — it is graded separately as `contactability` (0-100, a meta ScoreFactor,
+# computed in score.py, never affecting total) so a hot-but-uncontactable lead and a lukewarm-but-
+# call-ready one are never confused by one blended number.
+version: 2
+tiers: { a_min: 80, b_min: 60 }
 negatives_cap: -40
 
 factors:
-  # Fit (50)
-  industry_match:          { group: fit,          weight: 18 }
-  size_match:              { group: fit,          weight: 12 }
-  geography_match:         { group: fit,          weight: 10 }
-  business_model:          { group: fit,          weight: 10 }
-  # DM reachability (25)
-  dm_identified:           { group: reachability, weight: 12 }
-  verified_direct_contact: { group: reachability, weight: 13 }
-  # Need signals — the intent proxy (15)
-  need_signals:            { group: need,         weight: 15 }
-  # Data confidence (10)
-  data_confidence:         { group: confidence,   weight: 10 }
+  # Fit (100)
+  industry_match:   { group: fit, weight: 25 }
+  need_signals:     { group: fit, weight: 25 }
+  size_match:       { group: fit, weight: 10 }
+  geography_match:  { group: fit, weight: 10 }
+  business_model:   { group: fit, weight: 10 }
+  data_confidence:  { group: fit, weight: 20 }
+
+# contactability (0-100, meta factor, computed in score.py's Scorer._contactability_and_status —
+# documented here so the weights are visible next to the fit weights above, not read by score.py).
+contactability_weights:
+  dm: 30
+  email_own_domain_valid: 30
+  email_own_domain_role: 22
+  email_freemail_linked_valid: 20
+  email_inferred: 8
+  email_risky: 0
+  phone_validated: 25
+  registry_corroboration: 5
+  phone_confirmed_signal: 5
+  mobile: 3
 
 negatives:
   franchise_or_chain: -25
-  out_of_area: -20   # listing's country differs from the campaign's (suburb spillover is NOT penalized)
+  out_of_area: -20     # listing's country differs from the campaign's (suburb spillover is NOT penalized)
+  chain_member: -15    # shares a domain or phone with >=2 other rows in this DB (db.chain_map) — a
+                        # duplicate/franchise location, not a fresh independent lead
   # competitor / existing_client are HARD disqualifiers, not soft penalties: list them in
   # icp.qualify.hard as "competitor:<name>" / "existing_client:<name>" (score.py _hard_dq).
 
-hooks:   # signal -> one-line pitch hook; {offer} is replaced by icp.offer.what
+hooks:   # signal -> one-line pitch hook; {offer} is replaced by icp.offer.what, {year} by the site's
+         # detected copyright year (signals.copyright_year). Every line states only what was observed —
+         # no claim ("broken pages", etc.) beyond the specific signal that fired.
   website_missing: "No website at all — likely needs: {offer}"
   website_no_ssl: "Site has no HTTPS — easy credibility pitch alongside: {offer}"
-  stale_site: "Website looks abandoned (old copyright/broken pages) — refresh angle for: {offer}"
+  stale_site: "Copyright year on the site is {year} (looks unmaintained) — refresh angle for: {offer}"
   low_rating_high_volume: "Busy but rating is hurting (<=3.9 with 50+ reviews) — reputation/ops angle"
   few_reviews: "Almost no reviews — visibility/marketing angle"
-  weak_social_presence: "No active social profiles found — presence-building angle"
-  phone_only_booking: "No online booking detected — phone-only operation; automation pitch"
+  weak_social_presence: "No social profile is linked from their website — presence-building angle"
+  phone_only_booking: "No online booking found on their website — phone-only operation; automation pitch for: {offer}"
   hiring: "Actively hiring — growing and likely budgeted"
   stale_social: "Social profiles look abandoned (no recent posts) — presence/content angle for: {offer}"
   no_social_presence: "No social profiles linked from their site at all — visibility angle"

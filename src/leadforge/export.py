@@ -1,4 +1,5 @@
-"""Export (U6.1-6.3): styled XLSX (Leads/Summary/About) + CSV mirror + report.json (docs/03 §5).
+"""Export (U6.1-6.3, v0.3 U9.D): styled XLSX (Leads/Summary/About) + CSV mirror + report.json (docs/03 §5,
+docs/09 "D — Scoring and export truth").
 
 openpyxl only (pure-python). CSV is utf-8-sig so Excel on Windows opens it clean. Never prints data rows.
 """
@@ -16,9 +17,19 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from leadforge import db
+from leadforge import compliance, db
+from leadforge.config import Config
+from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
+from leadforge.score import fill_email_affinity, phone_is_validated
 from leadforge.util import natural_name, now_iso
+
+# export_run's `cfg` parameter is optional (existing call sites in cli.py/pipeline.py pass none) — when
+# omitted, the freemail_policy/require_corporate that feed Lawful Basis/Next Action fall back to this
+# built-in default (same defaults score.py's contactability/status use when it isn't handed a Config
+# either — see score.py's _DEFAULT_POLICY). A campaign with a non-default leadforge.yaml should pass its
+# real `cfg` through to see that reflected in the sheet.
+_DEFAULT_CFG = Config()
 
 COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
@@ -32,6 +43,13 @@ ACCOUNT_COLUMNS = COLUMNS + [
     "Other Systems", "Trigger", "Trigger Strength", "LinkedIn", "Contactability", "Data Confidence",
     "Status",
 ]
+# default profile (v0.3) appends the truth/compliance columns: fit vs contactability split, the
+# phone-first Next Action, and the compliance facts a human decides outreach from.
+DEFAULT_EXTRA_COLUMNS = [
+    "Fit", "Contactability", "Status", "Next Action", "Entity Type", "Lawful Basis (Email)",
+    "Registry Name", "Registry Match", "Chain", "Site Status", "Email Confidence", "All Hooks",
+]
+DEFAULT_COLUMNS = COLUMNS + DEFAULT_EXTRA_COLUMNS
 _TIER_FILL = {
     "A": PatternFill("solid", fgColor="C6EFCE"),
     "B": PatternFill("solid", fgColor="FFEB9C"),
@@ -41,8 +59,6 @@ _TIER_FILL = {
 }
 _HEADER_FILL = PatternFill("solid", fgColor="1F3864")
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
-# kept in sync with validate.TIER_ORDER — a guess ranks below anything actually observed
-_EMAIL_TIER_ORDER = ["valid", "role", "risky", "catch_all", "inferred", "unknown"]
 _REGION_REMINDER = {
     "us": "US/CAN-SPAM: identify yourself, include a physical postal address + working opt-out; honor within 10 business days.",
     "uk": "UK/PECR: corporate subscribers may be emailed B2B; sole traders/individuals need consent. Always give identity + opt-out.",
@@ -80,20 +96,74 @@ def _display_phone(e164: str | None) -> str:
         return e164
 
 
-def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
+def _site_status(enrich: dict) -> tuple[str, bool]:
+    """-> ('live' | 'not crawlable (robots)' | 'dead (<status/error>)' | 'redirects to <host>' |
+    'not crawled', site_dead). Reads signals C1/A set when present (final_host, offsite_redirect,
+    http_status); degrades to 'live' on a bare crawl with none of those (nothing observed to say
+    otherwise). robots-disallowed means the crawler was refused, not that the site is down — it is
+    reported honestly and does NOT set site_dead (which would otherwise withdraw email eligibility
+    from a live site for a reason that was never actually observed)."""
+    if not enrich.get("crawled_at"):
+        return "not crawled", False
+    signals = enrich.get("signals") or {}
+    err = enrich.get("error")
+    status = signals.get("http_status")
+    if err == "robots-disallowed":
+        return "not crawlable (robots)", False
+    dead = bool(err) or (isinstance(status, int) and status >= 400)
+    if dead:
+        return f"dead ({status if status is not None else err})", True
+    if signals.get("offsite_redirect") and signals.get("final_host"):
+        return f"redirects to {signals['final_host']}", False
+    return "live", False
+
+
+def _email_confidence(affinity: str, tier: str, linkage_checked: bool = True) -> str:
+    """Human-readable affinity+tier, per docs/09 §D. 'none' when there is no sendable candidate at all.
+    linkage_checked=False means the affinity came from the coarse pre-v0.3 fallback (ANY freemail on
+    the domain), not the real name/business-token linkage check — the column must not claim a check
+    that never ran."""
+    if affinity == "own_domain":
+        return f"own domain, {tier} mailbox" if tier else "own domain"
+    if affinity == "freemail_linked":
+        return ("personal freemail, linked to owner name" if linkage_checked
+                else "personal freemail (linkage not checked — pre-v0.3 row)")
+    if affinity == "freemail_unlinked":
+        return "personal freemail, UNLINKED — do not mail"
+    if affinity == "foreign":
+        return "foreign domain — not the business's own"
+    return "none"
+
+
+def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
+            icp: ICP | None = None, cfg: Config | None = None, chain: dict | None = None) -> dict:
+    cfg = cfg or _DEFAULT_CFG
+    profile = icp.scoring.profile if icp else "default"
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
+    # Affinity MUST be backfilled BEFORE ranking (docs/09 §D fix): every pre-v0.3 row stores
+    # affinity '' (100% of the live campaign DB), and this SAME filled list is what
+    # compliance.email_eligibility below ranks too, so Email / Email Confidence / Lawful Basis /
+    # contactability can never describe two different addresses for one business.
+    contacts_filled = fill_email_affinity(contacts, s["domain"])
+    # Best email: affinity-first (own-domain always outranks a freemail box, even a 'valid' one — the
+    # v0.2 sheet exported a font designer's gmail above a real info@ three times), tier second.
     # 'inferred' addresses are NEVER candidates for the Email column — they get their own,
     # so a mail-merge over 'Email' can never pick up a guess.
-    emails = [(c["value"], c["tier"]) for c in contacts
-              if c["kind"] == "email" and c["tier"] not in ("invalid", "inferred")]
-    order = {t: i for i, t in enumerate(_EMAIL_TIER_ORDER)}
-    emails.sort(key=lambda e: order.get(e[1], 99))
-    best_email = emails[0] if emails else ("", "")
-    inferred = next((c for c in contacts if c["kind"] == "email" and c["tier"] == "inferred"), None)
+    ranked_emails = rank_email_contacts(contacts_filled)
+    sendable_ranked = [c for c in ranked_emails if c["tier"] not in ("invalid", "inferred")]
+    best_row = sendable_ranked[0] if sendable_ranked else None
+    best_email = (best_row["value"], best_row["tier"] or "") if best_row else ("", "")
+    best_affinity = (best_row["affinity"] or "") if best_row else ""
+    best_affinity_backfilled = bool(best_row and best_row.get("_affinity_backfilled"))
+    inferred = next((c for c in contacts_filled if c["kind"] == "email" and c["tier"] == "inferred"), None)
     factors = json.loads(s["factors_json"])
-    top_why = "; ".join(f["why"] for f in sorted(factors, key=lambda f: -f["points"])[:3])
+    # 'Why This Score' explains Score/Fit — the meta factors (contactability, status) are a separate
+    # axis by design (docs/09 §D split) and must never re-blend into it: contactability alone can carry
+    # up to 98 points, which would silently outrank every fit factor (max 25) if left in this sort.
+    top_why = "; ".join(f["why"] for f in sorted((f for f in factors if f.get("group") != "meta"),
+                                                  key=lambda f: -f["points"])[:3])
     hooks = json.loads(s["need_hooks_json"])
     verified = ""
     ev = db.evidence_for(conn, s["business_id"])
@@ -123,6 +193,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
     row["_has_email"] = bool(row["Email"])
     row["_has_dm"] = bool(row["DM Name"])
     row["_has_inferred"] = inferred is not None
+    row["_has_site"] = bool(row["Website"])
     if inferred is not None:
         imeta = json.loads(inferred["meta_json"]) if inferred["meta_json"] else {}
         conf = imeta.get("confidence")
@@ -154,7 +225,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
                              else "UNVERIFIED PHONE - confirm number" if row["Phone"]
                              else "NO PHONE - research first")
     meta = {f["factor"]: f for f in factors if f.get("group") == "meta"}
-    if "status" in meta:  # account_fit profile -> append WE SCORE account-intel columns
+    if profile == "account_fit":  # WE SCORE profile -> append the account-intel columns
         enrich = json.loads(s["enrich_json"]) if s["enrich_json"] else {}
         prof = enrich.get("profile") or {}
         tech = prof.get("tech") or {}
@@ -179,15 +250,58 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90) -> dict:
             "Data Confidence": meta["data_confidence"]["points"] if "data_confidence" in meta else "",
             "Status": meta["status"]["why"],
         })
+        return row
+
+    # v0.3 default-profile columns: the fit/contactability split, phone-first Next Action, and the
+    # compliance facts a human decides outreach from. Computed fresh here (not read off the stored
+    # Score) because entity/eligibility/outreach-state can change between scoring and export.
+    entity = compliance.entity_type(s, people)
+    site_status, site_dead = _site_status(enrich_all)
+    is_suppressed = db.is_suppressed(conn, s["domain"], s["place_id"], best_email[0] or None)
+    eligibility = compliance.email_eligibility(
+        s, contacts_filled, entity, icp.compliance.region_profile if icp else "us",
+        freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
+        suppressed=is_suppressed, site_dead=site_dead,
+    )
+    phone_ok = phone_is_validated(s["phone_e164"])
+    next_action = compliance.next_action(
+        phone_validated=phone_ok, has_dm=row["_has_dm"], eligibility=eligibility, tier=s["tier"],
+        outreach_state=db.outreach_state_for(conn, s["business_id"]),
+    )
+    chain_key = (chain or {}).get(s["business_id"])
+    sim = regp.get("match_similarity")
+    row["_email_affinity"] = best_affinity
+    row["_eligible"] = bool(eligibility.get("eligible"))
+    row["_phone_validated"] = phone_ok
+    row.update({
+        "Fit": row["Score"],
+        "Contactability": meta["contactability"]["points"] if "contactability" in meta else "not computed",
+        "Status": meta["status"]["why"] if "status" in meta else "not computed",
+        "Next Action": next_action,
+        "Entity Type": entity,
+        "Lawful Basis (Email)": eligibility.get("basis", compliance.BASIS_NONE),
+        "Registry Name": regp.get("legal_name")
+                         or ("not matched in registry" if enrich_all.get("registry_checked") else "not looked up"),
+        "Registry Match": f"{float(sim):.2f}" if sim is not None else "n/a",
+        "Chain": chain_key or "-",
+        "Site Status": site_status,
+        "Email Confidence": _email_confidence(best_affinity, best_email[1],
+                                              linkage_checked=not best_affinity_backfilled)
+                           if best_email[0] else "none",
+        "All Hooks": "; ".join(hooks) if hooks else "no hooks triggered",
+    })
     return row
 
 
 def export_run(conn: sqlite3.Connection, icp: ICP, run_id: str, out_dir: Path, formats: list[str],
-               staleness_days: int = 90) -> list[str]:
+               staleness_days: int = 90, cfg: Config | None = None) -> list[str]:
+    cfg = cfg or _DEFAULT_CFG
+    profile = icp.scoring.profile
     rows_raw = db.scores_for_run(conn, run_id)
-    rows = [_row_for(conn, s, staleness_days) for s in rows_raw]
+    chain = db.chain_map(conn) if profile != "account_fit" else {}
+    rows = [_row_for(conn, s, staleness_days, icp=icp, cfg=cfg, chain=chain) for s in rows_raw]
     rows.sort(key=lambda r: (-r["Score"], r["Tier"]))
-    columns = ACCOUNT_COLUMNS if any("Status" in r for r in rows) else COLUMNS
+    columns = ACCOUNT_COLUMNS if profile == "account_fit" else DEFAULT_COLUMNS
     run_dir = out_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     artifacts: list[str] = []
@@ -277,6 +391,31 @@ def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> Non
     ]
     for hook, n in sorted(hook_counts.items(), key=lambda x: -x[1])[:8]:
         lines.append((f"  {n}×", hook))
+    # v0.3 default-profile funnel + Next Action breakdown (rows carry these keys only when the
+    # default-profile columns were computed — account_fit rows skip this block cleanly)
+    if any("Next Action" in r for r in rows):
+        with_site = sum(1 for r in rows if r.get("_has_site"))
+        with_own_domain = sum(1 for r in rows if r.get("_email_affinity") == "own_domain")
+        with_eligible = sum(1 for r in rows if r.get("_eligible"))
+        call_ready = sum(1 for r in rows if r.get("_phone_validated"))
+        lines += [
+            ("", ""),
+            ("Funnel: sites -> any email -> own-domain email -> eligible to email -> call-ready", ""),
+            ("  With website", f"{with_site} ({_pct(with_site, len(rows))})"),
+            ("  With any email", f"{with_email} ({_pct(with_email, len(rows))})"),
+            ("  With own-domain email", f"{with_own_domain} ({_pct(with_own_domain, len(rows))})"),
+            ("  Eligible to email", f"{with_eligible} ({_pct(with_eligible, len(rows))})"),
+            ("  Call-ready (validated phone)", f"{call_ready} ({_pct(call_ready, len(rows))})"),
+            ("", ""),
+            ("Next Action breakdown", ""),
+        ]
+        na_counts: dict[str, int] = {}
+        for r in rows:
+            na = r.get("Next Action", "")
+            if na:
+                na_counts[na] = na_counts.get(na, 0) + 1
+        for na, n in sorted(na_counts.items(), key=lambda x: -x[1]):
+            lines.append((f"  {n}×", na))
     lines += [("", ""), ("Compliance reminder", _REGION_REMINDER.get(icp.compliance.region_profile, ""))]
     for k, v in lines:
         ws.append([k, v])
@@ -292,10 +431,12 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
     ws.append([])
     # the legend must match the rubric that actually graded this workbook (score.py _grade
     # for account_fit; tiers block of scoring.default.yaml otherwise)
-    if getattr(icp.scoring, "profile", "") == "account_fit":
+    account_fit = getattr(icp.scoring, "profile", "") == "account_fit"
+    if account_fit:
         ws.append(["Tier", "A ≥ 80 · B 65–79 · C 50–64 · D < 50 · DQ = hard-disqualified by your ICP rules"])
     else:
-        ws.append(["Tier", "A ≥ 75 (hot) · B 55–74 · C < 55 · DQ = hard-disqualified by your ICP rules"])
+        ws.append(["Tier", "A ≥ 80 · B 60–79 · C < 60 · DQ = hard-disqualified by your ICP rules "
+                            "(tier is FIT only — see Contactability/Status for reachability)"])
     ws.append(["Score", "0–100, sum of weighted factors; see 'Why This Score' per row for the top drivers"])
     ws.append(["Email Tier", "valid > role > risky > catch_all > unknown (invalid emails are dropped)"])
     ws.append(["Email (Inferred)", "NOT a published address: the address this domain's own naming "
@@ -306,6 +447,29 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
     ws.append(["Likely Need (Hook)", "auto-suggested outreach angle from detected need signals + your offer"])
     ws.append(["Verified On", "timestamp of the newest evidence for the row; older than your staleness window = re-verify"])
     ws.append(["Source", "which engine discovered the business (gosom = Google Maps)"])
+    if not account_fit:
+        ws.append([])
+        ws.append(["v0.3 columns", "fit/contactability are graded separately on purpose — a hot-but-"
+                                    "uncontactable lead and a lukewarm-but-call-ready one are never blended."])
+        ws.append(["Fit", "0–100, industry/need/size/geography/business-model/data-confidence — same "
+                          "number as Score, drives Tier"])
+        ws.append(["Contactability", "0–100, separate: DM + best email + validated phone + registry "
+                                     "corroboration + mobile — never affects Tier"])
+        ws.append(["Status", "READY (tier A/B and contactability ≥ 50) · CALL_ONLY (validated phone, "
+                             "no eligible email) · RESEARCH (neither yet) · DQ (hard-disqualified)"])
+        ws.append(["Next Action", "phone-first: CALL a named contact, or the switchboard, before EMAIL; "
+                                  "shows the live outreach state once a lead is enrolled in a campaign"])
+        ws.append(["Entity Type", "what the public company registry says: corporate_active/_inactive/"
+                                  "_unknown, unmatched (likely sole trader), or unchecked (no lookup run)"])
+        ws.append(["Lawful Basis (Email)", "the basis an unsolicited email would rest on under your "
+                                           "region's rules and freemail policy — 'none' = do not email"])
+        ws.append(["Registry Name / Match", "the matched company's legal name and the name-similarity "
+                                            "score (0–1) that accepted the match; 'n/a' = no match"])
+        ws.append(["Chain", "shares a domain or phone with another row in this database (same operator, "
+                            "multiple locations) — '-' = independent as far as this data shows"])
+        ws.append(["Site Status", "live / dead (<code or error>) / redirects to <host> / not crawled"])
+        ws.append(["Email Confidence", "plain-language affinity + tier for the exported Email address"])
+        ws.append(["All Hooks", "every need signal that fired, not just the top one shown in the hook column"])
     ws.append([])
     ws.append(["Note", "Contact data is public-source and probabilistic. Confirm before high-stakes outreach; honor opt-outs via `leadforge suppress add`."])
     ws.column_dimensions["A"].width = 22
