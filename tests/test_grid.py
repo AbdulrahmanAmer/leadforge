@@ -1,6 +1,18 @@
 from leadforge.grid import PlannedQuery, build_plan, make_tiles, plan_counts
 
 
+def test_tile_to_json_from_json_round_trips_depth():
+    """A2 (docs/09): Tile.to_json/from_json must round-trip depth, not just bbox/cell_km."""
+    from leadforge.grid import Tile
+    t = Tile(bbox=(-2.4, 53.3, -2.0, 53.6), cell_km=2.5, depth=2)
+    d = t.to_json()
+    assert d["depth"] == 2
+    t2 = Tile.from_json(d)
+    assert t2 == t
+    # a tile with no 'depth' key (pre-v0.3 cached plan) defaults to 0, not a crash
+    assert Tile.from_json({"bbox": [0, 0, 1, 1], "cell_km": 1.0}).depth == 0
+
+
 def test_make_tiles_respects_cap():
     bbox = [-95.8, 29.5, -95.0, 30.1]  # ~Houston-ish box
     tiles = make_tiles(bbox, cell_km=1.0, max_tiles=20)
@@ -21,6 +33,24 @@ def test_plan_counts():
           PlannedQuery(text="b in X", category="b", area="X")]
     c = plan_counts(qs)
     assert c["queries"] == 2 and c["tiles"] == 0 and c["est_max_results"] == 240
+
+
+def test_plan_counts_uses_configured_per_query_estimates(cfg):
+    """A4 (docs/09): untiled and tiled queries are estimated with their own configured averages —
+    a mixed plan's runtime is the sum of each, not one blended constant."""
+    from leadforge.grid import Tile
+    cfg.discovery.est_min_per_query = 3.0
+    cfg.discovery.est_min_per_tiled_query = 5.0
+    qs = [
+        PlannedQuery(text="a in X", category="a", area="X"),
+        PlannedQuery(text="b in X", category="b", area="X"),
+        PlannedQuery(text="c in Y", category="c", area="Y", tile=Tile(bbox=(0, 0, 1, 1), cell_km=3.0)),
+    ]
+    c = plan_counts(qs, cfg)
+    assert c["untiled_queries"] == 2
+    assert c["tiled_queries"] == 1
+    assert c["cells"] == 1
+    assert c["est_runtime_min"] == round(2 * 3.0 + 1 * 5.0)
 
 
 # --- v0.2.0: plan ordering, tiled planning, geocode resilience ---------------------------------

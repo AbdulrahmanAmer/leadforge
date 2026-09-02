@@ -191,6 +191,15 @@ GOSOM_FIELD_MAP = {
     "cid": ["cid"],
     "hours": ["open_hours"],
     "maps_url": ["link", "url"],
+    # A5 (docs/09): Google Business Profile fields the raw cache already carries and v0.2 discarded —
+    # about's "Planning" group has appointment policy, order_online is booking links, status/owner/
+    # description are self-explanatory, reviews carries owner replies + credited names as evidence.
+    "about": ["about"],
+    "order_online": ["order_online"],
+    "status": ["status"],
+    "owner": ["owner"],
+    "description": ["description"],
+    "reviews": ["user_reviews_extended", "user_reviews"],
 }
 GosomProvider.FIELD_MAP = GOSOM_FIELD_MAP  # v0.3: registered for normalize's per-provider dispatch
 

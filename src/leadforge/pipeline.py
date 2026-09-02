@@ -7,6 +7,7 @@ for the agent (stage=dm_pending).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -64,19 +65,25 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     degraded = 0
     new_count = 0
     processed = 0
-    pending = db.pending_queries(conn, run_id)
-    from leadforge.grid import PlannedQuery
+    from leadforge.grid import PlannedQuery, quarter_tile
+
+    # A2: the queue grows in place when a saturated tile is subdivided, so children inserted by an
+    # earlier iteration are picked up by this same loop (and, via the DB, by a later --resume too).
+    queue = list(db.pending_queries(conn, run_id))
+    known_ids = {q["id"] for q in queue}
 
     hard_cap = min(limit, icp.caps.max_leads) if limit else icp.caps.max_leads
-    total_q = len(pending)
-    for qi, q in enumerate(pending):
+    qi = 0
+    while qi < len(queue):
+        q = queue[qi]
+        total_q = len(queue)
         emit_progress("discover", qi, total_q, q["query_text"])
         if processed >= hard_cap:
             emit_progress("discover", total_q, total_q, f"lead cap reached ({processed})")
             break
         pq = PlannedQuery(text=q["query_text"], category="", area="",
                           tile=_tile_from_json(q["tile_json"]))
-        listings, status = _fetch_with_chain(chain, pq, limit, warns)
+        listings, status, tiled_honoured = _fetch_with_chain(chain, pq, limit, warns)
         if status == "degraded":
             degraded += 1
         per_query_new = 0
@@ -95,8 +102,35 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             if processed >= hard_cap:
                 break
         new_count += per_query_new
+
+        # A2 saturation subdivision: a tiled query that came back saturated is split into 4 quadrant
+        # queries at the next depth, persisted BEFORE the parent is marked finished (so a crash right
+        # after this point still has the children on --resume), capped at max_subdivisions deep.
+        # Dedupe against already-persisted rows for this (run_id, query_text): a crash between the
+        # children insert and finish_query(parent) leaves the parent 'pending', so a later --resume
+        # re-fetches it, saturates again, and would otherwise insert a second set of 4 children —
+        # quarter_tile(pq.tile) is deterministic (same parent bbox -> same 4 quadrant dicts), so the
+        # json.dumps of a child's to_json() matches the tile_json string already on disk byte-for-byte.
+        if status == "done" and tiled_honoured and len(listings) >= cfg.discovery.subdivide_at \
+                and pq.tile.depth < cfg.discovery.max_subdivisions:
+            children = quarter_tile(pq.tile)
+            existing_tiles = {
+                row["tile_json"] for row in conn.execute(
+                    "SELECT tile_json FROM queries WHERE run_id=? AND query_text=?",
+                    (run_id, q["query_text"]),
+                )
+            }
+            new_children = [c for c in children if json.dumps(c.to_json()) not in existing_tiles]
+            if new_children:
+                db.add_queries(conn, run_id, [(q["query_text"], c.to_json()) for c in new_children])
+            for nr in db.pending_queries(conn, run_id):
+                if nr["id"] not in known_ids:
+                    known_ids.add(nr["id"])
+                    queue.append(nr)
+
         db.finish_query(conn, q["id"], status, len(listings))
-        emit_progress("discover", qi + 1, total_q, f"{processed} unique leads so far")
+        emit_progress("discover", qi + 1, len(queue), f"{processed} unique leads so far")
+        qi += 1
 
     total_biz = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
     still_pending = len(db.pending_queries(conn, run_id))
@@ -106,25 +140,31 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
         warns.append(f"{degraded} queries degraded (captcha/timeout); "
                      "run --resume retries them until the DM gate")
     counts = {"businesses": total_biz, "new": new_count, "tiles_degraded": degraded,
-              "queries_done": len(pending) - still_pending}
+              "queries_done": len(queue) - still_pending}
     return run_id, counts, warns[:5]
 
 
-def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str]:
+def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str, bool]:
+    """Returns (listings, status, tiled_honoured). tiled_honoured is True only when the provider that
+    actually answered declares supports_tiles=True — a chain fallback that ignores query.tile (e.g.
+    FallbackRestProvider) must never be treated as having constrained the search to that tile, or A2
+    saturation subdivision would split a whole-area answer into quadrants that get the exact same
+    whole-area rows back, recursing pointlessly against the politeness budget (docs/09 A2 review)."""
     last_degraded = False
     for provider in chain:
         ok, reason = provider.available()
         if not ok:
             warns.append(f"{provider.name}: {reason}")
             continue
-        if pq.tile is not None and not getattr(provider, "supports_tiles", False):
+        tiled_honoured = pq.tile is not None and getattr(provider, "supports_tiles", False)
+        if pq.tile is not None and not tiled_honoured:
             # say it out loud: this provider searches the query TEXT only, so a tiled plan silently
             # loses its per-cell geographic constraint (and with it the point of tiling)
             msg = f"{provider.name} ignores grid tiles — geo constraint dropped for tiled queries"
             if msg not in warns:
                 warns.append(msg)
         try:
-            return provider.fetch(pq, limit=limit), "done"
+            return provider.fetch(pq, limit=limit), "done", tiled_honoured
         except ProviderDegraded as e:
             LOG.warning("provider %s degraded: %s", provider.name, e)
             last_degraded = True
@@ -132,24 +172,21 @@ def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str]:
         except ProviderFailed as e:
             warns.append(f"{provider.name} failed: {e}")
             continue
-    return [], "degraded" if last_degraded else "failed"
+    return [], "degraded" if last_degraded else "failed", False
 
 
 def _plan_into_db(conn: sqlite3.Connection, cfg: Config, icp: ICP, run_id: str) -> None:
 
     queries = build_plan(icp, cfg)
-    db.add_queries(conn, run_id, [(q.text, q.tile.as_json() if q.tile else None) for q in queries])
+    db.add_queries(conn, run_id, [(q.text, q.tile.to_json() if q.tile else None) for q in queries])
 
 
 def _tile_from_json(tile_json: str | None):
     if not tile_json:
         return None
-    import json
-
     from leadforge.grid import Tile
 
-    d = json.loads(tile_json)
-    return Tile(bbox=tuple(d["bbox"]), cell_km=d["cell_km"])
+    return Tile.from_json(json.loads(tile_json))
 
 
 # --------------------------------------------------------------------------- run (state machine)
@@ -164,11 +201,15 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     warns: list[str] = []
     artifacts: list[str] = []
 
-    # Degraded discovery tiles (captcha/timeout) are re-attempted on resume until the DM gate;
-    # past it a resume means "finish the run", not "scrape more". Re-entering discovery moves the
-    # stage back through discovered -> enrich, so late arrivals still get enriched normally.
-    if run_id is not None and stage in ("discovered", "enriching") and conn.execute(
-            "SELECT 1 FROM queries WHERE run_id=? AND status='degraded' LIMIT 1", (run_id,)).fetchone():
+    # A3 (docs/09): a run can reach ANY later stage (even 'exported') while discovery queries are
+    # still 'pending' or 'degraded' — a saturation-subdivision child inserted after the parent's
+    # stage flipped to 'discovered', or a captcha/timeout tile never retried before the DM gate. On
+    # resume, unfinished discovery always wins over wherever the run happened to stop: re-entering
+    # discovery moves the stage back through discovered -> enrich -> ... so late arrivals still get
+    # enriched, scored and exported like any other business (the live run: 'exported' with 18 pending).
+    if run_id is not None and conn.execute(
+            "SELECT 1 FROM queries WHERE run_id=? AND status IN ('pending','degraded') LIMIT 1",
+            (run_id,)).fetchone():
         stage = "discovering"
 
     # DISCOVER

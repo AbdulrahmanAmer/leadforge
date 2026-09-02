@@ -93,6 +93,95 @@ def test_geocode_cache_is_country_scoped(cfg, monkeypatch):
     assert "US|ambiguousville" in cache  # keyed by country, so GB lookups can't reuse a US hit
 
 
+# --- v0.3 A1: geocoder coordinate-first ambiguity + addresstype preference + area_bbox override ---
+def test_geocode_same_city_returned_twice_is_not_ambiguous(cfg, monkeypatch):
+    """docs/09 A1: a city row and an administrative row for the same city carry different address
+    dicts (one has no 'city' key at all) but sit at almost the same point — must resolve, not raise."""
+    _fake_httpx(monkeypatch, [
+        {"lat": "53.4808", "lon": "-2.2426", "boundingbox": ["53.40", "53.56", "-2.35", "-2.13"],
+         "display_name": "Manchester, Greater Manchester, England, UK", "importance": 0.75,
+         "addresstype": "city",
+         "address": {"city": "Manchester", "county": "Greater Manchester", "state": "England"}},
+        {"lat": "53.4831", "lon": "-2.2441", "boundingbox": ["53.39", "53.55", "-2.34", "-2.12"],
+         "display_name": "Manchester, Greater Manchester, England, UK", "importance": 0.72,
+         "addresstype": "administrative",
+         "address": {"state_district": "Greater Manchester", "state": "England"}},
+    ])
+    out = geocode("Manchester", cfg, "GB")
+    assert "Manchester" in out["display"]
+
+
+def test_geocode_prefers_city_over_canal(cfg, monkeypatch):
+    """docs/09 A1: 'City of Manchester' used to resolve to the Manchester Ship Canal (Warrington)
+    because it topped the Nominatim results — a disfavored addresstype must never win, or even be
+    compared for ambiguity, against a real place row."""
+    _fake_httpx(monkeypatch, [
+        {"lat": "53.39", "lon": "-2.57", "boundingbox": ["53.35", "53.45", "-2.65", "-2.50"],
+         "display_name": "Manchester Ship Canal, Warrington, Cheshire, England, UK", "importance": 0.6,
+         "addresstype": "canal",
+         "address": {"waterway": "Manchester Ship Canal", "county": "Cheshire", "state": "England"}},
+        {"lat": "53.4808", "lon": "-2.2426", "boundingbox": ["53.40", "53.56", "-2.35", "-2.13"],
+         "display_name": "Manchester, Greater Manchester, England, UK", "importance": 0.55,
+         "addresstype": "city",
+         "address": {"city": "Manchester", "county": "Greater Manchester", "state": "England"}},
+    ])
+    out = geocode("City of Manchester", cfg, "GB")
+    assert out["display"] == "Manchester, Greater Manchester, England, UK"
+
+
+def test_geocode_not_found_error_names_area_bbox_as_the_fix(cfg, monkeypatch):
+    """A1 review (minor): the actual fix docs/09 introduced for a stubborn geocoder is the
+    discovery.area_bbox override — the not-found message must say so, not just point at the
+    (different, pre-existing) target.geography.bbox setting."""
+    _fake_httpx(monkeypatch, [])
+    with pytest.raises(InputError) as e:
+        geocode("Nowhereville", cfg, "GB")
+    assert "area_bbox" in str(e.value)
+
+
+def test_geocode_ambiguous_error_names_area_bbox_as_the_fix(cfg, monkeypatch):
+    _fake_httpx(monkeypatch, [
+        {"lat": "39.8", "lon": "-89.6", "boundingbox": ["39.7", "39.9", "-89.7", "-89.5"],
+         "display_name": "Springfield, Illinois", "importance": 0.51, "address": {"state": "Illinois"}},
+        {"lat": "37.2", "lon": "-93.3", "boundingbox": ["37.1", "37.3", "-93.4", "-93.2"],
+         "display_name": "Springfield, Missouri", "importance": 0.50, "address": {"state": "Missouri"}},
+    ])
+    with pytest.raises(InputError) as e:
+        geocode("Springfield", cfg, "US")
+    assert "area_bbox" in str(e.value)
+
+
+def test_geocode_prefers_preferred_addresstype_over_a_merely_undisfavored_higher_importance_row(cfg, monkeypatch):
+    """A1 review (minor): _PREFERRED_ADDRESSTYPES must actually be used — a non-disfavored,
+    non-preferred addresstype (e.g. 'road') at higher importance must not beat a lower-importance
+    'town' row; disfavoring alone (waterway/amenity/tourism/information/canal) is not enough."""
+    _fake_httpx(monkeypatch, [
+        {"lat": "53.10", "lon": "-2.90", "boundingbox": ["53.05", "53.15", "-2.95", "-2.85"],
+         "display_name": "Manchester Road, Northwich, Cheshire, England, UK", "importance": 0.65,
+         "addresstype": "road",
+         "address": {"road": "Manchester Road", "county": "Cheshire", "state": "England"}},
+        {"lat": "53.4808", "lon": "-2.2426", "boundingbox": ["53.40", "53.56", "-2.35", "-2.13"],
+         "display_name": "Manchester, Greater Manchester, England, UK", "importance": 0.55,
+         "addresstype": "town",
+         "address": {"town": "Manchester", "county": "Greater Manchester", "state": "England"}},
+    ])
+    out = geocode("Manchester", cfg, "GB")
+    assert out["display"] == "Manchester, Greater Manchester, England, UK"
+
+
+def test_area_bbox_override_skips_nominatim_entirely(cfg, monkeypatch):
+    """docs/09 A1: cfg.discovery.area_bbox[area] (exact or casefolded) is used verbatim and the
+    Nominatim transport must never be touched — not even to populate the cache."""
+    cfg.discovery.area_bbox = {"City of Manchester": [-2.35, 53.40, -2.13, 53.56]}
+
+    def _must_not_call(*a, **k):
+        raise AssertionError("geocode() called Nominatim despite an area_bbox override")
+
+    monkeypatch.setattr("leadforge.grid.httpx.get", _must_not_call)
+    out = geocode("city of manchester", cfg, "GB")  # casefolded form still matches the config key
+    assert out["bbox"] == [-2.35, 53.40, -2.13, 53.56]
+
+
 def test_distinct_places_helper():
     a = {"lat": "1", "lon": "1", "address": {"state": "A"}}
     b = {"lat": "1", "lon": "1", "address": {"state": "B"}}
