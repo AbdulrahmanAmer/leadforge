@@ -97,25 +97,33 @@ def _display_phone(e164: str | None) -> str:
 
 
 def _site_status(enrich: dict) -> tuple[str, bool]:
-    """-> ('live' | 'not crawlable (robots)' | 'dead (<status/error>)' | 'redirects to <host>' |
-    'not crawled', site_dead). Reads signals C1/A set when present (final_host, offsite_redirect,
-    http_status); degrades to 'live' on a bare crawl with none of those (nothing observed to say
-    otherwise). robots-disallowed means the crawler was refused, not that the site is down — it is
-    reported honestly and does NOT set site_dead (which would otherwise withdraw email eligibility
-    from a live site for a reason that was never actually observed)."""
-    if not enrich.get("crawled_at"):
-        return "not crawled", False
+    """-> ('not crawlable (robots)' | 'dead (<status/error>)' | 'live' | 'redirects to <host>' |
+    'unreachable' | 'not crawled', site_dead). v0.3 polish decision table (docs/09 §D), checked
+    IN ORDER against the merged _persist shape (crawled_at stamped ONLY on success; otherwise
+    attempted_at + error):
+      1. error == 'robots-disallowed' -> not crawlable (robots), site NOT dead — the crawler was
+         refused, not down; must be checked BEFORE crawled_at (a refused attempt has no crawled_at).
+      2. any other error, or http_status >= 400 -> dead (<code or error>), site dead.
+      3. crawled_at AND pages > 0 -> live, or 'redirects to <final_host>' when offsite_redirect is
+         set. A crawl with crawled_at stamped but zero pages fetched (a 'phantom' crawl — the live
+         campaign had 115 of these) is NOT live: it falls through to the next rule instead of lying.
+      4. attempted_at without crawled_at and without an error -> unreachable, site dead (attempted
+         and got nothing back, but not via a code path that recorded a reason).
+      5. none of the above -> not crawled, not dead."""
     signals = enrich.get("signals") or {}
     err = enrich.get("error")
     status = signals.get("http_status")
     if err == "robots-disallowed":
         return "not crawlable (robots)", False
-    dead = bool(err) or (isinstance(status, int) and status >= 400)
-    if dead:
+    if err or (isinstance(status, int) and status >= 400):
         return f"dead ({status if status is not None else err})", True
-    if signals.get("offsite_redirect") and signals.get("final_host"):
-        return f"redirects to {signals['final_host']}", False
-    return "live", False
+    if enrich.get("crawled_at") and (enrich.get("pages") or 0) > 0:
+        if signals.get("offsite_redirect") and signals.get("final_host"):
+            return f"redirects to {signals['final_host']}", False
+        return "live", False
+    if enrich.get("attempted_at") and not enrich.get("crawled_at"):
+        return "unreachable", True
+    return "not crawled", False
 
 
 def _email_confidence(affinity: str, tier: str, linkage_checked: bool = True) -> str:
@@ -455,8 +463,9 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
                           "number as Score, drives Tier"])
         ws.append(["Contactability", "0–100, separate: DM + best email + validated phone + registry "
                                      "corroboration + mobile — never affects Tier"])
-        ws.append(["Status", "READY (tier A/B and contactability ≥ 50) · CALL_ONLY (validated phone, "
-                             "no eligible email) · RESEARCH (neither yet) · DQ (hard-disqualified)"])
+        ws.append(["Status", "READY (tier A/B and contactability ≥ 50) · CALL_ONLY (validated phone — "
+                             "call regardless of whether the email is also eligible) · RESEARCH (no "
+                             "validated phone yet) · DQ (hard-disqualified)"])
         ws.append(["Next Action", "phone-first: CALL a named contact, or the switchboard, before EMAIL; "
                                   "shows the live outreach state once a lead is enrolled in a campaign"])
         ws.append(["Entity Type", "what the public company registry says: corporate_active/_inactive/"
@@ -467,7 +476,9 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
                                             "score (0–1) that accepted the match; 'n/a' = no match"])
         ws.append(["Chain", "shares a domain or phone with another row in this database (same operator, "
                             "multiple locations) — '-' = independent as far as this data shows"])
-        ws.append(["Site Status", "live / dead (<code or error>) / redirects to <host> / not crawled"])
+        ws.append(["Site Status", "live (crawled, pages fetched) / dead (<code or error>) / not "
+                                  "crawlable (robots) / redirects to <host> / unreachable (attempted, "
+                                  "nothing came back) / not crawled"])
         ws.append(["Email Confidence", "plain-language affinity + tier for the exported Email address"])
         ws.append(["All Hooks", "every need signal that fired, not just the top one shown in the hook column"])
     ws.append([])
