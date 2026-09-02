@@ -1,0 +1,24 @@
+# v0.3 unit F drafting skeleton — GainLev's own cold outreach selling GainLev's services.
+# Fixed text with exactly two model slots: {{subject}} (the message header, written separately) and
+# {{observation}} (one sentence inline, citing exactly one packet fact). Everything else here —
+# {{greeting}}, {{offer_line}}, {{cta}}, {{signature}}, {{postal_address}}, {{privacy_line}},
+# {{optout_line}} — is filled deterministically by the CLI from the packet/identity; the model never
+# writes them (docs/09 Wave 2 F).
+purpose: gainlev_leadgen
+cta: "Worth a quick call this week?"
+literals:
+  - GainLev
+template_numbers: []
+body: |
+  {{greeting}}
+
+  {{observation}}
+
+  {{offer_line}}
+
+  {{cta}}
+
+  {{signature}}
+  {{postal_address}}
+  {{privacy_line}}
+  {{optout_line}}
