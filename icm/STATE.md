@@ -111,3 +111,17 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
 - Live-run ops note (2026-08-31): the "leaked gosom" after the 709-lead autorepair run was NOT a
   watchdog failure — an idle no-args gosom web-UI instance had been double-clicked in Explorer
   (parent explorer.exe, 0.6s CPU). Watchdog behaved correctly all run.
+
+## v0.3 (2026-09-02, in progress — owner decisions in docs/09-v0.3-build-plan.md)
+- [x] **Wave 0** (d7eb4ce): SCOPE #4 amended (sending in scope with guardrails), ADR-011/012/013, db schema v2,
+      compliance.py, config sections, `--json` after the subcommand, outreach/draft sub-apps, provider field maps.
+- [x] **Wave 1 + polish** (d5b968f, 380 tests, ruff clean): A discovery coverage (geocoder settlement-first +
+      same-place rule + area_bbox override, saturation subdivision, resume completes discovery, per-run cap,
+      GBP facts kept), B DVSA provider, C1 extraction truth, C2 enrichment/registry truth (name-similarity +
+      active gates, profile on both paths, affinity, context evidence, gbp people), D scoring/export truth
+      (category aliases, fit vs contactability, phone-first Status/Next Action, evidence-gated hooks, entity
+      + lawful-basis columns).
+- [ ] **Wave 2** E outreach, F drafting, H company mode — building (workflow wf_d4a91e42-e63).
+- [ ] **Wave 3** docs, SKILL, CHANGELOG, tag v0.3.0, push; then data ops (DVSA load + 10-city tiled sweep).
+- Gate: `python scripts/v03_gate.py --live-db <db>` (suite, lint, versions, plugin validate, CLI contract,
+  DVSA fixture, export truth on a DB copy, outreach/draft guardrail probes).

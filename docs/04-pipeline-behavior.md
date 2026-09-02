@@ -168,6 +168,67 @@ latest run for the same ICP hash; every stage is idempotent (upserts, per-tile /
   no DM) / `UNVERIFIED PHONE - confirm number` (only a raw unparsed number) / `NO PHONE - research first`.
 - Digest artifacts list absolute paths. Nothing is printed from the sheet itself.
 
+## 3b. v0.3 behaviour changes (truth + coverage; decided 2026-09-02, docs/09)
+
+### 3b.1 Discovery
+- **Registry-first providers.** `discovery.providers` may list `dvsa` (the DVSA "Active MOT test stations" CSV,
+  OGL, cached 90 days under `leadforge_data/cache/dvsa/`, filtered by the query's town) and, in company mode,
+  `companies_house` (advanced search by SIC × location). Each provider registers its own raw-field map
+  (`providers/base.py`); `normalize.to_business` dispatches on `RawListing.provider`. A registry row with no
+  `place_id` **merges into the Maps row that carries the same E.164 phone** when a name token or postcode
+  district agrees (`db.upsert_business`); otherwise it becomes its own row with `source=dvsa`.
+- **Geocoder.** Nominatim is queried with `featureType=settlement` first (bare city names resolve to the city,
+  not a bus stop, a hospital or the county) and retried once without it after the 1 req/s delay; two hits within
+  0.15° whose boxes overlap are the same place, never "ambiguous"; waterways/amenities never beat a city row;
+  `discovery.area_bbox["<area>"] = [minLng, minLat, maxLng, maxLat]` bypasses Nominatim entirely. Every geocode
+  error message names that override.
+- **Saturation subdivision.** A tiled query returning ≥ `discovery.subdivide_at` (default 100) listings is split
+  into 4 quadrant children (`tile_json.depth + 1`) persisted **before** the parent is marked done, up to
+  `discovery.max_subdivisions` (default 2); children are picked up by the same loop and by `--resume`; a
+  resumed run never duplicates children. `leadforge plan` reports `est_runtime_min` from the measured per-query
+  constants (`discovery.est_min_per_query` / `est_min_per_tiled_query`) and, for tiled plans, the worst case
+  if every generation subdivided.
+- **Resume completes discovery.** `run --resume` re-enters discovery from **any** stage while the latest run
+  has `pending` or `degraded` queries (the 2026-08-31 campaign was `exported` with 18 pending) — except when
+  the run stopped on its lead cap and the businesses credited to it still fill the cap. `caps.max_leads` is a
+  per-run stop across resumes (credited count seeds `processed`); `--limit N` means "at most N new this
+  invocation".
+- **Google Business Profile facts kept.** `businesses.enrich_json.gbp` holds appointment attributes, booking
+  links (`order_online`), owner reply signatures (reviewer echoes rejected), review-credited first names,
+  `status` (unreliable in gosom v1.17.4 — never drives a hook), description.
+
+### 3b.2 Enrichment
+- `crawled_at` is stamped **only** when the crawl succeeded; failures record `attempted_at` + `error`
+  (robots-disallowed, unreachable, HTTP code). A 0-page crawl can therefore no longer look "crawled".
+- Emails: `<style>/<script>/<noscript>/<template>` content is stripped before regex extraction; placeholder
+  local parts (`test`, `sample`, `noreply`…) are invalid regardless of MX; each address is classified
+  `own_domain | freemail_linked | freemail_unlinked | foreign` (`extract.classify_email_affinity`) — foreign is
+  dropped, unlinked freemail is stored `risky`, and the evidence row keeps a ±90-char context window with
+  `ref_id` pointing at the contact. Best-email ranking (`validate.rank_email_contacts`): own-domain valid >
+  own-domain role > linked freemail valid > inferred > risky > unknown > invalid.
+- People: candidates inside review/testimonial context or form labels are skipped; `people.origin` records
+  heuristic | registry | gbp and survives agent labeling; `dm export` shows it.
+- Registry: a Companies House hit must pass `name_similarity ≥ registry.min_name_similarity` **and** locality
+  overlap, and be `active` when `registry.active_only`; the profile (`company_number, legal_name, company_status,
+  incorporated, sic_codes, match_similarity`) is persisted on both the crawl path and the site-less path.
+  Auto-pick (ADR-010) inherits both gates.
+- Signals: `booking_hint` reads nav anchors from HTML (not trafilatura text), knows the UK booking platforms,
+  and is set from a GBP booking link (`booking_source=gbp`); `final_host` / `offsite_redirect` / `http_status`
+  / `phone_confirmed` are recorded. A `gbp` stage adds owner-reply names for site-less businesses.
+
+### 3b.3 Scoring and export
+- **Fit and contactability are separate.** `total`/tier come from fit only (industry 25 via
+  `data/category_aliases.yaml`, need 25, size 10, geography 10, business_model 10, data_confidence 20; A ≥ 80,
+  B ≥ 60). `contactability` (0–100: DM, best-email class, validated phone, registry, phone_confirmed, mobile)
+  and `status` (READY | CALL_ONLY | RESEARCH | DQ — phone-first: a callable row is never RESEARCH) are meta
+  factors. Profiles are pluggable (`score.register_profile`; `company` is added by company mode).
+- Hooks fire only on observed evidence: `crawled_at` set **and** pages > 0 **and** the signal key present;
+  templates say only what was seen; all hooks are exported.
+- New columns: Fit, Contactability, Status, **Next Action** (phone-first, or the outreach state when a lead is
+  enrolled), Entity Type, Lawful Basis (Email), Registry Name, Registry Match, Chain (shared domain/phone),
+  Site Status (live / redirects / not crawlable (robots) / dead / unreachable / not crawled), Email Confidence,
+  All Hooks. The Summary sheet shows the funnel (site → any email → own-domain → eligible → call-ready).
+
 ## 4. Error taxonomy
 
 | Class | Examples | Behavior | Exit code |
