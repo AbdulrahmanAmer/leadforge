@@ -70,6 +70,15 @@ class PlannedQuery:
     category: str
     area: str
     tile: Tile | None = None
+    # v0.3 (ADR-013): a query that belongs to ONE named provider (a public register such as `dvsa`) and
+    # never enters the fallback chain. The chain in cfg.discovery.providers is a fallback order for the
+    # Maps engines; registers are ADDITIVE — they must run alongside Maps, once per area, not instead of it.
+    provider: str | None = None
+
+
+# Providers that are registers of record (complete per area, no tiles, no result ceiling): each gets one
+# planned query per area in addition to the Maps plan. The Maps engines stay a fallback chain.
+ADDITIVE_PROVIDERS = ("dvsa",)
 
 
 def _area_bbox_override(area: str, cfg: Config) -> list[float] | None:
@@ -330,6 +339,12 @@ def build_plan(icp: ICP, cfg: Config) -> list[PlannedQuery]:
 
     max_tiles = max(len(t) if (t := s[2]) else 1 for s in slots)
     queries: list[PlannedQuery] = []
+    # registers first: cheap, deterministic and complete for their segment, so the register rows exist
+    # before the Maps sweep starts merging into them (db.upsert_business phone merge)
+    for prov in [p for p in cfg.discovery.providers if p in ADDITIVE_PROVIDERS]:
+        for area, suffix, _tiles in slots:
+            queries.append(PlannedQuery(text=f"{cats[0]}{suffix}", category=cats[0], area=area,
+                                        tile=None, provider=prov))
     for ti in range(max_tiles):  # tile-major rotation -> fair to categories AND areas under a cap
         for area, suffix, tiles in slots:
             if tiles is not None and ti >= len(tiles):
@@ -348,17 +363,20 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
     rather than one blended constant. cfg is optional — defaults to the config's own defaults."""
     if cfg is None:
         cfg = Config()
-    untiled = sum(1 for q in queries if not q.tile)
+    registry = sum(1 for q in queries if q.provider)
+    untiled = sum(1 for q in queries if not q.tile and not q.provider)
     tiled = sum(1 for q in queries if q.tile)
     cells = len({q.tile.bbox for q in queries if q.tile})  # distinct map cells, not tiled queries
-    est_runtime = untiled * cfg.discovery.est_min_per_query + tiled * cfg.discovery.est_min_per_tiled_query
+    est_runtime = (untiled * cfg.discovery.est_min_per_query + tiled * cfg.discovery.est_min_per_tiled_query
+                   + registry * 0.5)  # a register query is a local CSV filter: seconds, not minutes
     out = {
         "queries": len(queries),
         "tiles": cells,
         "cells": cells,
         "untiled_queries": untiled,
         "tiled_queries": tiled,
-        "est_max_results": len(queries) * 120,  # Google Maps ~120-results-per-query ceiling (docs/01 §2)
+        "registry_queries": registry,
+        "est_max_results": (untiled + tiled) * 120,  # Google Maps ~120-results-per-query ceiling (docs/01 §2)
         "est_runtime_min": round(est_runtime),
     }
     # item 6 (docs/09): plan honesty — EVERY tiled query can saturate and subdivide up to

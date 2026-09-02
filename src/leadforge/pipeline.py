@@ -91,9 +91,12 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
                 cap_reached = True
             emit_progress("discover", total_q, total_q, f"lead cap reached ({processed})")
             break
+        only = _provider_from_json(q["tile_json"])
         pq = PlannedQuery(text=q["query_text"], category="", area="",
-                          tile=_tile_from_json(q["tile_json"]))
-        listings, status, tiled_honoured = _fetch_with_chain(chain, pq, limit, warns)
+                          tile=_tile_from_json(q["tile_json"]), provider=only)
+        # a register query goes to its own provider only; everything else walks the fallback chain
+        query_chain = get_chain(cfg, only=only) if only else chain
+        listings, status, tiled_honoured = _fetch_with_chain(query_chain, pq, limit, warns)
         if status == "degraded":
             degraded += 1
         per_query_new = 0
@@ -190,7 +193,11 @@ def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str, bool]:
 def _plan_into_db(conn: sqlite3.Connection, cfg: Config, icp: ICP, run_id: str) -> None:
 
     queries = build_plan(icp, cfg)
-    db.add_queries(conn, run_id, [(q.text, q.tile.to_json() if q.tile else None) for q in queries])
+    # a register query carries {"provider": name} in tile_json (no bbox) so run_discover routes it to
+    # that provider alone; _tile_from_json returns None for it
+    db.add_queries(conn, run_id, [
+        (q.text, q.tile.to_json() if q.tile else ({"provider": q.provider} if q.provider else None))
+        for q in queries])
 
 
 def _tile_from_json(tile_json: str | None):
@@ -198,7 +205,17 @@ def _tile_from_json(tile_json: str | None):
         return None
     from leadforge.grid import Tile
 
-    return Tile.from_json(json.loads(tile_json))
+    d = json.loads(tile_json)
+    if not isinstance(d, dict) or "bbox" not in d:
+        return None  # a provider marker, not a tile
+    return Tile.from_json(d)
+
+
+def _provider_from_json(tile_json: str | None) -> str | None:
+    if not tile_json:
+        return None
+    d = json.loads(tile_json)
+    return d.get("provider") if isinstance(d, dict) else None
 
 
 # --------------------------------------------------------------------------- run (state machine)
