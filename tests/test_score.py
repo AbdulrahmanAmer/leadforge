@@ -284,12 +284,30 @@ def test_hooks_never_fire_on_a_phantom_crawl(conn, sample_icp):
     assert hits == []
 
 
+def test_hooks_never_fire_on_a_phantom_crawl_even_with_signals_populated(conn, sample_icp):
+    """v0.3 polish: `crawled_at` stamped AND `signals` fully populated (as a phantom zero-page crawl
+    can still leave stale defaults in `signals` from a prior attempt) but `pages` is 0 — checking
+    `crawled_at` + 'key present' was NOT enough; `pages` must be > 0 too, or Site Status must not
+    read 'live' and hooks must not fire on a page that was never actually fetched."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.soft = ["phone_only_booking", "weak_social_presence", "stale_site", "hiring"]
+    _seed_business(conn, website="https://x.example")
+    conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'", (json.dumps({
+        "crawled_at": "2026-01-01T00:00:00Z", "pages": 0, "socials": {},
+        "signals": {"booking_hint": False, "stale_site": True, "careers": True, "copyright_year": 2018},
+    }),))
+    scorer = Scorer(conn, sample_icp, run_id)
+    row = _row(conn, "biz_x")
+    hits = scorer._need_hits(row, json.loads(row["enrich_json"]))
+    assert hits == []
+
+
 def test_hooks_fire_with_real_evidence_and_interpolate_year(conn, sample_icp):
     run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
     sample_icp.qualify.soft = ["phone_only_booking", "weak_social_presence", "stale_site"]
     _seed_business(conn, website="https://x.example")
     conn.execute("UPDATE businesses SET enrich_json=? WHERE id='biz_x'", (json.dumps({
-        "crawled_at": "2026-01-01T00:00:00Z", "socials": {},
+        "crawled_at": "2026-01-01T00:00:00Z", "pages": 3, "socials": {},
         "signals": {"booking_hint": False, "stale_site": True, "copyright_year": 2018},
     }),))
     scorer = Scorer(conn, sample_icp, run_id)
@@ -335,3 +353,134 @@ def test_profile_registry_dispatches_default_and_account_fit(conn, sample_icp):
     _seed_business(conn)
     counts = score_run(conn, sample_icp, run_id)
     assert counts["scored"] == 1  # default dispatch still works through the registry
+
+
+def test_score_run_accepts_optional_cfg_backward_compatibly(conn, sample_icp):
+    """v0.3 polish finding 4: score_run/score_run_default/Scorer take an optional cfg (default None
+    -> the built-in policy) without breaking every existing call site that doesn't pass one."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn)
+    counts_no_cfg = score_run(conn, sample_icp, run_id)  # every pre-polish call site does this
+    assert counts_no_cfg["scored"] == 1
+    from leadforge.config import Config
+    counts_with_cfg = score_run(conn, sample_icp, run_id, Config())  # re-score the same run with a cfg
+    assert counts_with_cfg["scored"] == 1
+
+
+# --- v0.3 polish finding 2: Status is truthful for the phone-first design ----------------------
+def test_status_dq_when_hard_disqualified(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164=None)  # sample_icp.qualify.hard == ["no_phone"]
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "status").why == "DQ"
+
+
+def test_status_call_only_when_phone_validated_regardless_of_eligible_email(conn, sample_icp):
+    """Regression for the exact bug in the finding: the old gate was
+    `phone_ok and not eligibility['eligible']`, so a not-READY business with BOTH a validated phone
+    AND an eligible email fell through to the else branch and was mislabeled RESEARCH — even though
+    it was immediately callable. A validated phone means CALL_ONLY no matter what the email side
+    looks like."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, category="community centre", categories=["community centre"],  # weak fit -> tier C
+                   phone_e164="+17135550100", domain="indieauto.com")
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
+                                 tier="valid", affinity="own_domain"))  # eligible (own-domain, valid, US)
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert s.tier == "C"  # not READY on fit alone
+    assert next(f for f in s.factors if f.factor == "status").why == "CALL_ONLY"
+
+
+def test_status_research_when_neither_channel_exists(conn, sample_icp):
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.hard = []  # isolate the phone/email gap from the separate no_phone DQ rule
+    _seed_business(conn, category="community centre", categories=["community centre"], phone_e164=None)
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert s.tier != "DQ"
+    assert next(f for f in s.factors if f.factor == "status").why == "RESEARCH"
+
+
+def test_status_research_even_with_an_eligible_email_when_phone_not_validated(conn, sample_icp):
+    """Phone-first design decision (documented, not just incidental): an eligible email without a
+    validated phone still reads RESEARCH, not a 5th status — CALL_ONLY requires an actual number to
+    dial, so the lead needs a human to find/confirm one before this phone-first workflow can act."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.hard = []
+    _seed_business(conn, category="community centre", categories=["community centre"], phone_e164=None,
+                   domain="indieauto.com")
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
+                                 tier="valid", affinity="own_domain"))
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert next(f for f in s.factors if f.factor == "status").why == "RESEARCH"
+
+
+def test_status_ready_is_still_reachable(conn, sample_icp):
+    """The fourth status, for completeness alongside the three above (docs/09 §D §polish 'test all
+    four statuses') — full arithmetic already covered by test_contactability_combined_matches_the_arithmetic."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    _seed_business(conn, phone_e164="+17135550100")
+    db.add_person(conn, Person(business_id="biz_x", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.9, labeled_by="agent"))
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
+                                 tier="valid", affinity="own_domain"))
+    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
+    assert s.tier in ("A", "B")
+    assert next(f for f in s.factors if f.factor == "status").why == "READY"
+
+
+def test_scorer_threads_freemail_policy_from_cfg_not_the_hardcoded_default(conn, sample_icp):
+    """v0.3 polish finding 4: `cfg.validation.freemail_policy` must actually reach the eligibility
+    check Status's `why` explains itself with — proof it is really `self.cfg`, not the module-level
+    `_DEFAULT_POLICY`, that gets threaded through. Status itself (CALL_ONLY) is unaffected by cfg
+    either way — that invariant is finding 2's 'regardless of email eligibility' guarantee."""
+    from leadforge.config import Config
+
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    sample_icp.qualify.hard = []
+    _seed_business(conn, category="community centre", categories=["community centre"],
+                   phone_e164="+17135550100", domain="freemailer.example")
+    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="owner@gmail.com",
+                                 tier="valid", affinity="freemail_linked"))
+
+    s_default = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))  # cfg=None
+    contact_default = next(f for f in s_default.factors if f.factor == "contactability")
+    assert "email not eligible" not in contact_default.why  # 'linked' (the built-in default) is eligible
+
+    strict_cfg = Config(validation={"freemail_policy": "none"})
+    s_strict = Scorer(conn, sample_icp, run_id, cfg=strict_cfg).score_business(_row(conn, "biz_x"))
+    contact_strict = next(f for f in s_strict.factors if f.factor == "contactability")
+    status_strict = next(f for f in s_strict.factors if f.factor == "status")
+    assert "email not eligible" in contact_strict.why       # cfg was actually threaded through
+    assert status_strict.why == "CALL_ONLY"                 # status itself never depends on it
+
+
+# --- v0.3 polish finding 6: two deterministic e2e-fixture businesses, exact totals -------------
+def test_score_two_e2e_fixtures_have_exact_deterministic_totals(conn, sample_icp):
+    """Locks in the scoring arithmetic against silent regressions: every factor input is fully
+    specified and the expected total is hand-computed against scoring.default.yaml's weights
+    (industry 25, need_signals 25, size 10, geography 10, business_model 10, data_confidence 20).
+
+    Fixture A (strong fit): exact category match (25.0) + no website under a soft website_missing
+    qualifier (0.7*25=17.5) + in-band reviews (10.0) + in-area address (10.0) + independent name
+    (0.8*10=8.0) + place_id only, no registry/crawl (0.4*20=8.0) = 78.5, no negatives -> tier B.
+
+    Fixture B (weak fit): unrelated category (0.1*25=2.5) + no need signal (0.2*25=5.0) + unknown
+    review count (0.4*10=4.0) + out-of-area address (0.3*10=3.0) + franchise-y name (0.3*10=3.0,
+    plus the -25 franchise_or_chain negative) + place_id only (0.4*20=8.0) = 25.5 - 25 = 0.5 -> tier C."""
+    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
+    bA = Business(id="det_a", name="Deterministic Auto A", name_norm="deterministic auto a",
+                 dedupe_key="pid:det_a", place_id="DET_A", category="auto repair shop",
+                 categories=["auto repair shop"], source="gosom", phone_e164="+17135550100",
+                 website=None, rating=4.2, review_count=80, address_city="Houston", first_run_id="run_1")
+    db.upsert_business(conn, bA)
+    bB = Business(id="det_b", name="Acme Franchise Group", name_norm="acme franchise group",
+                 dedupe_key="pid:det_b", place_id="DET_B", category="community centre",
+                 categories=["community centre"], source="gosom", phone_e164="+17135550200",
+                 website="https://example.com", rating=3.0, review_count=None,
+                 address_city="Dallas", address_full="1 Main St, Dallas, TX 75201", first_run_id="run_1")
+    db.upsert_business(conn, bB)
+    scorer = Scorer(conn, sample_icp, run_id)
+    sA = scorer.score_business(_row(conn, "det_a"))
+    sB = scorer.score_business(_row(conn, "det_b"))
+    assert sA.total == 78.5 and sA.tier == "B"
+    assert sB.total == 0.5 and sB.tier == "C"

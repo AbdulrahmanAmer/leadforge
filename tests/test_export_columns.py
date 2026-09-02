@@ -97,6 +97,26 @@ def test_next_action_is_phone_first(tmp_path, monkeypatch):
     assert rows["Mail Garage"]["Next Action"] == "EMAIL - eligible"
 
 
+def test_next_action_shows_outreach_state_when_an_outreach_targets_row_exists(tmp_path, monkeypatch):
+    """v0.3 polish finding 5: once a lead is enrolled in a campaign, Next Action shows the live
+    outreach lifecycle state ('OUTREACH - <state>') instead of the phone-first default — even for a
+    business that would otherwise read 'CALL - named contact'."""
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    db.upsert_business(conn, Business(id="enrolled", name="Enrolled Garage", source="gosom",
+                                      dedupe_key="dk-enrolled", phone_e164="+441483123456"))
+    db.add_person(conn, Person(business_id="enrolled", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.9, labeled_by="agent"))
+    _score(conn, rid, "enrolled")
+    conn.execute(
+        "INSERT INTO outreach_targets(business_id,campaign,state,created_at,updated_at) "
+        "VALUES(?,?,?,?,?)", ("enrolled", "t", "approved", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"),
+    )
+    conn.commit()
+    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
+    row = _csv_rows(arts)[0]
+    assert row["Next Action"] == "OUTREACH - approved"
+
+
 def test_email_confidence_agrees_with_lawful_basis_on_legacy_rows(tmp_path, monkeypatch):
     """Real-data proof caught this: a pre-v0.3 contact (no `affinity` stored) showed Lawful Basis
     'b2b_legitimate_interest' but Email Confidence 'none' for the SAME address — two readings of one
@@ -201,3 +221,84 @@ def test_site_status_still_reports_dead_for_a_real_failure():
     status, dead = _site_status(enrich)
     assert status == "dead (404)"
     assert dead is True
+
+
+# --- v0.3 polish finding 3/1: the full decision table, in the order it is checked -------------
+def test_site_status_live_when_crawled_with_pages():
+    enrich = {"crawled_at": "2026-01-01T00:00:00Z", "pages": 3, "signals": {}}
+    assert _site_status(enrich) == ("live", False)
+
+
+def test_site_status_redirect_when_crawled_with_pages_and_offsite():
+    enrich = {"crawled_at": "2026-01-01T00:00:00Z", "pages": 1,
+             "signals": {"offsite_redirect": True, "final_host": "newsite.example"}}
+    assert _site_status(enrich) == ("redirects to newsite.example", False)
+
+
+def test_site_status_phantom_crawl_is_not_live():
+    """v0.3 polish finding 1: crawled_at stamped but pages=0 (the live campaign's 115 'phantom'
+    crawls) must NOT read 'live' — checking crawled_at alone was the bug."""
+    enrich = {"crawled_at": "2026-01-01T00:00:00Z", "pages": 0, "signals": {}}
+    status, dead = _site_status(enrich)
+    assert status != "live"
+    assert status == "not crawled"
+    assert dead is False
+
+
+def test_site_status_unreachable_when_attempted_but_never_crawled_and_no_error():
+    """attempted_at without crawled_at and without an error: the crawler tried and recorded
+    nothing usable back — distinct from both a real failure (has an error) and 'not crawled'
+    (was never even attempted)."""
+    enrich = {"attempted_at": "2026-01-01T00:00:00Z", "signals": {}}
+    assert _site_status(enrich) == ("unreachable", True)
+
+
+def test_site_status_not_crawled_when_nothing_recorded_at_all():
+    assert _site_status({}) == ("not crawled", False)
+
+
+# --- v0.3 polish finding 5: Summary funnel + Next Action breakdown, read back from the workbook -
+def test_summary_sheet_funnel_and_next_action_breakdown(tmp_path, monkeypatch):
+    """The Summary sheet's funnel counts and Next Action breakdown are read back from the actual
+    XLSX (openpyxl), not asserted against internals — proof the numbers a human opens are correct,
+    not just the row dicts they were built from."""
+    from openpyxl import load_workbook
+
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    # 1) call-ready: named DM + validated phone -> Next Action "CALL - named contact"
+    db.upsert_business(conn, Business(id="named", name="Named Garage", source="gosom",
+                                      dedupe_key="dk-named", phone_e164="+441483123456"))
+    db.add_person(conn, Person(business_id="named", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.9, labeled_by="agent"))
+    _score(conn, rid, "named")
+    # 2) email-eligible, own-domain, no phone -> Next Action "EMAIL - eligible"
+    db.upsert_business(conn, Business(id="mail", name="Mail Garage", source="gosom", dedupe_key="dk-mail",
+                                      website="https://mailgarage.example", domain="mailgarage.example"))
+    db.add_contact(conn, Contact(business_id="mail", kind="email", value="info@mailgarage.example",
+                                 tier="valid", affinity="own_domain"))
+    _score(conn, rid, "mail")
+    # 3) nothing at all -> Next Action "RESEARCH - no reachable channel"
+    db.upsert_business(conn, Business(id="bare", name="Bare Garage", source="gosom", dedupe_key="dk-bare"))
+    _score(conn, rid, "bare")
+
+    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["xlsx"], cfg=cfg)
+    wb = load_workbook(next(a for a in arts if a.endswith(".xlsx")))
+    ws = wb["Summary"]
+    lines = {row[0].value: row[1].value for row in ws.iter_rows(min_col=1, max_col=2) if row[0].value}
+
+    assert lines["Total leads"] == 3
+    assert lines["  With website"] == "1 (33%)"          # only "mail"
+    assert lines["  With any email"] == "1 (33%)"
+    assert lines["  With own-domain email"] == "1 (33%)"
+    assert lines["  Eligible to email"] == "1 (33%)"
+    assert lines["  Call-ready (validated phone)"] == "1 (33%)"  # only "named"
+
+    # Next Action breakdown rows: col A = "  <n>×", col B = the Next Action label — every row here
+    # has count 1 (one business per bucket), so read them as (label -> count) pairs, not a dict
+    # keyed by the count label (three rows would collide on the same "  1×" key).
+    na_counts = {row[1].value: int(str(row[0].value).strip().rstrip("×"))
+                for row in ws.iter_rows(min_col=1, max_col=2)
+                if isinstance(row[0].value, str) and row[0].value.strip().rstrip("×").isdigit()}
+    assert na_counts["CALL - named contact"] == 1
+    assert na_counts["EMAIL - eligible"] == 1
+    assert na_counts["RESEARCH - no reachable channel"] == 1

@@ -64,10 +64,15 @@ def _category_tokens(cat: str) -> set[str]:
 
 
 class Scorer:
-    def __init__(self, conn: sqlite3.Connection, icp: ICP, run_id: str):
+    def __init__(self, conn: sqlite3.Connection, icp: ICP, run_id: str, cfg: Config | None = None):
         self.conn = conn
         self.icp = icp
         self.run_id = run_id
+        # v0.3 polish: freemail_policy/require_corporate now come from the SAME cfg export.py is
+        # handed, so a campaign that overrides them in leadforge.yaml sees it reflected in Status
+        # too, not only at export time. `cfg=None` (every pre-polish call site) keeps the built-in
+        # default — backward compatible.
+        self.cfg = cfg or _DEFAULT_POLICY
         self.rubric = load_rubric(icp)
         self.wanted_cats = [c.casefold() for c in icp.target.categories]
         self.soft = set(icp.qualify.soft)
@@ -216,10 +221,13 @@ class Scorer:
 
     @staticmethod
     def _has_signal(enrich: dict, key: str) -> bool:
-        """A crawl-derived hook fires only on real evidence: the site was actually crawled AND this
-        specific signal key was computed — not just missing/defaulted-falsy (v0.3: the live campaign
-        stamped `crawled_at` on 115 'phantom' crawls with zero pages, which used to fire hooks anyway)."""
-        return bool(enrich.get("crawled_at")) and key in (enrich.get("signals") or {})
+        """A crawl-derived hook fires only on real evidence: the site was actually crawled, at least
+        one page was actually fetched, AND this specific signal key was computed — not just
+        missing/defaulted-falsy. v0.3 polish: the live campaign stamped `crawled_at` on 115 'phantom'
+        crawls with zero pages (checking `crawled_at` alone was not enough — `pages` must be > 0 too),
+        which used to fire hooks anyway."""
+        return (bool(enrich.get("crawled_at")) and (enrich.get("pages") or 0) > 0
+               and key in (enrich.get("signals") or {}))
 
     def _need_hits(self, b, enrich: dict) -> list[str]:
         hits = []
@@ -235,8 +243,8 @@ class Scorer:
             hits.append("low_rating_high_volume")
         if "few_reviews" in self.soft and (b["review_count"] or 0) < 10:
             hits.append("few_reviews")
-        if "weak_social_presence" in self.soft and "socials" in enrich and enrich.get("crawled_at") \
-                and not enrich.get("socials"):
+        if ("weak_social_presence" in self.soft and "socials" in enrich and enrich.get("crawled_at")
+                and (enrich.get("pages") or 0) > 0 and not enrich.get("socials")):
             hits.append("weak_social_presence")
         if "phone_only_booking" in self.soft and self._has_signal(enrich, "booking_hint") \
                 and not signals.get("booking_hint"):
@@ -359,18 +367,30 @@ class Scorer:
             why.append("mobile/direct number")
         pts = min(100, pts)
 
+        # v0.3 polish: freemail_policy/require_corporate now come from self.cfg (threaded from the
+        # campaign's Config, same as export.py) instead of the hardcoded default, so Status and the
+        # exported Lawful Basis can never silently diverge on a campaign that overrides them.
         eligibility = compliance.email_eligibility(
             b, contacts_filled, entity, self.icp.compliance.region_profile,
-            freemail_policy=_DEFAULT_POLICY.validation.freemail_policy,
-            require_corporate=_DEFAULT_POLICY.outreach.require_corporate,
+            freemail_policy=self.cfg.validation.freemail_policy,
+            require_corporate=self.cfg.outreach.require_corporate,
             suppressed=False, site_dead=False,
         )
+        # Phone-first status (v0.3 polish, fixes a real bug): a validated phone means CALL_ONLY
+        # REGARDLESS of email eligibility — the old `phone_ok and not eligibility["eligible"]` gate
+        # meant a not-READY business with BOTH a validated phone AND an eligible email fell through
+        # to the else branch and was mislabeled RESEARCH, even though it was immediately callable.
+        # RESEARCH is now the true fallback: no validated phone, so there is no channel ready to work
+        # yet (an eligible-but-phoneless lead still needs a human to find/confirm a number before the
+        # phone-first workflow can act on it) — it stays RESEARCH even when an eligible email exists.
         if dq:
             status = "DQ"
         elif tier in ("A", "B") and pts >= 50:
             status = "READY"
-        elif phone_ok and not eligibility.get("eligible"):
+        elif phone_ok:
             status = "CALL_ONLY"
+            if not eligibility.get("eligible"):
+                why.append(f"email not eligible ({eligibility.get('basis')}) — phone carries this lead")
         else:
             status = "RESEARCH"
         return pts, ("; ".join(why) or "no contactability signals"), status
@@ -465,21 +485,27 @@ def fill_email_affinity(contacts: list, business_domain: str | None) -> list[dic
 
 
 # ---- scoring-profile registry (v0.3 U9.D) -----------------------------------------------------
-PROFILES: dict[str, Callable[[sqlite3.Connection, ICP, str], dict]] = {}
+PROFILES: dict[str, Callable[[sqlite3.Connection, ICP, str, Config | None], dict]] = {}
 
 
-def register_profile(name: str, fn: Callable[[sqlite3.Connection, ICP, str], dict]) -> None:
+def register_profile(name: str, fn: Callable[[sqlite3.Connection, ICP, str, Config | None], dict]) -> None:
     PROFILES[name] = fn
 
 
-def score_run(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
-    """Dispatches on icp.scoring.profile via the PROFILES registry (default: 'default')."""
+def score_run(conn: sqlite3.Connection, icp: ICP, run_id: str, cfg: Config | None = None) -> dict:
+    """Dispatches on icp.scoring.profile via the PROFILES registry (default: 'default').
+
+    `cfg` is optional and backward compatible: existing call sites (cli.py, pipeline.py) that don't
+    pass one keep getting the built-in policy default (`_DEFAULT_POLICY`), exactly as before this
+    parameter existed — a campaign with a non-default leadforge.yaml should pass its real `cfg`
+    through (as export.py's call sites already do) to see freemail_policy/require_corporate
+    reflected in Status, not only at export time."""
     fn = PROFILES.get(icp.scoring.profile, score_run_default)
-    return fn(conn, icp, run_id)
+    return fn(conn, icp, run_id, cfg)
 
 
-def score_run_default(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
-    scorer = Scorer(conn, icp, run_id)
+def score_run_default(conn: sqlite3.Connection, icp: ICP, run_id: str, cfg: Config | None = None) -> dict:
+    scorer = Scorer(conn, icp, run_id, cfg=cfg)
     counts = {"scored": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0, "dq": 0}
     for b in db.all_businesses(conn):
         s = scorer.score_business(b)
@@ -671,7 +697,10 @@ def _account_status(grade: str, contactability: int, industry_match: bool, emp_r
     return "NEW"
 
 
-def score_run_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str) -> dict:
+def score_run_account_fit(conn: sqlite3.Connection, icp: ICP, run_id: str, cfg: Config | None = None) -> dict:
+    """`cfg` is accepted (unused) only so this profile matches the PROFILES registry's call
+    signature — account_fit has no freemail_policy/require_corporate inputs of its own."""
+    del cfg
     counts = {"scored": 0, "tier_a": 0, "tier_b": 0, "tier_c": 0, "tier_d": 0, "dq": 0}
     for b in db.all_businesses(conn):
         s = score_account_fit(conn, icp, run_id, b)
