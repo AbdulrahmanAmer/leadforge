@@ -64,7 +64,13 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     warns: list[str] = []
     degraded = 0
     new_count = 0
-    processed = 0
+    # item 1 (docs/09): caps.max_leads is a PER-RUN hard stop across --resume calls, not a per-call
+    # one — seed `processed` from businesses already credited to THIS run, or a cap-stopped run could
+    # scrape another max_leads worth of businesses on every subsequent --resume.
+    processed = conn.execute(
+        "SELECT COUNT(*) c FROM businesses WHERE first_run_id=?", (run_id,)
+    ).fetchone()["c"]
+    cap_reached = False
     from leadforge.grid import PlannedQuery, quarter_tile
 
     # A2: the queue grows in place when a saturated tile is subdivided, so children inserted by an
@@ -79,6 +85,8 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
         total_q = len(queue)
         emit_progress("discover", qi, total_q, q["query_text"])
         if processed >= hard_cap:
+            if processed >= icp.caps.max_leads:
+                cap_reached = True
             emit_progress("discover", total_q, total_q, f"lead cap reached ({processed})")
             break
         pq = PlannedQuery(text=q["query_text"], category="", area="",
@@ -100,6 +108,8 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             # also an MOT centre) must not consume max_leads (found live: 1000-cap run stopped at 709)
             processed += int(created)
             if processed >= hard_cap:
+                if processed >= icp.caps.max_leads:
+                    cap_reached = True
                 break
         new_count += per_query_new
 
@@ -135,7 +145,7 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
     total_biz = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
     still_pending = len(db.pending_queries(conn, run_id))
     if still_pending == 0 or processed >= hard_cap:
-        db.set_stage(conn, run_id, "discovered", businesses=total_biz)
+        db.set_stage(conn, run_id, "discovered", businesses=total_biz, cap_reached=cap_reached)
     if degraded:
         warns.append(f"{degraded} queries degraded (captcha/timeout); "
                      "run --resume retries them until the DM gate")
@@ -210,7 +220,14 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     if run_id is not None and conn.execute(
             "SELECT 1 FROM queries WHERE run_id=? AND status IN ('pending','degraded') LIMIT 1",
             (run_id,)).fetchone():
-        stage = "discovering"
+        # item 1 (docs/09): a run that stopped exactly at caps.max_leads must STAY stopped across
+        # --resume (pending/degraded queries notwithstanding) — unless the cap has since been raised
+        # past what this run has already credited, in which case there is room to keep discovering.
+        stats = json.loads(run["stats_json"]) if run else {}
+        credited = conn.execute(
+            "SELECT COUNT(*) c FROM businesses WHERE first_run_id=?", (run_id,)).fetchone()["c"]
+        if not (stats.get("cap_reached") and credited >= icp.caps.max_leads):
+            stage = "discovering"
 
     # DISCOVER
     if stage in ("planned", "discovering") or run_id is None:

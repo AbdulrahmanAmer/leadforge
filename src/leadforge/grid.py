@@ -86,6 +86,17 @@ def _area_bbox_override(area: str, cfg: Config) -> list[float] | None:
     return None
 
 
+def _nominatim_search(area: str, cfg: Config, country: str, feature_type: str | None) -> list:
+    params = {"q": area, "format": "jsonv2", "limit": 5, "countrycodes": country.lower(), "addressdetails": 1}
+    if feature_type:
+        params["featureType"] = feature_type
+    r = httpx.get(
+        NOMINATIM, params=params, headers={"User-Agent": cfg.politeness.user_agent}, timeout=15,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def geocode(area: str, cfg: Config, country: str) -> dict:
     """Resolve one area WITHIN a country -> {"lat","lng","bbox","display"} ; cached forever.
 
@@ -113,15 +124,15 @@ def geocode(area: str, cfg: Config, country: str) -> dict:
     for attempt in range(_GEOCODE_ATTEMPTS):
         time.sleep(1.0 * (attempt + 1))  # Nominatim usage policy: max 1 req/s; back off on retries
         try:
-            r = httpx.get(
-                NOMINATIM,
-                params={"q": area, "format": "jsonv2", "limit": 5, "countrycodes": country.lower(),
-                        "addressdetails": 1},
-                headers={"User-Agent": cfg.politeness.user_agent},
-                timeout=15,
-            )
-            r.raise_for_status()
-            rows = r.json()
+            # A1 review (minor), measured 2026-09-02: featureType=settlement is what makes bare city
+            # names ('Southampton', 'Reading', 'Leicester', 'Bristol') resolve to the city rather than
+            # a bus stop, a hospital, or the whole county — sent on every attempt's first try. Some
+            # areas return zero rows WITH the filter (a village too small to be tagged 'settlement',
+            # or a country whose Nominatim data doesn't classify it that way); retry once without it
+            # rather than treating "no settlement match" as this attempt's failure.
+            rows = _nominatim_search(area, cfg, country, feature_type="settlement")
+            if not rows:
+                rows = _nominatim_search(area, cfg, country, feature_type=None)
             break
         except httpx.HTTPError as e:
             # a transient blip must not kill a multi-hour tiled plan on its first area
@@ -340,7 +351,7 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
     tiled = sum(1 for q in queries if q.tile)
     cells = len({q.tile.bbox for q in queries if q.tile})  # distinct map cells, not tiled queries
     est_runtime = untiled * cfg.discovery.est_min_per_query + tiled * cfg.discovery.est_min_per_tiled_query
-    return {
+    out = {
         "queries": len(queries),
         "tiles": cells,
         "cells": cells,
@@ -349,6 +360,17 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
         "est_max_results": len(queries) * 120,  # Google Maps ~120-results-per-query ceiling (docs/01 §2)
         "est_runtime_min": round(est_runtime),
     }
+    # item 6 (docs/09): plan honesty — EVERY tiled query can saturate and subdivide up to
+    # max_subdivisions deep, each generation multiplying that one query into 4 children. The honest
+    # upper bound (never the expectation) if every tiled query fully subdivided, so cli.py's plan
+    # warning can mention it rather than silently understating a worst-case tiled sweep.
+    if tiled and cfg.discovery.subdivide_at > 0:
+        worst_case_tiled = tiled * (4 ** cfg.discovery.max_subdivisions)
+        out["est_runtime_min_max_subdivided"] = round(
+            untiled * cfg.discovery.est_min_per_query
+            + worst_case_tiled * cfg.discovery.est_min_per_tiled_query
+        )
+    return out
 
 
 def cache_plan_path(cfg: Config) -> Path:

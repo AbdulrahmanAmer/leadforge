@@ -122,6 +122,31 @@ def test_bbox_campaign_without_grid_explains_itself(cfg):
         assert "grid_mode" in str(e)  # names the switch that would make the bbox usable
 
 
+def test_plan_counts_adds_worst_case_subdivided_estimate_when_tiled(cfg):
+    """item 6 (docs/09): plan honesty — with tiled queries and subdivide_at > 0, plan_counts also
+    reports the worst-case runtime if every tiled query fully subdivided (queries x
+    4**max_subdivisions), so cli.py's plan warning can mention it. Absent for an all-untiled plan
+    (nothing to subdivide) or when subdivision is switched off (subdivide_at <= 0)."""
+    from leadforge.grid import Tile
+    cfg.discovery.est_min_per_query = 2.0
+    cfg.discovery.est_min_per_tiled_query = 4.0
+    cfg.discovery.subdivide_at = 100
+    cfg.discovery.max_subdivisions = 2
+    qs = [
+        PlannedQuery(text="a in X", category="a", area="X"),
+        PlannedQuery(text="b in Y", category="b", area="Y", tile=Tile(bbox=(0, 0, 1, 1), cell_km=3.0)),
+    ]
+    c = plan_counts(qs, cfg)
+    assert c["est_runtime_min_max_subdivided"] == round(1 * 2.0 + (1 * 4**2) * 4.0)
+
+    untiled_only = plan_counts([qs[0]], cfg)
+    assert "est_runtime_min_max_subdivided" not in untiled_only
+
+    cfg.discovery.subdivide_at = 0
+    off = plan_counts(qs, cfg)
+    assert "est_runtime_min_max_subdivided" not in off
+
+
 def test_plan_counts_reports_distinct_tiles_and_runtime(cfg, monkeypatch):
     _stub_geocode(monkeypatch)
     cfg.discovery.grid_mode = "auto"
@@ -155,6 +180,41 @@ def test_geocode_retries_transient_errors_then_succeeds(cfg, monkeypatch, tmp_pa
     monkeypatch.setattr("leadforge.grid.httpx.get", flaky)
     out = geocode("Birmingham", cfg, "GB")
     assert calls["n"] == 3 and out["bbox"] == [-2.0, 52.4, -1.8, 52.55]
+
+
+def test_geocode_sends_settlement_featuretype_then_retries_without_it_on_zero_rows(cfg, monkeypatch):
+    """A1 review (minor), measured 2026-09-02: featureType=settlement is sent on the first try
+    (it is what makes bare city names resolve to the city instead of a bus stop/hospital/whole
+    county) — but must NOT be treated as a hard requirement: a zero-row settlement search retries
+    once without the filter before this attempt counts as failed."""
+    from leadforge.grid import geocode
+    monkeypatch.setattr("leadforge.grid.time.sleep", lambda s: None)
+    calls: list[dict] = []
+
+    class _R:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._rows
+
+    def _get(url, params=None, headers=None, timeout=None):
+        calls.append(dict(params))
+        if params.get("featureType") == "settlement":
+            return _R([])  # zero rows WITH the settlement filter
+        return _R([{"boundingbox": ["50.9", "50.95", "-1.45", "-1.35"], "lat": "50.90", "lon": "-1.4",
+                    "display_name": "Southampton, England, UK", "importance": 0.7,
+                    "addresstype": "city", "address": {"city": "Southampton"}}])
+
+    monkeypatch.setattr("leadforge.grid.httpx.get", _get)
+    out = geocode("Southampton", cfg, "GB")
+    assert out["display"] == "Southampton, England, UK"
+    assert len(calls) == 2
+    assert calls[0]["featureType"] == "settlement"
+    assert "featureType" not in calls[1]
 
 
 def test_geocode_gives_up_with_a_useful_message(cfg, monkeypatch):
