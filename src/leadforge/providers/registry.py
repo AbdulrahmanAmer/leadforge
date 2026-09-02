@@ -167,7 +167,8 @@ class CompaniesHouseRegistry:
                     role = _humanize(str(off.get("officer_role") or "officer"))
                     person = Person(business_id=business_row["id"],
                                     name=natural_name(str(off.get("name") or "")).title(),
-                                    title=role, labeled_by="registry", is_dm=0, source_url=profile_url)
+                                    title=role, labeled_by="registry", is_dm=0, source_url=profile_url,
+                                    origin="registry")
                     ev = Evidence(business_id=business_row["id"], ref_table="people", fact="registry_officer",
                                   url=profile_url, snippet=f"{role} — appointed {off.get('appointed_on', '?')}",
                                   observed_at=now_iso())
@@ -221,11 +222,14 @@ class OpenCorporatesRegistry:
                 if not _locality_overlap(addr | {"address": {}}, business_row):
                     continue
                 title = comp.get("name") or ""
-                if title and name_similarity(name_norm, title) < self.min_similarity:
-                    continue  # same-locality, unrelated company
+                # fail closed like Companies House: a hit with no name at all can never clear the
+                # similarity gate (name_similarity(x, "") is always 0.0), so this is never skipped —
+                # a missing name is exactly the case that must be rejected, not waved through.
+                if name_similarity(name_norm, title) < self.min_similarity:
+                    continue  # same-locality, unrelated (or nameless) company
                 status = str(comp.get("current_status") or "").casefold()
-                if self.active_only and status and status != "active":
-                    continue  # dissolved/liquidated — reject where the data says so
+                if self.active_only and status != "active":
+                    continue  # dissolved/liquidated, OR status unknown — fail closed like CH's profile gate
                 url = comp.get("opencorporates_url") or ""
                 for off in (comp.get("officers") or []):
                     o = off.get("officer") or {}
@@ -234,7 +238,8 @@ class OpenCorporatesRegistry:
                     role = _humanize(str(o.get("position") or "officer"))
                     person = Person(business_id=business_row["id"],
                                     name=natural_name(str(o.get("name") or "")).title(),
-                                    title=role, labeled_by="registry", is_dm=0, source_url=url)
+                                    title=role, labeled_by="registry", is_dm=0, source_url=url,
+                                    origin="registry")
                     ev = Evidence(business_id=business_row["id"], ref_table="people", fact="registry_officer",
                                   url=url, snippet=f"{role} — {o.get('start_date', '?')}", observed_at=now_iso())
                     out.append((person, ev))

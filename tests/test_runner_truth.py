@@ -110,6 +110,105 @@ def test_own_domain_email_lands_own_domain_with_validated_tier(cfg, conn, monkey
     assert counts["emails_valid"] == 1
 
 
+# --- v0.3 polish (finding 1): a person named for the FIRST TIME on THIS crawl must still link -----
+def test_freemail_linked_to_a_person_first_named_on_this_same_crawl(cfg, conn, monkeypatch):
+    """Regression for the insert-order bug: _persist used to read existing people names BEFORE
+    inserting this crawl's own res['people'], so a freemail box matching a person named for the
+    first time on THIS SAME crawl (nothing in the DB yet) was misclassified freemail_unlinked purely
+    because of insert order. The business name ("Abbey Service Centre") shares no token with
+    "hoggarth", so a pass here can only come through the person-candidate link path, not the
+    business-name link path -- isolating exactly the mechanism this test is regression-covering."""
+    monkeypatch.setattr(runner, "validate_email", lambda email, label, c: ("valid", {}))
+    b = _biz_row(conn, "b1", "Abbey Service Centre", domain="abbeyservice.co.uk",
+                website="http://abbeyservice.co.uk")
+    email = "johnhoggarth@live.co.uk"
+    res = _res(True, emails={email: {"label": "personal", "url": "http://abbeyservice.co.uk",
+                                     "context": f"Contact John Hoggarth, our workshop manager, at {email}."}})
+    res["people"] = [PersonCandidate(name="John Hoggarth", title="Workshop Manager",
+                                     snippet="John Hoggarth, our workshop manager", source_url=b["website"])]
+    # sanity: nothing pre-exists in the DB for this business — the link must come from THIS crawl
+    assert db.people_for(conn, "b1") == []
+    counts = _counts()
+    runner._persist(conn, cfg, b, res, counts)
+    contact = conn.execute("SELECT * FROM contacts WHERE business_id='b1' AND value=?", (email,)).fetchone()
+    assert contact["affinity"] == "freemail_linked", (
+        f"expected freemail_linked via this crawl's own person candidate, got {contact['affinity']!r}"
+    )
+    assert contact["tier"] == "valid"  # linked freemail keeps its real tier, unlike freemail_unlinked
+
+
+# --- v0.3 polish (finding 2): crawler.crawl must be called WITH business_domain in production -----
+def test_process_one_passes_business_domain_to_crawler_and_signals_persist(cfg, conn, monkeypatch):
+    """Regression: _process_one used to call crawler.crawl(website) with no business_domain, so
+    crawl()'s own signals (final_host / offsite_redirect / http_status) were never computed for
+    real in production — offsite_redirect stayed permanently absent/False no matter what the site
+    actually did. A stub SiteCrawler records what business_domain it was actually given; a
+    following _persist call proves the resulting signals reach the DB, not just runner's dict."""
+    from leadforge.enrich.crawler import CrawlResult
+    from leadforge.enrich.crawler import Page as CrawlerPage
+    calls: dict = {}
+
+    class FakeCrawler:
+        def __init__(self, cfg_, throttle_):
+            pass
+
+        def crawl(self, website, business_domain=None):
+            calls["website"] = website
+            calls["business_domain"] = business_domain
+            page = CrawlerPage(website, "<html><body>Acme Garage</body></html>", "Acme Garage")
+            return CrawlResult(ok=True, pages=[page], needs_browser=False,
+                               signals={"https": True, "status": 200, "http_status": 200,
+                                        "final_host": "acmegarage.test", "offsite_redirect": False},
+                               error="")
+
+        def close(self):
+            pass
+
+        def _allowed(self, url):
+            return True
+
+    monkeypatch.setattr(runner, "SiteCrawler", FakeCrawler)
+    monkeypatch.setattr(runner, "validate_email", lambda email, label, c: ("valid", {}))
+    b = _biz_row(conn, "b1", "Acme Garage", domain="acmegarage.test", website="http://acmegarage.test")
+    out = runner._process_one(cfg, None, b)
+    assert calls["business_domain"] == "acmegarage.test", (
+        "crawler.crawl() must be called with business_domain=b['domain'], not omitted — the kwarg "
+        f"actually received was {calls.get('business_domain')!r}"
+    )
+    counts = _counts()
+    runner._persist(conn, cfg, b, out, counts)
+    enrich = json.loads(conn.execute("SELECT enrich_json FROM businesses WHERE id='b1'").fetchone()["enrich_json"])
+    assert enrich["signals"]["final_host"] == "acmegarage.test"
+    assert enrich["signals"]["offsite_redirect"] is False
+    assert enrich["signals"]["http_status"] == 200
+
+
+# --- v0.3 polish (finding 3): mailto-only evidence falls back to anchor + parent text --------------
+def test_mailto_only_evidence_snippet_falls_back_to_anchor_parent_text():
+    """When the address never appears in the page's extracted TEXT (an icon-only mailto anchor with
+    no visible link text, inside a block trafilatura's own text extraction drops as boilerplate),
+    the evidence snippet must fall back to the anchor's own text plus its parent element's text —
+    not silently re-store the bare address, which proves nothing beyond 'this looks like an email'."""
+    from leadforge.enrich import runner as r
+    html = ('<div class="contact-block"><p>Have a question? '
+            '<a href="mailto:sales@example.test" class="icon-envelope" aria-label="Email"></a> '
+            'our friendly team any time.</p></div>')
+    email = "sales@example.test"
+    text = ""  # simulates the address never surfacing in trafilatura's extracted text
+    snippet = r._email_evidence(html, text, email)
+    assert snippet != email
+    assert len(snippet) > 40, f"evidence snippet too short to prove anything beyond the address: {snippet!r}"
+    assert "question" in snippet.casefold()
+
+
+def test_mailto_only_evidence_snippet_no_matching_anchor_falls_back_to_bare_address():
+    """No mailto anchor for this address anywhere in the HTML (e.g. it came from AT_DOT_RE text
+    obfuscation, not markup) -> the bare address is the honest answer, not an error."""
+    from leadforge.enrich import runner as r
+    assert r._email_evidence("<html><body>no mailto here</body></html>", "", "ghost@example.test") \
+        == "ghost@example.test"
+
+
 def test_heuristic_person_row_gets_origin_heuristic(cfg, conn, monkeypatch):
     monkeypatch.setattr(runner, "validate_email", lambda email, label, c: ("valid", {}))
     b = _biz_row(conn, "b1", "Acme Garage", domain="acmegarage.test", website="http://acmegarage.test")
