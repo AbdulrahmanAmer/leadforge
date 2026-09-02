@@ -113,6 +113,51 @@ def test_subdivision_children_use_same_query_text_and_parent_stays_marked_done(c
     assert all(r["status"] == "done" for r in rows)  # nothing left pending after one full pass
 
 
+def test_subdivision_children_persisted_before_a_crash_are_picked_up_by_a_later_resume(cfg, monkeypatch):
+    """A2: 'persisted before the parent is marked finished ... idempotent on resume' means a child
+    inserted by one run_discover call but never fetched (the process died right after insertion)
+    must still be found and fetched by the NEXT run_discover call for the same run_id — no special
+    subdivision-aware resume logic exists or is needed, because it is just another pending query."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    fetched_texts: list[str] = []
+
+    @register
+    class FakeCrashResumeA2(DiscoveryProvider):
+        name = "fakecrashresume_a2"
+        supports_tiles = True
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            fetched_texts.append(f"{query.text}@depth{query.tile.depth}")
+            return []
+
+    icp = _minimal_icp()
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    parent = Tile(bbox=(-2.4, 53.3, -2.0, 53.6), cell_km=5.0, depth=0)
+    db.add_queries(conn, run_id, [("shops in Manchester", parent.to_json())])
+    parent_id = conn.execute("SELECT id FROM queries WHERE run_id=?", (run_id,)).fetchone()["id"]
+    db.finish_query(conn, parent_id, "done", 100)  # the parent's own fetch already happened...
+    # ...and the crash happened right after its children were persisted (docs/09 A2 ordering) but
+    # before this process got to fetch them — simulated directly, the same state a real crash leaves.
+    child = Tile(bbox=(-2.4, 53.3, -2.2, 53.45), cell_km=2.5, depth=1)
+    db.add_queries(conn, run_id, [("shops in Manchester", child.to_json())])
+
+    from leadforge.pipeline import run_discover
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="fakecrashresume_a2")
+
+    assert fetched_texts == ["shops in Manchester@depth1"]  # only the still-pending child was fetched
+    conn = db.connect(cfg.db_path)
+    pending = conn.execute("SELECT COUNT(*) c FROM queries WHERE run_id=? AND status='pending'",
+                           (run_id,)).fetchone()["c"]
+    assert pending == 0
+
+
 # --------------------------------------------------------------------------------------- A3
 def test_resume_completes_discovery_from_exported_stage_with_pending_queries(cfg, monkeypatch):
     """docs/09 A3: the live campaign's run sat at stage 'exported' with 18 queries still pending.
