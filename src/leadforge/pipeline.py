@@ -17,6 +17,7 @@ from leadforge.doctor import ensure_ready
 from leadforge.grid import build_plan
 from leadforge.models import ICP
 from leadforge.normalize import to_business
+from leadforge.providers import base as providers_base
 from leadforge.providers.base import get_chain
 from leadforge.util import (
     LOG,
@@ -105,6 +106,9 @@ def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None
             biz = to_business(raw, run_id, icp, icp.target.geography.country or cfg.default_region)
             if biz is None:
                 continue
+            enrich_fn = getattr(providers_base.PROVIDERS.get(raw.provider), "enrich_for", None)
+            if enrich_fn:
+                biz.enrich.update(enrich_fn(raw.data))
             if db.is_suppressed(conn, biz.domain, biz.place_id):
                 continue
             _bid, created = db.upsert_business(conn, biz)
@@ -253,6 +257,9 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         run_id, dcounts, dwarn = run_discover(cfg, icp, icp_path, limit=limit, run_id=run_id)
         warns += dwarn
         stage = db.latest_run(conn, icp.icp_hash())["stage"]
+        if getattr(icp.target, "mode", "local_business") == "company":
+            from leadforge.enrich.resolve_domain import run_resolve
+            run_resolve(conn, cfg, limit or icp.caps.max_sites)
 
     conn = db.connect(cfg.db_path)  # refresh connection view
 

@@ -119,3 +119,38 @@ What it adds per lead: employee estimate + band (50-500 = target), departments d
 industry-specific buying triggers with freshness banding, and a separate Contactability (0-100) and
 Data Confidence (0-100) score. Hard rule inherited from the spec: unknown facts never disqualify;
 only CONFIRMED negatives do (e.g. a stated headcount under 20).
+
+## Company mode (Companies House, not Google Maps) — docs/09 Wave 2 H
+
+Set `target.mode: company` when the brief is "find UK-registered companies matching these SIC codes",
+not "find local businesses near a place" — most naturally GainLev's own client-acquisition pipeline,
+but usable for any UK B2B prospecting run. Full worked example: `config/icp.company.example.yaml`.
+
+What's different from the default `local_business` mode:
+
+- **Targeting is by UK SIC code, not Maps category phrasing.** `target.sic_codes` (>= 1 five-digit
+  code, e.g. `"62012"`) replaces `target.categories` as the thing that actually selects businesses —
+  categories may be left `[]` in company mode. `target.geography.areas` is still required (Companies
+  House advanced-search needs a location string; a bbox alone isn't usable here) and `country` must be
+  `GB` — the API only covers UK-registered companies.
+- **Discovery provider**: set `discovery: { providers: [companies_house] }` in `leadforge.yaml`
+  (workspace config, not the ICP) and `registry: { companies_house_key: "<key>" }` — the same free key
+  from https://developer.company-information.service.gov.uk that the registry cross-check already uses.
+  Query plan is (SIC-code shards of <=5 codes) x areas — see `leadforge.company.build_company_plan`.
+- **Scoring**: `scoring.profile` is set to `company` automatically by intake when target.mode is
+  `company` and no profile was set explicitly. The rubric is SIC overlap with your target list
+  (industry_fit), incorporation-age banding (a 3-10y-old company scores highest — established but still
+  growable), a new-director trigger (an officer appointed within the last 12 months — often means fresh
+  budget/priorities), a hiring signal (careers page detected on the crawled site), whether a domain was
+  resolved for the company at all, and data confidence. Contactability and a plain-language status note
+  are separate, informational — they don't move the Score/Tier. No review-count sizing (Companies House
+  doesn't have reviews) and no chain/group penalty (a subsidiary is not disqualifying here).
+- **No website field exists on a Companies House record** — `leadforge.enrich.resolve_domain` guesses
+  candidate domains from the registered legal name (minus "Limited"/"Ltd"/etc.) and verifies each by
+  actually fetching it (robots.txt + politeness delay respected, same as every other crawl) and
+  requiring the registered postcode, the legal name, or the company number to appear on the page. No
+  search engines, no paid lookups (ADR-012) — every candidate is a guess made from public registry
+  data and checked directly, never assumed.
+- **`GAINLEV_ICP_SIC`** (`leadforge/company.py`) is the curated "everyone who sells B2B" list this
+  example ICP uses — agencies, SaaS, consultancies, recruiters, wholesalers, estate/letting agents,
+  accountants, solicitors — deliberately excluding `82200` (call centres, owner decision 7).

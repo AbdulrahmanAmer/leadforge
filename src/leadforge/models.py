@@ -10,7 +10,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------- intake / ICP
 HARD_QUALIFIERS = {"franchise_or_chain", "no_phone", "no_website_hard", "closed_or_unverified"}
@@ -79,17 +79,51 @@ class SizeBand(BaseModel):
 
 
 class Target(BaseModel):
+    # mode is declared before categories/sic_codes so their field_validators can see it via
+    # ValidationInfo.data (pydantic v2 only exposes already-validated, earlier-declared fields).
+    mode: Literal["local_business", "company"] = "local_business"
     categories: list[str]
     geography: Geography
     size: SizeBand = Field(default_factory=SizeBand)
+    # company mode only (Unit H, docs/09 Wave 2 H): Companies House advanced-search targeting.
+    sic_codes: list[str] = Field(default_factory=list)
+    incorporated_from: str | None = None
+    incorporated_to: str | None = None
 
     @field_validator("categories")
     @classmethod
-    def _cats(cls, v: list[str]) -> list[str]:
+    def _cats(cls, v: list[str], info) -> list[str]:
         v = [c.strip() for c in v if c.strip()]
+        # company mode targets by SIC code, not Maps-style category phrasing — categories may be empty.
+        if (info.data or {}).get("mode") == "company":
+            return v
         if not 1 <= len(v) <= 20:
             raise ValueError("1-20 categories required")
         return v
+
+    @field_validator("sic_codes")
+    @classmethod
+    def _sic_codes(cls, v: list[str]) -> list[str]:
+        cleaned = [str(c).strip() for c in v if str(c).strip()]
+        for c in cleaned:
+            if not (len(c) == 5 and c.isdigit()):
+                raise ValueError(f"sic code '{c}' must be a 5-digit UK SIC code (e.g. '62012'), got '{c}'")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _company_mode_requirements(self) -> Target:
+        if self.mode == "company":
+            if not self.sic_codes:
+                raise ValueError(
+                    "target.mode 'company' requires >= 1 five-digit target.sic_codes entry "
+                    "(see icp-guide.md company-mode section)"
+                )
+            if not self.geography.areas:
+                raise ValueError(
+                    "target.mode 'company' requires >= 1 target.geography.areas entry — Companies House "
+                    "advanced-search needs a location string, a bbox alone is not usable"
+                )
+        return self
 
 
 class Qualify(BaseModel):

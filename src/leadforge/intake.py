@@ -34,6 +34,7 @@ def compile_icp(answers_path: Path, out_path: Path) -> tuple[ICP, list[str]]:
         raise InputError(_fmt_validation(e)) from e
 
     icp = ICP.model_validate(answers.model_dump())
+    _activate_company_mode(icp)
 
     # Hooks are gated on qualify.soft — an ICP that lists none gets an empty "Likely Need" column.
     # Seed offer-agnostic defaults so every campaign produces hooks unless the user opts out.
@@ -65,11 +66,18 @@ def _preflight(raw: dict) -> list[str]:
     if not raw.get("offer", {}).get("what"):
         errs.append("missing 'offer.what' (one sentence: what is being sold)")
     target = raw.get("target", {})
-    if not target.get("categories"):
+    is_company = target.get("mode") == "company"
+    if not is_company and not target.get("categories"):
         errs.append("missing 'target.categories' (1-5 business types, Maps-style phrasing)")
+    if is_company and not target.get("sic_codes"):
+        errs.append("missing 'target.sic_codes' (>=1 five-digit UK SIC code — see icp-guide.md "
+                    "company-mode section); target.categories may be empty in company mode")
     geo = target.get("geography", {})
     if not geo.get("areas") and not geo.get("bbox"):
         errs.append("missing 'target.geography.areas' (or a bbox)")
+    if is_company and not geo.get("areas"):
+        errs.append("target.mode 'company' requires 'target.geography.areas' — Companies House "
+                    "advanced-search needs a location string, a bbox alone is not usable")
     if not geo.get("country"):
         errs.append(
             "missing 'target.geography.country' — ASK THE USER which country (ISO2, e.g. US/GB/EG). "
@@ -102,7 +110,35 @@ def _warnings(icp: ICP) -> list[str]:
             w.append("UK campaign: a free Companies House key adds registry-verified directors — "
                      "get one at https://developer.company-information.service.gov.uk then run: "
                      "leadforge config set registry.companies_house_key <KEY>")
+    if icp.target.mode == "company":
+        w.append("company mode: set discovery.providers: [companies_house] in leadforge.yaml so "
+                 "discovery uses the Companies House advanced-search provider (not gosom/Maps)")
+        excluded = [c for c in icp.target.sic_codes if c == "82200"]
+        if excluded:
+            w.append("target.sic_codes includes 82200 (call centres) — owner decision 7 excludes it "
+                     "from GAINLEV_ICP_SIC by default; the provider will drop any company matched only "
+                     "via an excluded SIC code")
     return w
+
+
+def _activate_company_mode(icp: ICP) -> None:
+    """Company mode needs two side effects that happen nowhere else on a resumed run (one that skips
+    straight to scoring and never calls grid.build_plan, the only other place a company-mode ICP would
+    otherwise get its provider/profile wired up):
+
+    1. Importing leadforge.company registers the "company" scoring profile via score.register_profile
+       (see company.py) and, as a side effect of that import, the companies_house discovery provider
+       registers itself with providers.base (its @register decorator runs on import).
+    2. An ICP left on the default scoring profile is switched to "company" here — company-mode
+       campaigns almost never set scoring.profile explicitly, and the default rubric (Maps
+       category/geography fit) does not apply to a Companies House business at all. An ICP that
+       explicitly requests a different profile (e.g. a future company-mode variant) is left alone.
+    """
+    if icp.target.mode != "company":
+        return
+    import leadforge.company  # noqa: F401
+    if icp.scoring.profile == "default":
+        icp.scoring.profile = "company"
 
 
 def _fmt_validation(e: Exception) -> str:
@@ -122,6 +158,8 @@ def load_icp(icp_path: Path) -> ICP:
         raise InputError(f"icp file not found: {icp_path} (run `leadforge intake` first)")
     raw = yaml.safe_load(icp_path.read_text(encoding="utf-8")) or {}
     try:
-        return ICP.model_validate(raw)
+        icp = ICP.model_validate(raw)
     except Exception as e:  # noqa: BLE001
         raise InputError(_fmt_validation(e)) from e
+    _activate_company_mode(icp)
+    return icp
