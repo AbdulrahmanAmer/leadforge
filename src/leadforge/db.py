@@ -7,6 +7,10 @@ events), an outcomes table for the phone/email feedback loop, `suppression.sourc
 `people.origin` (where a candidate came from, kept when the agent labels it) and `contacts.affinity`
 (own_domain | freemail_linked | freemail_unlinked). Registry rows (DVSA, Companies House) merge into the
 Maps row that carries the same E.164 phone.
+
+Schema v3 (v0.4 "autopilot" unit B, ADR-015): `messages.author` — 'agent' (headless Claude Code
+runner or an interactive drafting session) vs 'template' (the deterministic fallback drafter),
+so an exported sheet can show provenance for a draft nobody reviewed with an LLM in the loop.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ from pathlib import Path
 from leadforge.models import Business, Contact, Evidence, Person, Score
 from leadforge.util import now_iso, sha1_hex
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -109,7 +113,7 @@ CREATE TABLE IF NOT EXISTS messages (
   grade TEXT DEFAULT '', used_fact TEXT DEFAULT '', approved_by TEXT DEFAULT '', approved_at TEXT,
   approved_hash TEXT DEFAULT '', queued_at TEXT, sent_at TEXT, mailbox_id INTEGER,
   message_id_header TEXT DEFAULT '', provider_message_id TEXT DEFAULT '', error TEXT DEFAULT '',
-  created_at TEXT, updated_at TEXT
+  author TEXT DEFAULT 'agent', created_at TEXT, updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_state ON messages(state);
 
@@ -133,6 +137,11 @@ _V2_COLUMNS = {
     "contacts": [("affinity", "TEXT DEFAULT ''")],
 }
 
+# columns added by v3 (v0.4 unit B) on tables that existed pre-v3 (CREATE IF NOT EXISTS cannot add them)
+_V3_COLUMNS = {
+    "messages": [("author", "TEXT DEFAULT 'agent'")],
+}
+
 
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -153,7 +162,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     row = cur.fetchone()
     if row is None:
         conn.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)", (str(SCHEMA_VERSION),))
-    elif int(row[0]) < 2:
+        conn.commit()
+        return
+
+    version = int(row[0])
+    if version < 2:
         # v1 -> v2: additive columns only (the new tables came from executescript above). A column that
         # already exists (partial earlier migration) is skipped, so this is safe to re-run.
         for table, cols in _V2_COLUMNS.items():
@@ -162,7 +175,19 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if name not in have:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         conn.execute("UPDATE people SET origin=labeled_by WHERE origin='' OR origin IS NULL")
-        conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+        version = 2
+    if version < 3:
+        # v2 -> v3 (v0.4 unit B): messages.author, so a template-fallback draft is distinguishable
+        # from an agent-written one in the exported sheet. Additive + re-runnable, same pattern as
+        # v1->v2 above; a v1 DB runs this step too, right after the v2 step just above.
+        for table, cols in _V3_COLUMNS.items():
+            have = _columns(conn, table)
+            for name, decl in cols:
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        version = 3
+    if version != int(row[0]):
+        conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(version),))
     conn.commit()
 
 
