@@ -189,3 +189,12 @@ persistent browser, known-CID skip, details only for new places, discovery.paral
 branch — fail-fast tail, browser gate 4, workers 12, overlapped registry/validate stages, DNS pool, bench_enrich.py.
 NEXT: merge both, `scripts/bench_speed.py` end-to-end on a copy (target: 1,000 enriched+scored rows < 60 min),
 then register-density adaptive tiling; gosom demoted to fallback. Research results: tasks/wnxprvm3w.output.
+
+**Measured paces 2026-09-03 (scripts/bench_speed.py baseline, Nottingham, dvsa+maps_list, 2 browsers):**
+discover 352 businesses in 46 s (0.13 s/item); enrich 40 sites in 200 s at 4 workers/6 pages (5.0 s/site ->
+83 min per 1,000; the enrich builder on branch `speed-enrich` targets <= 2 s/site); registry 2.1 s/business ->
+35 min per 1,000, bounded by Companies House 600 req/5 min (~2.5 calls/business: search+profile+officers; a
+later cut = advanced-search by name+postcode returns status directly, saving the profile call); score+export
+seconds. Fixed today on master: two-way phone merge + `dedupe` repair (1913e87), DVSA facts persisted, registry
+jurisdiction gate now maps 'United Kingdom' -> GB (37c53b0; DVSA/maps_list rows were silently skipped before),
+maps_list merged (ed61148, ADR-014). Live 2-browser proof: 4 queries -> 281 unique businesses in 141 s, 0 blocks.
