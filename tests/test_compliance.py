@@ -94,3 +94,14 @@ def test_name_gate_requires_active_similar_and_corroborated():
     assert not c.name_allowed(reg, {"registry_profile": {"company_status": "dissolved", "match_similarity": 0.9}}, 2)
     assert not c.name_allowed(reg, {"registry_profile": {"company_status": "active", "match_similarity": 0}}, 2)
     assert c.name_allowed(heur, {}, corroborations=0)  # a site-sourced name needs no registry gate
+
+
+
+def test_next_action_stays_phone_first_while_a_draft_is_only_drafted():
+    """v0.4: autopilot drafts for every A/B target; the sheet must still say CALL first."""
+    from leadforge.compliance import NEXT_CALL_NAMED, next_action
+    elig = {"eligible": True, "basis": "legitimate_interest"}
+    assert next_action(phone_validated=True, has_dm=True, eligibility=elig, outreach_state="enrolled") == NEXT_CALL_NAMED
+    drafted = next_action(phone_validated=True, has_dm=True, eligibility=elig, outreach_state="drafted")
+    assert drafted.startswith(NEXT_CALL_NAMED) and "draft ready" in drafted
+    assert next_action(phone_validated=True, has_dm=True, eligibility=elig, outreach_state="sent") == "OUTREACH - sent"

@@ -143,23 +143,33 @@ NEXT_RESEARCH = "RESEARCH - no reachable channel"
 NEXT_DQ = "SKIP - disqualified"
 
 
+PRE_SEND_STATES = {"enrolled", "drafted"}  # nothing has been sent or approved yet
+
+
 def next_action(*, phone_validated: bool, has_dm: bool, eligibility: dict, tier: str = "",
                 outreach_state: str | None = None) -> str:
     """Phone-first ordering (owner decision 2). An existing outreach state wins so the sheet shows
     where a lead actually is in the sequence."""
-    if outreach_state:
+    # v0.4 autopilot: a target that is merely enrolled or drafted has had NO contact yet, so the
+    # phone-first guidance still applies (live 2026-09-03: every drafted row read "OUTREACH - drafted"
+    # and the call-first instruction vanished from the sheet). Only a state past approval wins.
+    if outreach_state and outreach_state not in PRE_SEND_STATES:
         return f"OUTREACH - {outreach_state}"
     if tier == "DQ":
-        return NEXT_DQ
-    if phone_validated and has_dm:
-        return NEXT_CALL_NAMED
-    if phone_validated:
-        return NEXT_CALL_SWITCHBOARD
-    if eligibility.get("eligible"):
-        return NEXT_EMAIL
-    if eligibility.get("basis") in (BASIS_CONFIRM, BASIS_CONSENT):
-        return NEXT_EMAIL_CONFIRM
-    return NEXT_RESEARCH
+        base = NEXT_DQ
+    elif phone_validated and has_dm:
+        base = NEXT_CALL_NAMED
+    elif phone_validated:
+        base = NEXT_CALL_SWITCHBOARD
+    elif eligibility.get("eligible"):
+        base = NEXT_EMAIL
+    elif eligibility.get("basis") in (BASIS_CONFIRM, BASIS_CONSENT):
+        base = NEXT_EMAIL_CONFIRM
+    else:
+        base = NEXT_RESEARCH
+    if outreach_state == "drafted" and tier != "DQ":
+        return f"{base} (email draft ready)"
+    return base
 
 
 def name_allowed(person: Any, enrich: dict, corroborations: int) -> bool:

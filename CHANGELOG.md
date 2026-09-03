@@ -41,7 +41,15 @@ own Claude Code in headless print mode (`claude -p`, auto-detected on PATH, disa
 - **Dashboard.** The "dm labeling" row now says autopilot is in play; a new "drafting" row shows how many
   messages have been drafted so far.
 - Config: `agent: {command, model, timeout_s, batch, max_batches}`, `pipeline: {autopilot}`,
-  `draft: {auto, auto_purpose, auto_tiers, auto_max, template_fallback}`.
+  `draft: {auto, auto_purpose, auto_tiers, auto_max, template_fallback, retries}`.
+- **Drafting tuned on a live batch (benchmark copy, 2026-09-03).** First pass: 1 of 10 agent drafts passed the
+  gate (uncited facts, possessives of the business name). Now: the gate accepts a possessive of a packet name
+  ("Arnold Service Centre's") and a capitalised fragment glued to a digit ("1STOP"), `DRAFT_INSTRUCTIONS` spell
+  out the gate's rules and a style rule (a specific subject hook, varied openings), a rejected draft is retried
+  once with the gate's reasons attached (`draft.retries`, default 1) before the template fallback takes over,
+  and a draft that quotes a fact verbatim but forgets `used_fact` gets the citation inferred (only ever from a
+  value present in the text, so nothing invented can pass). Result: 11 of 12 accepted, 0 rejected, 1 abstained,
+  27 s per 12-packet Sonnet batch; labeling: 40 businesses in 50 s, 36 picked, 4 declined.
 
 ### Changed
 - `leadforge run` gains `--autopilot` / `--no-autopilot` (default: `pipeline.autopilot`).

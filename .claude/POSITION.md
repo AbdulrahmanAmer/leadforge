@@ -251,3 +251,27 @@ Design decided and written to the builders contract:
   C export, D pipeline+dm auto-label+docs+0.4.0 bump). Merge order after reports: A, B, C, D; then full gate; push.
 NOT DONE: merge, gate, live proof (plan: copy bench-after2 DB, set stage scored, `run --resume` -> drafts in sheet),
 then the campaign run picks it up at its dm_pending pause with `run --resume`.
+
+## POSITION — 2026-09-03 ~07:40, AUTOPILOT: A/B/C MERGED + LIVE-TUNED, D IN FLIGHT (sweep pid 16480 still discovering)
+
+Merged into master: A 3b43e6c (agent_runner + config), C 28443bf (Draft columns + Drafts sheet), B ef47941 (draft
+service, template drafter, schema v3). Post-merge fixes a82b4c3 + 30aa126: gate tolerates possessives of packet
+names and digit-glued fragments (1STOP), DRAFT_INSTRUCTIONS spell out the gate rules + style, one gated retry
+carrying the reasons (draft.retries=1), template fallback for what still fails, `infer_used_fact` when the model
+quotes a fact but forgets to cite it. LIVE on the benchmark copy (scratchpad/autopilot/live-proof, 356 scored):
+first pass 1/10 accepted -> now 11/12 accepted, 0 rejected, 1 abstained, 27 s per 12-packet sonnet batch.
+Gate script now asserts db.SCHEMA_VERSION (3), not "2". Builder D (pipeline wiring, dm auto-label, docs, 0.4.0)
+still running in .claude/worktrees/agent-a15b7cb9ff544120b. NEXT: merge D, full gate, live proof `run --resume`
+on the copy (stage discovered -> labeling -> scoring -> drafting -> exported with drafts in the sheet), push.
+
+## POSITION — 2026-09-03 ~09:05, AUTOPILOT MERGED (198cef1) + LIVE E2E PROVEN; gate suite 2 red (names pending)
+
+D merged (ee09cc6 via 198cef1). LIVE E2E on the benchmark copy: `leadforge run --icp icp.yaml --resume --json` from
+stage discovered -> exported in one call: dm_labeled 85, dm_unlabeled 0, drafted 47, draft_rejected 0,
+draft_abstained 4, runner agent, 356 leads (A 82 / B 79 / C 195). Gate on the merged tree: 14 checks, 1 FAIL =
+full suite "2 failed, 688 passed" (ran concurrently with the live run; names being collected in
+scratchpad/suite3.log). NOT PUSHED yet (push only on gate exit 0). Campaign sweep pid 16480 still discovering
+(~560/2900 tiles, 11.6k businesses); when its old-code process pauses at dm_pending, `run --resume` on 0.4.0
+carries it through labeling -> scoring -> drafting -> export. Campaign leadforge.yaml still needs
+`draft.auto_purpose: gainlev_leadgen` (default already) and an outreach identity (owner input: postal address,
+from name/email, unsubscribe) for real footers.
