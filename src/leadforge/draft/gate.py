@@ -54,7 +54,11 @@ _BOOKING_CLAIM_RE = re.compile(
 
 
 def _haystack(packet: dict) -> str:
-    return json.dumps(packet, ensure_ascii=False)
+    """The packet as searchable text, WITHOUT each fact's `at` timestamp: "2026-09-03T08:47:21Z" made
+    the invented number 47 look evidenced whenever the clock happened to read :47 (a full-suite flake
+    on 2026-09-03). Provenance is for humans and the audit trail, never something a draft may quote."""
+    facts = [{k: v for k, v in f.items() if k != "at"} for f in (packet.get("facts") or []) if isinstance(f, dict)]
+    return json.dumps({**packet, "facts": facts}, ensure_ascii=False)
 
 
 def _contains_word(haystack: str, word: str) -> bool:

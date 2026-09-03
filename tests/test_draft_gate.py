@@ -196,3 +196,13 @@ def test_capitalised_fragment_glued_to_a_digit_is_not_a_proper_noun():
                                "observation": "Saw 1STOP MOT CENTRE LIMITED has been trading since 2011.",
                                "used_fact": "legal_name"})
     assert res["ok"], res["reasons"]
+
+
+def test_a_number_hiding_in_a_fact_timestamp_is_still_a_fabrication():
+    """Full-suite flake 2026-09-03: "helped 47 garages" passed whenever a fact's `at` read :47."""
+    packet = {"co": "Acme Garage", "city": "Leeds",
+              "facts": [{"k": "no_website", "v": "no business website found", "src": "maps", "at": "2026-09-03T08:47:21Z"}],
+              "constraints": {"max_subject_chars": 60, "max_observation_words": 45}}
+    res = check_draft(packet, {"subject": "Quick note", "observation": "We helped 47 garages with no business website found.",
+                               "used_fact": "no_website"})
+    assert any(r.startswith("NUMBER") for r in res["reasons"]), res

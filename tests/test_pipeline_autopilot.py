@@ -2,15 +2,13 @@
 labeling -> scoring -> drafting -> export without pausing, using the operator's own headless Claude Code
 where a stub says it's available and deterministic fallbacks (heuristics; a skip warning for drafting)
 everywhere else. `leadforge.agent_runner` and `leadforge.draft.service` are OTHER builders' new modules —
-they do not exist in this worktree, so every test here stubs them via `sys.modules` (never the real
-`claude` CLI) exactly as `pipeline.py`'s lazy imports expect. Modeled on `tests/test_pipeline_e2e.py`'s
+every test here patches the real modules' entry points (`make_ndjson_runner`, `auto_draft`) — never the
+real `claude` CLI, which tests/conftest.py also blocks from auto-detection. Modeled on `tests/test_pipeline_e2e.py`'s
 `patched` fixture."""
 
 from __future__ import annotations
 
 import json
-import sys
-import types
 
 import pytest
 import yaml
@@ -78,9 +76,13 @@ def _stub_agent_runner(monkeypatch, *, label_pick: int = 0):
             if "biz" in rec and "candidates" in rec:
                 out.append({"biz": rec["biz"], "pick": label_pick, "confidence": 0.9})
             elif "packet" in rec:
-                co = rec["packet"].get("co", "there")
-                out.append({"target": rec["target"], "subject": f"Note for {co}",
-                            "observation": f"Hello from {co}.", "used_fact": "category"})
+                # a gate-valid draft: quote the first fact's value verbatim and cite it
+                facts = rec["packet"].get("facts") or []
+                if facts:
+                    out.append({"target": rec["target"], "subject": "Quick note",
+                                "observation": f"Noticed {facts[0]['v']}.", "used_fact": facts[0]["k"]})
+                else:
+                    out.append({"target": rec["target"], "abstain": True})
         return out
 
     calls: list[str] = []
@@ -89,16 +91,14 @@ def _stub_agent_runner(monkeypatch, *, label_pick: int = 0):
         calls.append(instructions)
         return runner
 
-    fake_module = types.SimpleNamespace(make_ndjson_runner=make_ndjson_runner)
-    monkeypatch.setitem(sys.modules, "leadforge.agent_runner", fake_module)
+    monkeypatch.setattr("leadforge.agent_runner.make_ndjson_runner", make_ndjson_runner)
     return calls
 
 
 def _stub_agent_runner_returns_none(monkeypatch):
     """Simulates `agent.command: []` / no `claude` on PATH: `make_ndjson_runner` itself returns None,
     per the real module's documented contract — never a raise."""
-    fake_module = types.SimpleNamespace(make_ndjson_runner=lambda cfg, instructions: None)
-    monkeypatch.setitem(sys.modules, "leadforge.agent_runner", fake_module)
+    monkeypatch.setattr("leadforge.agent_runner.make_ndjson_runner", lambda cfg, instructions: None)
 
 
 def _stub_draft_service(monkeypatch, *, drafted=2, rejected=0, abstained=0, author="agent"):
@@ -106,13 +106,14 @@ def _stub_draft_service(monkeypatch, *, drafted=2, rejected=0, abstained=0, auth
         return {"targets": drafted + rejected + abstained, "drafted": drafted, "rejected": rejected,
                 "abstained": abstained, "author": author, "batches": 1}
 
-    fake_module = types.SimpleNamespace(auto_draft=auto_draft, DRAFT_INSTRUCTIONS="STUB DRAFT INSTRUCTIONS")
-    monkeypatch.setitem(sys.modules, "leadforge.draft.service", fake_module)
+    monkeypatch.setattr("leadforge.draft.service.auto_draft", auto_draft)
 
 
 def test_autopilot_reaches_exported_with_agent_labeling_and_drafting(cfg, sample_icp, patched, monkeypatch, tmp_path):
     calls = _stub_agent_runner(monkeypatch)
-    _stub_draft_service(monkeypatch, drafted=2)
+    # the REAL draft service runs (the digest's `drafted` is the export's live count of drafted rows,
+    # so a stub that stores nothing would report 0); every tier is draft-eligible for this tiny run
+    monkeypatch.setattr(cfg.draft, "auto_tiers", ["A", "B", "C", "D"])
 
     from leadforge.pipeline import run_pipeline
     icp_path = _icp_path(sample_icp, tmp_path)
@@ -153,7 +154,8 @@ def test_autopilot_with_no_runner_still_reaches_exported_via_heuristics(cfg, sam
     assert result["stage"] == "exported"
     assert result["counts"]["runner"] == "none"
     assert result["counts"]["dm_labeled"] + result["counts"]["dm_unlabeled"] >= 1
-    assert any("drafting unavailable" in w for w in result["warnings"])
+    # no runner: the real draft service still runs (template fallback), never a "drafting unavailable" skip
+    assert "drafted" in result["counts"] and not any("drafting unavailable" in w for w in result["warnings"])
 
 
 def test_autopilot_false_pauses_at_dm_pending_like_before(cfg, sample_icp, patched, monkeypatch, tmp_path):
