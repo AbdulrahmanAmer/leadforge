@@ -198,3 +198,15 @@ later cut = advanced-search by name+postcode returns status directly, saving the
 seconds. Fixed today on master: two-way phone merge + `dedupe` repair (1913e87), DVSA facts persisted, registry
 jurisdiction gate now maps 'United Kingdom' -> GB (37c53b0; DVSA/maps_list rows were silently skipped before),
 maps_list merged (ed61148, ADR-014). Live 2-browser proof: 4 queries -> 281 unique businesses in 141 s, 0 blocks.
+
+**AFTER benchmark 2026-09-03 (master fdfd97a+, scripts/bench_speed.py --overlap, Nottingham, dvsa+maps_list, 2 browsers,
+workers 12 / pages 4, real Companies House key):** discover 356 businesses in 48 s; enrich 60 sites + registry 356
+lookups (210 matched active, 87 auto DMs) + gbp + validate OVERLAPPED in 588 s (registry-bound at ~1.65 s/business);
+score+export < 1 s; TOTAL 636 s for a scored 356-row sheet. Projection for 1,000 businesses (~600 with websites):
+discover 2-3 min, overlapped enrich/registry ~35 min (registry 28-35 min at the CH rate limit; crawl 23-35 min at
+17-26 sites/min), score/export seconds -> ~40 min. The hour target holds on measured paces; the binding constraint is
+Companies House's 600 req/5 min, not our code. Live sweep still PAUSED; to restart on the new engine set
+`discovery.providers: [dvsa, maps_list, gosom]`, `discovery.parallel_queries: 2` in campaign leadforge.yaml and
+`leadforge run --icp icp.yaml --resume` (885 tiled queries at ~25 s each on 2 browsers ~3 h + subdivision growth).
+Dashboards: 8765 (campaign, paused), 8766 (benchmark). NEXT candidates: streaming pipeline (enrich as discovery
+finds), register-density tiling, fewer CH calls per business (advanced-search by name+postcode returns status).
