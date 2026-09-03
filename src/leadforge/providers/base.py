@@ -61,7 +61,7 @@ def _import_builtins() -> None:
     half-built provider module never takes the others down)."""
     import importlib
 
-    for mod in ("gosom", "fallback_rest", "dvsa", "companies_house"):
+    for mod in ("gosom", "fallback_rest", "dvsa", "companies_house", "maps_list"):
         try:
             importlib.import_module(f"leadforge.providers.{mod}")
         except ImportError:

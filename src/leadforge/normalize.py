@@ -337,8 +337,15 @@ def to_business(raw: RawListing, run_id: str, icp: ICP | None, default_region: s
     )
 
     nn = norm_name(name)
+    cid = _pick(d, g["cid"])
     if place_id:
         dedupe_key = f"pid:{place_id}"
+    elif cid:
+        # v0.3 speed unit: maps_list carries no place_id (list view never exposes one) but every
+        # card has a stable CID — a far better dedupe anchor than name+street across re-runs of
+        # the same query. A gosom-found business (place_id dedupe key) merges with the matching
+        # maps_list row later via db.upsert_business's phone fallback (_phone_match), not here.
+        dedupe_key = f"cid:{cid}"
     else:
         street_city = f"{(addr['address_street'] or address_full or '')}|{addr['address_city'] or ''}".casefold()
         dedupe_key = f"na:{sha1_hex(nn + '|' + street_city)}"
@@ -350,7 +357,7 @@ def to_business(raw: RawListing, run_id: str, icp: ICP | None, default_region: s
         enrich={"gbp": gbp_facts(d, g, name)},
         id=f"biz_{sha1_hex(dedupe_key)}",
         place_id=str(place_id) if place_id else None,
-        cid=str(_pick(d, g["cid"])) if _pick(d, g["cid"]) else None,
+        cid=str(cid) if cid else None,
         name=name,
         name_norm=nn,
         category=category,

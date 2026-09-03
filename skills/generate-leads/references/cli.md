@@ -49,6 +49,12 @@ Notes
   `est_runtime_min` and a worst-case subdivided estimate.
 - v0.3 company mode (GainLev's own pipeline): `target.mode: company` + `sic_codes` in the ICP and `discovery.providers:
   [companies_house]` discover companies from Companies House by SIC × location; see `icp-guide.md`.
+- speed unit (ADR-014): `discovery.providers: [maps_list]` uses the native list-first Maps engine (plain Playwright, one
+  persistent browser, no place-page visits by default) instead of gosom's per-place subprocess crawl — measured 5-10x
+  faster for the same list coverage; a maps_list row has no `place_id` (dedupe keys on CID instead, merged with any
+  matching gosom row by phone) and lacks full postal address/hours unless `discovery.maps_list.visit_details: true`.
+  `discovery.parallel_queries: N` (any provider) fans discover queries across N provider-chain instances (each its own
+  browser/subprocess) instead of one query at a time.
 - Optional extras change behavior when installed: `[browser]` auto-covers `needs_browser` sites; configured registry keys add
   officer cross-checks. Digest `warnings` tell you when an extra would have helped.
 - Config file `leadforge.yaml` (workspace, optional): provider order, politeness knobs, proxies passthrough, registry keys, validation.staleness_days (drives the sheet's Stale? column). Write values with `leadforge config set <dotted.key> <value>`.
