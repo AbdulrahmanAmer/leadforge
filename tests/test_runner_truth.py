@@ -386,3 +386,15 @@ def test_dm_export_origin_falls_back_to_labeled_by_when_blank(cfg, conn, sample_
     export_batch(conn, sample_icp, out_path, max_biz=10, tsv=False)
     rec = json.loads(out_path.read_text(encoding="utf-8").strip())
     assert rec["candidates"][0]["origin"] == "heuristic"
+
+
+
+def test_registry_gate_accepts_country_names_not_only_iso_codes():
+    """DVSA and maps_list rows carry 'United Kingdom'; the gate must treat that as GB (2026-09-03 bug)."""
+    from leadforge.enrich.runner import _jurisdiction
+
+    assert _jurisdiction("United Kingdom") == "GB"
+    assert _jurisdiction("GB") == "GB"
+    assert _jurisdiction("gb") == "GB"
+    assert _jurisdiction("England") == "GB"
+    assert _jurisdiction(None) == ""

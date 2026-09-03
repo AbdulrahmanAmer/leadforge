@@ -75,6 +75,13 @@ def _region_for_business(b, default_region: str) -> str:
     return default_region
 
 
+def _jurisdiction(address_country) -> str:
+    """ISO-2 for the registry gate. Maps rows say 'GB'; register and list rows say 'United Kingdom' —
+    found 2026-09-03: the raw upper-cased string skipped every DVSA/maps_list business silently."""
+    raw = (address_country or "").strip()
+    return COUNTRY_TO_REGION.get(raw.casefold(), raw.upper())
+
+
 def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
     """Crawl + extract for a single business. Returns a plain dict (thread-safe; DB writes happen on main thread)."""
     crawler = SiteCrawler(cfg, throttle)
@@ -239,7 +246,7 @@ def _registry_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
     ).fetchall()
     emit_progress("registry", 0, len(rows), "starting")
     for bi, b in enumerate(rows):
-        country = (b["address_country"] or "").strip().upper()
+        country = _jurisdiction(b["address_country"])
         for reg in registries:
             if country not in reg.jurisdictions():
                 continue
@@ -377,7 +384,7 @@ def _registry_cross_check(conn: sqlite3.Connection, b, counts: dict, registries:
     if not registries:
         return
     from leadforge.providers.registry import CompaniesHouseRegistry
-    country = (b["address_country"] or "").strip().upper()
+    country = _jurisdiction(b["address_country"])
     registry_people: list[Person] = []
     profile: dict | None = None
     for reg in registries:
