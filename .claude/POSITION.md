@@ -275,3 +275,14 @@ scratchpad/suite3.log). NOT PUSHED yet (push only on gate exit 0). Campaign swee
 carries it through labeling -> scoring -> drafting -> export. Campaign leadforge.yaml still needs
 `draft.auto_purpose: gainlev_leadgen` (default already) and an outreach identity (owner input: postal address,
 from name/email, unsubscribe) for real footers.
+
+## POSITION — 2026-09-03 ~09:40, v0.4.0 READY PENDING GATE (commits through 7dc398b, NOT pushed)
+
+Since 198cef1: 98dd5a9 Next Action stays phone-first for enrolled/drafted targets ("(email draft ready)" suffix);
+7dc398b autopilot tests patch real entry points (the sys.modules stubs lost to the real modules after the merge
+and the FULL SUITE SHELLED OUT TO THE REAL CLAUDE — conftest autouse guard now blanks shutil.which in
+agent_runner), gate `_haystack` drops fact `at` timestamps (an :47 clock made "47 garages" pass). Targeted
+tests green, ruff clean; full gate running (scratchpad/gate4.log). Campaign leadforge.yaml now carries
+agent{sonnet,40,100} + draft{gainlev_leadgen, A/B, auto_max 1500} (backup leadforge.yaml.pre-v0.4); dashboard
+8765 relaunched (pid 23628). Push on GATE_EXIT=0. Sweep pid 16480 still discovering (~580/2960 tiles, 11.8k).
+PUSHED 2026-09-03 ~09:50: master 7dc398b -> origin (gate: 14 checks, 0 FAIL, 1 SKIP; full suite 692 passed).
