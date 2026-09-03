@@ -3,6 +3,12 @@
 **Purpose:** make LeadForge cheap for ANY agent harness (Claude Code, Codex, others). The model's context is the scarcest resource in the
 system; this contract bounds what may ever enter it.
 
+**v0.4 autopilot (ADR-015):** by default `leadforge run` no longer pauses at `stage=dm_pending` for an interactive agent to label —
+it drives DM labeling and drafting itself through a *separate, headless* `claude -p` process (`leadforge/agent_runner.py`), so those
+tokens never enter THIS session's context at all. The interactive agent (you) sees only the final digest with `dm_labeled`,
+`dm_unlabeled`, `drafted`, `draft_rejected`, `draft_abstained` and `runner` (`agent`|`none`) counts. `--no-autopilot` restores the
+original in-session pause (Step 3 below) when you want to do the labeling/drafting judgment yourself instead.
+
 ## 1. The digest protocol
 
 Every `leadforge` command:
@@ -28,10 +34,13 @@ LF_DIGEST {"ok":true,"cmd":"discover","run":"run_20260831_1201_k3","counts":{"ti
 | Intake interview | 7 questions + user answers + write `answers.yaml` | ~1.5k |
 | doctor + intake + plan digests | 3 digest lines | ~0.3k |
 | discover + enrich digests (incl. resumes) | ~4–8 digest lines | ~0.5k |
-| DM labeling | 1 batch ≤ 60 businesses × ≤ ~70 tokens/line, read + labels out | ~6–9k |
+| DM labeling — autopilot ON (v0.4 default) | none: `leadforge run`'s digest only (`dm_labeled`/`dm_unlabeled`) | ~0 |
+| DM labeling — `--no-autopilot` (original) | 1 batch ≤ 60 businesses × ≤ ~70 tokens/line, read + labels out | ~6–9k |
 | score + export digests + final summary to user | digests + ~15-line summary | ~1k |
-| Outreach drafting (v0.3, optional) | `draft export` packets ≈ 160–270 tokens each + your two slots (subject + one observation) ≈ 60 tokens out | ~9–13k per 40 leads |
-| **Total (research campaign)** | | **< 15k** |
+| Outreach drafting — autopilot ON (v0.4 default) | none: `leadforge run`'s digest only (`drafted`/`draft_rejected`/`draft_abstained`) | ~0 |
+| Outreach drafting — manual (`draft export`, or when you want to write it yourself) | packets ≈ 160–270 tokens each + your two slots (subject + one observation) ≈ 60 tokens out | ~9–13k per 40 leads |
+| **Total (research campaign, autopilot on)** | | **< 3k** |
+| **Total (research campaign, `--no-autopilot`)** | | **< 15k** |
 
 Contrast: one raw Google Maps results page or one uncompressed business website ≈ 30–150k tokens. The pipeline processes hundreds of
 pages; **none of them** cross the boundary.
@@ -51,7 +60,7 @@ pages; **none of them** cross the boundary.
 | `intake` | 15 | field errors only |
 | `plan` | 15 | tiles/queries/estimates |
 | `discover` / `enrich` / `score` / `export` | 10 | progress goes to logfile, not stdout |
-| `run` | 25 | stage transitions only |
+| `run` | 25 | stage transitions only — v0.4 stages: `discovering/enriching/labeling/scoring/scored/drafting/exported` (or `dm_pending` with `--no-autopilot`) |
 | `status` | 15 | counts snapshot |
 | `dm export` | 5 + file path | data goes to the NDJSON file, not stdout |
 

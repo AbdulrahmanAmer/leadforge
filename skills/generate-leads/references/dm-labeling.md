@@ -1,5 +1,12 @@
 # DM labeling protocol
 
+**v0.4 (ADR-015): by default you don't need this.** `leadforge run` labels decision makers itself
+(autopilot) — through a separate headless Claude Code process when one is available, and a deterministic
+heuristic otherwise. Only follow this protocol yourself when the run digest shows `dm_unlabeled > 0` (agent
+runner unavailable or left some businesses genuinely ambiguous) or the workspace has `--no-autopilot` /
+`pipeline.autopilot: false` set. The rules below are identical either way — this is the SAME judgment call,
+whether you make it interactively or the headless runner makes it during `run`.
+
 Input (from `leadforge dm export`): NDJSON, one line per business —
 
 ```json

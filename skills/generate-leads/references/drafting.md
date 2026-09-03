@@ -1,4 +1,10 @@
-# Agent drafting protocol (v0.3, ADR-012)
+# Agent drafting protocol (v0.3, ADR-012; autopilot v0.4, ADR-015)
+
+**v0.4: by default `leadforge run` drafts for you.** After scoring, autopilot drafts every eligible
+target itself — through a separate headless Claude Code process when one is available (same rules as
+below), or a deterministic `template_draft` (facts only, never a full sentence you wrote) otherwise. Use
+this protocol interactively when you want to write drafts yourself (`leadforge draft export`/`draft apply`
+directly, Step 5 of SKILL.md), or to top up whatever autopilot left as `insufficient_evidence`.
 
 Input (from `leadforge draft export --campaign <c> --purpose <p>`): NDJSON. Line 1 is a header
 (purpose/offer/sender/constraints/instructions), then one packet line per target —

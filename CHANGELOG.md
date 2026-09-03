@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.4.0] — 2026-09-03
+
+The autopilot release (ADR-015, owner request 2026-09-03): `leadforge run` now continues on its own after
+enrichment — decision-maker labeling -> score -> drafting -> export — and the exported sheet carries the
+drafted emails. **Nothing is ever sent by this work**: sending stays behind `outreach approve` /
+`send --live`, unchanged. No paid API anywhere (ADR-007/012): the agent work runs through the operator's
+own Claude Code in headless print mode (`claude -p`, auto-detected on PATH, disable with
+`agent.command: []`); every agent step has a deterministic fallback so a run never blocks on it.
+
+### Added
+- **Autopilot pipeline (`pipeline.autopilot`, default on).** `leadforge run` no longer stops at
+  `stage=dm_pending` by default: it labels decision makers, scores, drafts and exports in one call.
+  `--no-autopilot` (or `pipeline.autopilot: false`) restores the exact v0.3 pause-for-the-agent behavior.
+  Stage machine: `enriched -> labeling -> scoring -> scored -> drafting -> exported`; `labeling` and
+  `drafting` are re-entered idempotently on `--resume` (a run killed mid-stage picks up exactly there).
+- **Headless agent runner (`leadforge/agent_runner.py`, ADR-015).** Auto-detects `claude` on PATH and
+  shells out to it in print mode (`claude -p --model <agent.model> --output-format text
+  --no-session-persistence`) with the prompt piped on stdin; parses NDJSON replies line-by-line, ignoring
+  MCP/tool noise. `agent.command`, `agent.model`, `agent.timeout_s`, `agent.batch`, `agent.max_batches`
+  configure it; `agent.command: []` disables it outright (deterministic fallbacks only, no `claude` ever
+  invoked). Every invocation is logged to `leadforge_data/logs/agent_runner.log`.
+- **Autopilot DM labeling (`enrich/dm.py`).** `auto_label` batches decision-maker candidates through the
+  agent runner (same judgment as `dm export`/`dm apply`, condensed into `LABEL_INSTRUCTIONS`); anything
+  the runner doesn't reach — or when no runner is available at all — falls to `heuristic_labels`: a
+  business with EXACTLY ONE unlabeled candidate whose title already matches the ICP's priority list is
+  labeled automatically (`labeled_by=heuristic_auto`, confidence 0.55; never a reject, only ever a pick).
+  Leftovers export as `dm_unlabeled` rather than blocking the run; the digest's `next` points at
+  `leadforge dm export --max 60` when it's above 0.
+- **Autopilot drafting (`draft/service.py`, `draft/template.py`, schema v3).** `auto_draft` runs the same
+  evidence-gated drafting as `draft export`/`draft apply` unattended, through the agent runner or — when
+  no runner is available (`draft.template_fallback`, default on) — a deterministic `template_draft` built
+  only from facts already in the packet (booking > site_stale > legal_name > hiring > rating; abstains on
+  grade C or no usable fact). `messages.author` (`agent` | `template`) records which path drafted each
+  message. `draft.auto`, `draft.auto_purpose`, `draft.auto_tiers`, `draft.auto_max` configure it.
+- **Draft columns on the sheet.** New "Draft Subject / Draft Body / Draft Grade / Draft Author" columns
+  (never blank — "no draft" when none exists) and a new **Drafts** sheet (one row per non-rejected message:
+  Business, DM Name, To, Subject, Body, Grade, Used Fact, Author, State, Created). The About sheet explains
+  them: drafted, never sent; approve with `leadforge outreach approve`, send only after `--live`.
+- **Dashboard.** The "dm labeling" row now says autopilot is in play; a new "drafting" row shows how many
+  messages have been drafted so far.
+- Config: `agent: {command, model, timeout_s, batch, max_batches}`, `pipeline: {autopilot}`,
+  `draft: {auto, auto_purpose, auto_tiers, auto_max, template_fallback}`.
+
+### Changed
+- `leadforge run` gains `--autopilot` / `--no-autopilot` (default: `pipeline.autopilot`).
+- `enrich/dm.py`: `export_batch` and `apply_labels` are now thin wrappers over the new `batch_lines` /
+  `apply_label_records` (same behavior, same digests) so the autopilot loop and the human-facing commands
+  share exactly one code path — no drift between what an agent sees via `dm export` and what autopilot
+  sees.
+- `draft/cli.py` commands are now thin wrappers over `draft/service.py` (moved, not copied — identical
+  behavior and digests).
+- Final `run` digest gains `dm_labeled`, `dm_unlabeled`, `drafted`, `draft_rejected`, `draft_abstained`,
+  `runner` (`agent`|`none`).
+
 ## [0.3.0] — 2026-09-03
 
 The truth, coverage and outreach release. Every change below was driven by a measurement on the live

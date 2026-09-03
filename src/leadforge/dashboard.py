@@ -230,11 +230,17 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
                                     if overlapped else "the sum of the stages (overlap is off)") + ", if pace holds")}
 
     # ---- human / agent stages ---------------------------------------------------------------
+    # v0.4 (ADR-015): autopilot runs labeling and drafting unattended by default (the operator's own
+    # headless Claude Code, or a deterministic fallback) — these rows still show what's left for a
+    # human when autopilot is off or leaves leftovers (`dm export` / `draft export`).
+    drafted_count = sum(counts.get("messages", {}).values())
     human = [
         {"stage": "dm labeling", "who": "agent (or you)", "items": counts["dm_pending"],
-         "note": "leadforge dm export / dm apply — the only stage that waits on a person"},
+         "note": "autopilot: agent runner (claude -p) or heuristics; `dm export` for leftovers"},
         {"stage": "score + export", "who": "machine, seconds", "items": counts["businesses"],
          "note": "leadforge run --resume after labeling"},
+        {"stage": "drafting", "who": "agent runner (claude -p) or template fallback", "items": drafted_count,
+         "note": "autopilot drafts during `run`; `leadforge draft export` / `draft apply` for more"},
         {"stage": "outreach", "who": "you (approve, arm) + agent (draft)", "items": counts.get("outreach_targets", 0),
          "note": "outreach plan -> draft export/apply -> approve -> send (dry-run) -> doctor -> --live"},
     ]

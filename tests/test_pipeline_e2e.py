@@ -66,8 +66,10 @@ def test_full_pipeline_offline(cfg, sample_icp, patched, monkeypatch, tmp_path):
 
     from leadforge.pipeline import run_pipeline
 
-    # First pass: discover -> enrich -> pauses at dm_pending (Alpha has a candidate person)
-    r1 = run_pipeline(cfg, sample_icp, icp_path)
+    # First pass: discover -> enrich -> pauses at dm_pending (Alpha has a candidate person).
+    # autopilot=False: v0.4 defaults to continuing on its own (ADR-015) — this test exercises the
+    # original agent-in-the-loop pause, so it opts out explicitly.
+    r1 = run_pipeline(cfg, sample_icp, icp_path, autopilot=False)
     assert r1["stage"] == "dm_pending"
     assert r1["counts"]["dm_pending"] >= 1
 
@@ -82,7 +84,7 @@ def test_full_pipeline_offline(cfg, sample_icp, patched, monkeypatch, tmp_path):
     assert applied["applied"] == 1
 
     # Resume: score + export
-    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True)
+    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True, autopilot=False)
     assert r2["stage"] == "exported"
     assert r2["counts"]["leads"] == 2
     # Alpha (stale site + owner DM + valid email, web-design ICP) should outrank Beta
@@ -104,11 +106,11 @@ def test_resume_recovers_from_killed_enrich(cfg, sample_icp, patched, tmp_path):
     icp_path = tmp_path / "icp.yaml"
     icp_path.write_text(yaml.safe_dump(sample_icp.model_dump(mode="json")), encoding="utf-8")
     from leadforge.pipeline import run_pipeline
-    r1 = run_pipeline(cfg, sample_icp, icp_path)
+    r1 = run_pipeline(cfg, sample_icp, icp_path, autopilot=False)
     assert r1["stage"] == "dm_pending"
     conn = db.connect(cfg.db_path)
     db.set_stage(conn, r1["run"], "enriching")  # simulate the kill
-    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True)
+    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True, autopilot=False)
     assert r2["stage"] == "dm_pending"  # enrich is idempotent; the run moves forward again
 
 

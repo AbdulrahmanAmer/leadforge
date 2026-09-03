@@ -54,9 +54,10 @@ hands back a sheet.
 ```bash
 leadforge intake --answers answers.yaml   # compile + validate your ICP -> icp.yaml
 leadforge plan   --icp icp.yaml           # see the query plan before spending time
-leadforge run    --icp icp.yaml           # discover -> enrich -> (pause for DM labeling) -> score -> export
+leadforge run    --icp icp.yaml           # discover -> enrich -> label -> score -> draft -> export (autopilot, v0.4)
 leadforge watch                           # live progress bar for the run in this workspace (second terminal)
-leadforge dm export --max 60              # snippets for the agent to label
+leadforge run    --icp icp.yaml --no-autopilot   # classic mode: pauses at stage=dm_pending instead
+leadforge dm export --max 60              # (only needed with --no-autopilot, or to top up autopilot leftovers)
 leadforge dm apply --in dm_labels.ndjson
 leadforge run    --icp icp.yaml --resume  # score + export
 leadforge status
@@ -86,7 +87,9 @@ Contactability, Data Confidence, Status). **A cell is never empty** — a would-
 ("none published", "not matched in registry", …). v0.3 appends **Fit**, **Contactability**, **Status**
 (READY / CALL_ONLY / RESEARCH / DQ), **Next Action** (phone-first, or the outreach state once a lead is enrolled),
 **Entity Type**, **Lawful Basis (Email)**, **Registry Name / Match**, **Chain**, **Site Status**, **Email
-Confidence** and **All Hooks**.
+Confidence** and **All Hooks**. v0.4 appends **Draft Subject / Draft Body / Draft Grade / Draft Author**
+("no draft" until autopilot or `draft apply` writes one) and a separate **Drafts** tab — one row per drafted
+message, never sent.
 
 The workbook also carries a **Summary** tab (counts, tier split, top hooks, compliance reminder for your region)
 and an **About** tab that explains the columns — so your partner can read it without asking you.
@@ -121,6 +124,10 @@ Architecture, data model, pipeline behavior and every decision are documented in
   whatever mailbox you configure.
 - **Country is required** on every campaign and areas must be specific — vague locations are how lead lists fill
   with garbage, so the tool refuses them and asks instead of guessing.
+- **Autopilot never sends anything (v0.4, ADR-015):** `leadforge run` labels decision makers, scores, drafts and
+  exports on its own by default, through the operator's own Claude Code in headless print mode — no API key, no
+  paid dependency, disable with `agent.command: []` or `--no-autopilot`. It stops at a drafted, unsent sheet;
+  outreach still requires `outreach approve` and `--live` exactly as before.
 
 See [`docs/07-compliance.md`](docs/07-compliance.md) for the practical GDPR/PECR/CAN-SPAM posture. Not legal advice.
 
@@ -143,6 +150,14 @@ with a company rubric (incorporation age, new-director trigger, hiring). Example
 `config/icp.company.example.yaml`.
 
 ## Status
+
+**v0.4.0 — autopilot (2026-09-03).** `leadforge run` now finishes itself: decision-maker labeling, scoring,
+drafting and export happen in one call by default (`pipeline.autopilot`), driven by the operator's own
+headless Claude Code where available and deterministic fallbacks (`heuristic_labels`, `template_draft`)
+everywhere else — see ADR-015 in [`docs/08-decisions.md`](docs/08-decisions.md).
+`--no-autopilot` restores the v0.3 pause-for-the-agent behavior exactly. The sheet gains Draft
+Subject/Body/Grade/Author columns and a Drafts tab; nothing is ever sent by this — outreach is still a
+separate, explicitly-armed step.
 
 **v0.3.0 — truth, coverage, outreach (2026-09-03).** Measured on the live 816-row campaign: the sheet now separates
 **Fit** from **Contactability** and carries **Status / Next Action / Entity Type / Lawful Basis / Registry Match /
