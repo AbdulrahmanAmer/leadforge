@@ -287,3 +287,16 @@ agent{sonnet,40,100} + draft{gainlev_leadgen, A/B, auto_max 1500} (backup leadfo
 8765 relaunched (pid 23628). Push on GATE_EXIT=0. Sweep pid 16480 still discovering (~580/2960 tiles, 11.8k).
 PUSHED 2026-09-03 ~09:50: master 7dc398b -> origin (gate: 14 checks, 0 FAIL, 1 SKIP; full suite 692 passed).
 PUSHED 2026-09-03 ~10:25: f7a9678 (dm_pending -> autopilot labeling hand-off), tag v0.4.0 moved to it; gate 14/0 FAIL/1 SKIP.
+
+## POSITION — 2026-09-03 ~13:30, v0.4.1 NOVELTY GATE COMMITTED (687d8b5), gate running; SWEEP DECISION PENDING
+
+Measured on the live sweep (log-derived yields, scratchpad analysis): base-grid queries added ~13 new businesses
+each; once the queue reached the depth-1 children (60/60 saturated) yield fell to ~0.6-1 per tile at ~14 s
+each, while every saturated child still spawned 4 more (plan 1,543 -> 4,600+, ETA 3 h -> 13+ h). Shipped:
+`discovery.subdivide_min_new` (3), `queries.new_count` (schema v4), `leadforge prune-tiles [--min-new N]
+[--all-children] [--dry-run]`, dashboard remaining = pending only. The RUNNING process is old code: to apply,
+stop pid (sweep.pid), `leadforge prune-tiles --all-children` (parents have NULL new_count), then
+`run --resume` -> enrichment on v0.4.1. Cost of pruning: up to ~2,000 businesses the ~3,500 children might
+still find; benefit: ~13 h. RECOMMENDED to the owner; NOT applied without their word (scope decision).
+Push pending GATE_EXIT=0 (scratchpad/gate6.log).
+PUSHED 2026-09-03 ~13:45: 687d8b5 v0.4.1 + tag (gate 14/0 FAIL/1 SKIP). Sweep decision still with the owner.
