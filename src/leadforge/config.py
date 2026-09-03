@@ -165,6 +165,26 @@ class DraftCfg(BaseModel):
     name_policy: str = "gated"         # gated | never | always (owner decision 6)
     max_observation_words: int = 45
     max_subject_chars: int = 60
+    # v0.4 autopilot (ADR-015): draft during `run` itself, no separate export/apply round-trip.
+    auto: bool = True                       # draft during `run` (autopilot)
+    auto_purpose: str = "gainlev_leadgen"   # one of draft.skeletons.PURPOSES
+    auto_tiers: list[str] = Field(default_factory=lambda: ["A", "B"])
+    auto_max: int = 500                     # targets drafted per run
+    template_fallback: bool = True          # deterministic template drafts when no runner is available
+
+
+class AgentCfg(BaseModel):
+    """v0.4 headless agent runner (ADR-015): the operator's own Claude Code in print mode. No API key."""
+
+    command: list[str] | None = None   # None = auto-detect `claude` on PATH; [] = disabled (deterministic fallbacks only)
+    model: str = "sonnet"              # used only for the auto-detected command
+    timeout_s: int = 900               # per invocation
+    batch: int = 40                    # items per invocation
+    max_batches: int = 50              # hard stop per stage per run
+
+
+class PipelineCfg(BaseModel):
+    autopilot: bool = True             # run continues through labeling -> score -> draft -> export without pausing
 
 
 class SocialCfg(BaseModel):
@@ -202,6 +222,8 @@ class Config(BaseModel):
     export: ExportCfg = Field(default_factory=ExportCfg)
     outreach: OutreachCfg = Field(default_factory=OutreachCfg)
     draft: DraftCfg = Field(default_factory=DraftCfg)
+    agent: AgentCfg = Field(default_factory=AgentCfg)
+    pipeline: PipelineCfg = Field(default_factory=PipelineCfg)
 
     _workspace: Path = Path(".")
 
