@@ -57,7 +57,7 @@ def test_status_splits_machine_and_human_and_measures_pace_from_feed_ts(cfg):
     enrich = st["machine"]["stages"][1]
     assert enrich["total"] == 4 and enrich["state"] == "pending" and enrich["pace_source"].startswith("documented")
     assert st["machine"]["eta_s"] > disc["eta_s"]
-    assert [h["stage"] for h in st["human"]] == ["dm labeling", "score + export", "outreach"]
+    assert [h["stage"] for h in st["human"]] == ["dm labeling", "score + export", "drafting", "outreach"]
     assert st["counts"]["queries_saturated"] == 3 and st["counts"]["new_this_run"] == 6
 
 

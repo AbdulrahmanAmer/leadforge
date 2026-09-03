@@ -1,8 +1,11 @@
 """Pipeline orchestrator (U3.5 discover + the resumable `run` state machine) — docs/04 §2.
 
 Stage transitions are persisted to SQLite so `run --resume` continues where an interrupted run stopped.
-Every stage is idempotent (upserts, per-query checkpoints). The DM stage is the only one that pauses
-for the agent (stage=dm_pending).
+Every stage is idempotent (upserts, per-query checkpoints). v0.4 (ADR-015, autopilot): by default a run
+continues on its own past enrichment — labeling -> scoring -> drafting -> export — through the operator's
+own headless Claude Code where available and deterministic fallbacks (heuristics / template drafts)
+everywhere else; with autopilot off (`--no-autopilot` or `pipeline.autopilot: false`) the DM stage pauses
+for the agent exactly as it always has (stage=dm_pending). Nothing here ever sends anything.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from pathlib import Path
 from leadforge import db
 from leadforge.config import Config
 from leadforge.doctor import ensure_ready
+from leadforge.enrich import dm
 from leadforge.grid import ADDITIVE_PROVIDERS, PlannedQuery, build_plan, quarter_tile
 from leadforge.models import ICP
 from leadforge.normalize import to_business
@@ -361,9 +365,23 @@ def _provider_from_json(tile_json: str | None) -> str | None:
     return d.get("provider") if isinstance(d, dict) else None
 
 
+def _agent_runner_for(cfg: Config, instructions: str):
+    """Lazily import `leadforge.agent_runner` (builder A's module — not guaranteed to exist in every
+    worktree, and it may be unavailable at runtime too: no `claude` on PATH, `agent.command: []`, ...).
+    Any failure degrades to `None` — callers fall back to their deterministic path (heuristics / template
+    drafts) rather than blocking the run."""
+    try:
+        from leadforge import agent_runner
+        return agent_runner.make_ndjson_runner(cfg, instructions)
+    except Exception as e:  # noqa: BLE001 — module missing/broken this build: no agent runner, ever
+        LOG.debug("agent_runner unavailable: %s", e)
+        return None
+
+
 # --------------------------------------------------------------------------- run (state machine)
 def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
-                 limit: int | None = None, skip_dm: bool = False) -> dict:
+                 limit: int | None = None, skip_dm: bool = False,
+                 autopilot: bool | None = None) -> dict:
     ensure_ready(cfg)
     conn = db.connect(cfg.db_path)
     _progress_ui(cfg)
@@ -372,6 +390,10 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     run_id = run["id"] if run else None
     warns: list[str] = []
     artifacts: list[str] = []
+    # v0.4 (ADR-015): cfg.pipeline may not exist yet on every worktree/branch this builds against —
+    # getattr fallback keeps the default (True) either way.
+    if autopilot is None:
+        autopilot = getattr(getattr(cfg, "pipeline", None), "autopilot", True)
 
     # A3 (docs/09): a run can reach ANY later stage (even 'exported') while discovery queries are
     # still 'pending' or 'degraded' — a saturation-subdivision child inserted after the parent's
@@ -413,18 +435,36 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         stage = "enriched"
         db.set_stage(conn, run_id, "enriched", **ecounts)
 
-    # DM gate
+    # DM gate — autopilot continues into unattended labeling; otherwise the original agent pause
     if stage == "enriched":
         pending = len(db.dm_pending(conn, 10_000))
         if pending > 0 and not skip_dm:
-            db.set_stage(conn, run_id, "dm_pending", dm_pending=pending)
-            return {"ok": True, "run": run_id, "stage": "dm_pending",
-                    "counts": {"dm_pending": pending},
-                    "warnings": warns, "next": "leadforge dm export --max 60"}
+            if autopilot:
+                stage = "labeling"
+            else:
+                db.set_stage(conn, run_id, "dm_pending", dm_pending=pending)
+                return {"ok": True, "run": run_id, "stage": "dm_pending",
+                        "counts": {"dm_pending": pending},
+                        "warnings": warns, "next": "leadforge dm export --max 60"}
+        else:
+            stage = "scoring"
+
+    # LABEL (autopilot only; re-entered idempotently on resume — auto_label just continues from
+    # whatever is still dm_pending). Leftovers export as unlabeled rather than blocking the run
+    # (docs/06: digest counts dm_unlabeled, `next` points at `dm export` when it is > 0).
+    if stage == "labeling":
+        db.set_stage(conn, run_id, "labeling")
+        runner = _agent_runner_for(cfg, dm.LABEL_INSTRUCTIONS)
+        lcounts = dm.auto_label(conn, icp, cfg, runner=runner)
+        db.set_stage(conn, run_id, "scoring", dm_labeled=lcounts["labeled"],
+                     dm_unlabeled=lcounts["unlabeled"], dm_runner=lcounts["runner"])
+        if lcounts["unlabeled"]:
+            warns.append(f"{lcounts['unlabeled']} businesses left unlabeled after autopilot labeling — "
+                        f"leadforge dm export --max 60")
         stage = "scoring"
 
     if stage == "dm_pending" and not skip_dm:
-        # resumed after dm apply — proceed only if nothing is left unlabeled, else keep waiting
+        # resumed after dm apply (autopilot off) — proceed only if nothing is left unlabeled, else keep waiting
         pending = len(db.dm_pending(conn, 10_000))
         if pending > 0:
             return {"ok": True, "run": run_id, "stage": "dm_pending",
@@ -441,6 +481,30 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         db.set_stage(conn, run_id, "scored", **scounts)
         stage = "scored"
 
+    # DRAFT (autopilot only; re-entered idempotently on resume — auto_draft skips targets already
+    # drafted). leadforge.draft.service is another builder's new module: lazy import, degrade to a
+    # skip warning rather than block export when it (or the agent runner) is unavailable.
+    if stage == "scored" and autopilot and getattr(getattr(cfg, "draft", None), "auto", True):
+        stage = "drafting"
+
+    if stage == "drafting":
+        db.set_stage(conn, run_id, "drafting")
+        dcounts = {"drafted": 0, "rejected": 0, "abstained": 0, "author": "none"}
+        try:
+            from leadforge.draft import service
+        except Exception as e:  # noqa: BLE001 — draft.service missing/broken this build: skip, don't block
+            LOG.debug("draft.service unavailable: %s", e)
+            service = None
+            warns.append("drafting unavailable in this build — skipped (leadforge draft export/apply)")
+        if service is not None:
+            draft_runner = _agent_runner_for(cfg, service.DRAFT_INSTRUCTIONS)
+            dcounts = service.auto_draft(conn, cfg, icp, run_id, runner=draft_runner)
+        db.set_stage(conn, run_id, "scored", drafted=dcounts.get("drafted", 0),
+                     draft_rejected=dcounts.get("rejected", 0),
+                     draft_abstained=dcounts.get("abstained", 0),
+                     draft_author=dcounts.get("author", "none"))
+        stage = "scored"
+
     # EXPORT
     if stage == "scored":
         from leadforge.export import export_run, summarize_for_digest, top_hooks
@@ -451,6 +515,19 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
             if xlsx:
                 open_artifact(xlsx[0])
         ecounts = summarize_for_digest(conn, run_id)
+        run_row = conn.execute("SELECT stats_json FROM runs WHERE id=?", (run_id,)).fetchone()
+        run_stats = json.loads(run_row["stats_json"]) if run_row and run_row["stats_json"] else {}
+        # autopilot counts (docs/06): persisted at the labeling/drafting stages above, so a run that
+        # reaches export in a LATER invocation (they already happened before this call) still reports
+        # them truthfully from the run's own stats rather than only what THIS call did.
+        runner_used = "agent" if (run_stats.get("dm_runner") == "agent"
+                                  or run_stats.get("draft_author") in ("agent", "mixed")) else "none"
+        ecounts = {
+            "dm_labeled": run_stats.get("dm_labeled", 0), "dm_unlabeled": run_stats.get("dm_unlabeled", 0),
+            "drafted": run_stats.get("drafted", 0), "draft_rejected": run_stats.get("draft_rejected", 0),
+            "draft_abstained": run_stats.get("draft_abstained", 0), "runner": runner_used,
+            **ecounts,  # export.py's own live counts (e.g. its own `drafted`) win on overlap
+        }
         db.set_stage(conn, run_id, "exported", **ecounts)
         warns += top_hooks(conn, run_id)
         return {"ok": True, "run": run_id, "stage": "exported", "counts": ecounts,

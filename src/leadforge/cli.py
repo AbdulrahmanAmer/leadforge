@@ -320,15 +320,20 @@ def run(
     resume: bool = typer.Option(False, "--resume"),
     limit: int = typer.Option(0, "--limit"),
     skip_dm: bool = typer.Option(False, "--skip-dm"),
+    autopilot: bool | None = typer.Option(
+        None, "--autopilot/--no-autopilot",
+        help="continue past labeling into score -> draft -> export without pausing (default: config pipeline.autopilot)"),
 ):
-    """Orchestrated, resumable pipeline: discover -> enrich -> (pause for DM) -> score -> export."""
+    """Orchestrated, resumable pipeline: discover -> enrich -> (autopilot: label -> score -> draft, or
+    pause for DM) -> export."""
     from leadforge.intake import load_icp
     from leadforge.pipeline import run_pipeline
 
     cfg = _cfg(ctx)
     try:
         icp_obj = load_icp(Path(icp))
-        result = run_pipeline(cfg, icp_obj, Path(icp), resume=resume, limit=limit or None, skip_dm=skip_dm)
+        result = run_pipeline(cfg, icp_obj, Path(icp), resume=resume, limit=limit or None, skip_dm=skip_dm,
+                              autopilot=autopilot)
     except LeadForgeError as e:
         emit_digest(False, "run", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
         raise typer.Exit(e.exit_code) from e

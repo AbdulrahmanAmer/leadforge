@@ -131,3 +131,12 @@ Single source of truth for what's done vs left. Current baseline (v0.1.4, 2026-0
       any interruption); then dm labeling, score, export; then a calling sprint recording outcomes.
 - Gate: `python scripts/v03_gate.py --live-db <db>` (suite, lint, versions, plugin validate, CLI contract,
   DVSA fixture, export truth on a DB copy, outreach/draft guardrail probes).
+
+## v0.4 "autopilot" (2026-09-03, in progress — contract in scratchpad/autopilot/CONTRACT.md)
+- [x] **Unit D** (pipeline wiring + docs, this session): `pipeline.run_pipeline` stage machine
+      (`enriched -> labeling -> scoring -> scored -> drafting -> exported`, `autopilot` kwarg + resume
+      idempotent re-entry of `labeling`/`drafting`), `enrich/dm.py` (`LABEL_INSTRUCTIONS`, `batch_lines`,
+      `apply_label_records`, `heuristic_labels`, `auto_label`), `cli.py run --autopilot/--no-autopilot`,
+      `dashboard.py` human-stage rows, version 0.4.0 everywhere. `leadforge.agent_runner` (A) and
+      `leadforge.draft.service` (B) are lazily imported and degrade to `runner=None`/skip-with-warning
+      in this worktree since they don't exist here yet — proven by two dedicated pipeline tests.

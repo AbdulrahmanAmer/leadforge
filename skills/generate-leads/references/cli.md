@@ -19,7 +19,7 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `config set\|get KEY [VALUE]` | read/write one `leadforge.yaml` value (e.g. `registry.companies_house_key`) | — | counts.set |
 | `doctor --fix --full` | first-time bootstrap: deps, scraper binary, quality extras (NER, browser, yt-dlp) | `--json` | counts.checks/fixed/failed |
 | `version` | print version | — | digest only |
-| `run` | orchestrated: plan→discover→enrich→(dm_pending)→score→export, resumable | `--icp F`, `--resume`, `--limit N`, `--skip-dm` | `stage`, everything above |
+| `run` | orchestrated: discover→enrich→**label→score→draft→export (autopilot, v0.4 default)**, resumable | `--icp F`, `--resume`, `--limit N`, `--skip-dm`, `--autopilot`/`--no-autopilot` | `stage`, `dm_labeled`, `dm_unlabeled`, `drafted`, `draft_rejected`, `draft_abstained`, `runner` (`agent`\|`none`), everything above |
 | `status` | current run snapshot | `--run ID` | `stage`, counts |
 | `suppress add\|list` | opt-out list (domain/email/place_id) | value | `suppressed` |
 | `dashboard` | local read-only status page: machine stages (discover/enrich/registry/validate) with measured pace + ETA, human/agent stages with item counts, every count behind them; `--open` opens the browser | `--port` (8765), `--open` | JSON at `/api/status` |
@@ -39,6 +39,13 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `outreach outcome add` | record a call/email result (feeds the outcome loop) | `--business`, `--channel`, `--result`, `--notes` | `outcomes` |
 
 Notes
+- **v0.4 autopilot (ADR-015):** `run` labels decision makers and drafts messages itself by default
+  (`pipeline.autopilot: true`) — through the operator's own headless Claude Code (`agent.command` auto-detects
+  `claude` on PATH; `agent.command: []` disables it) with deterministic fallbacks (`heuristic_labels`,
+  template drafts) when no runner is available. `--no-autopilot` restores the v0.3 pause at `stage=dm_pending`.
+  `agent.batch` / `agent.max_batches` bound how much the runner does per stage per run; `draft.auto_tiers` /
+  `draft.auto_max` / `draft.auto_purpose` bound autopilot drafting; `draft.template_fallback: false` disables
+  the deterministic drafter (autopilot then just skips drafting when no runner is available).
 - `run` picks up an interrupted run for the same ICP hash automatically with `--resume`.
 - `--limit N` caps NEW businesses processed this invocation — use for smoke tests (`--limit 10`); `caps.max_leads` is the
   per-run hard stop across resumes.

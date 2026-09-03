@@ -130,3 +130,28 @@ address, opening hours and Business-Profile "about" facts unless a details visit
 coverage trade-off against speed, not a bug); `Business.cid` becomes populated far more often across
 both providers, and normalize.py must not assume `place_id` is the only non-name+street dedupe anchor
 going forward.
+
+## ADR-015 — Autopilot: `run` finishes itself through the operator's own headless Claude Code (v0.4)
+**Context:** the owner asked (2026-09-03) for a fully automated `leadforge run` that ends in a sheet
+carrying drafted emails, without the operator manually round-tripping `dm export`/`dm apply` and
+`draft export`/`draft apply` for every campaign. ADR-007/012 already rule out any paid API — the tool must
+stay zero-cost to run. **Decision:** `pipeline.autopilot` (default true) makes `run` continue on its own
+past enrichment: labeling -> scoring -> drafting -> export, in one call. The judgment step (decision-maker
+labeling, drafting) is delegated to the operator's OWN Claude Code, invoked headless in print mode
+(`claude -p --output-format text --no-session-persistence`, auto-detected on PATH via
+`leadforge/agent_runner.py`) — the same account and terms the operator is already using interactively, no
+API key, no new billing relationship. Every agent step has a deterministic, clearly-labelled fallback so a
+run never blocks on the agent being absent or failing: DM labeling falls to `heuristic_labels`
+(`labeled_by=heuristic_auto` — exactly one matching-title candidate, never a reject); drafting falls to
+`template_draft` (`messages.author=template` — deterministic sentences built only from packet facts, same
+no-fabrication constraints as agent drafting). `--no-autopilot` / `pipeline.autopilot: false` restores the
+exact pre-v0.4 pause-for-the-agent behavior at `stage=dm_pending`, unchanged. **Nothing sends**: outreach
+still requires `outreach approve` and `--live` — autopilot only reaches as far as a drafted, unsent sheet.
+**Consequences:** a campaign can run genuinely unattended end to end on a machine that has `claude` on
+PATH; on one that doesn't (or with `agent.command: []`), the same run still finishes via the heuristic and
+template fallbacks, just with lower label/draft coverage — the digest (`dm_unlabeled`, `draft_rejected`,
+`draft_abstained`, `runner`) says honestly which path was taken, and `next` tells the operator exactly what
+manual step (if any) would improve it. The agent runner shells out to a real `claude` process per batch,
+so autopilot's wall-clock cost is bounded by `agent.timeout_s` × the number of batches
+(`agent.max_batches` caps it per stage per run) — acceptable because it is the operator's own already-paid
+session, not a metered API call.
