@@ -186,6 +186,19 @@ class ICP(BaseModel):
         return v.lower()
 
     def icp_hash(self) -> str:
+        """Identity of the campaign for run resumption. Operational limits (`caps`) and free-text `notes`
+        are excluded on purpose: raising a lead cap mid-campaign must let `run --resume` continue the SAME
+        run (found live 2026-09-03: a 6,000 cap stopped discovery with 1,348 tiles pending, and bumping it
+        would have re-planned every tile from scratch)."""
+        data = self.model_dump(mode="json")
+        data.pop("caps", None)
+        data.pop("notes", None)
+        blob = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(blob.encode()).hexdigest()[:12]
+
+    def icp_hash_legacy(self) -> str:
+        """The pre-2026-09-03 identity (caps and notes included). `pipeline._latest_run` falls back to it so
+        a run created by an older LeadForge is still found and re-stamped with the current hash."""
         blob = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(blob.encode()).hexdigest()[:12]
 

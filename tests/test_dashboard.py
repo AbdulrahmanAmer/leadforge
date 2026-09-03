@@ -99,3 +99,31 @@ def test_http_endpoints_serve_json_and_html(cfg):
 def test_no_workspace_is_reported_not_crashed(tmp_path):
     st = build_status(tmp_path / "nowhere")
     assert "error" in st
+
+
+def test_measured_pace_survives_the_feed_being_truncated_on_restart(cfg):
+    """`set_progress_file` wipes the feed on every process start; a resumed run must not fall back to the
+    documented default for a stage it already measured (2026-09-03: 26 h ETA from a 22 s/site default)."""
+    run_id, started = _seed(cfg, with_ts=True)
+    st = build_status(cfg.data_path, now=started + 480.0)
+    assert st["machine"]["stages"][0]["pace_source"] == "measured on this run"
+    assert json.loads((cfg.data_path / "pace.json").read_text())["discover"]["per_item_s"] == 120.0
+    (cfg.data_path / "progress.jsonl").write_text("", encoding="utf-8")  # a restart
+    st2 = build_status(cfg.data_path, now=started + 900.0)
+    disc = st2["machine"]["stages"][0]
+    assert disc["pace_source"] == "measured earlier in this workspace" and abs(disc["pace_s"] - 120.0) < 1e-6
+    assert st2["machine"]["stages"][1]["pace_source"].startswith("documented")  # never measured -> still the default
+
+
+def test_walk_away_time_is_discover_plus_the_longest_overlapped_stage(cfg):
+    run_id, started = _seed(cfg, with_ts=True)
+    st = build_status(cfg.data_path, now=started + 480.0)
+    stages = st["machine"]["stages"]
+    assert st["machine"]["overlapped"] is True
+    expected = stages[0]["eta_s"] + max(m["eta_s"] for m in stages[1:])
+    assert abs(st["machine"]["eta_s"] - expected) < 1e-6
+    assert st["machine"]["eta_s"] < sum(m["eta_s"] for m in stages)  # the sum would overstate it
+    (cfg.workspace / "leadforge.yaml").write_text("enrich:" + chr(10) + "  overlap_stages: false" + chr(10), encoding="utf-8")
+    st2 = build_status(cfg.data_path, now=started + 480.0)
+    assert st2["machine"]["overlapped"] is False
+    assert abs(st2["machine"]["eta_s"] - sum(m["eta_s"] for m in st2["machine"]["stages"])) < 1e-6

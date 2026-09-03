@@ -158,3 +158,9 @@ def test_merge_phone_duplicates_repairs_existing_pairs_and_skips_unrelated(conn)
     assert "V1" in keep["enrich_json"] and "dvsa" in keep["enrich_json"]
     assert conn.execute("SELECT business_id FROM contacts WHERE value='info@ainleys.example'").fetchone()[0] == "biz_m1"
     assert conn.execute("SELECT COUNT(*) FROM businesses WHERE id='biz_r2'").fetchone()[0] == 1  # unrelated survived
+
+
+def test_create_run_twice_in_one_second_never_collides(conn):
+    a = db.create_run(conn, "icp.yaml", "abc")
+    b = db.create_run(conn, "icp.yaml", "abc")
+    assert a != b and b.startswith(a)

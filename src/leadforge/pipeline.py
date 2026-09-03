@@ -44,13 +44,26 @@ def _progress_ui(cfg: Config) -> None:
         open_progress_window(cfg.workspace, data_dir=cfg.data_path)
 
 
+def _latest_run(conn, icp: ICP):
+    """Latest run of this campaign. Falls back to the pre-2026-09-03 hash (caps included) and re-stamps the
+    row so a campaign started by an older version keeps resuming after an upgrade."""
+    run = db.latest_run(conn, icp.icp_hash())
+    if run is None:
+        legacy = db.latest_run(conn, icp.icp_hash_legacy())
+        if legacy is not None:
+            conn.execute("UPDATE runs SET icp_hash=? WHERE id=?", (icp.icp_hash(), legacy["id"]))
+            conn.commit()
+            run = db.latest_run(conn, icp.icp_hash())
+    return run
+
+
 def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None,
                  provider: str | None = None, run_id: str | None = None) -> tuple[str, dict, list[str]]:
     ensure_ready(cfg)
     _progress_ui(cfg)
     conn = db.connect(cfg.db_path)
     if run_id is None:
-        existing = db.latest_run(conn, icp.icp_hash())
+        existing = _latest_run(conn, icp)
         if existing and existing["stage"] in ("planned", "discovering"):
             run_id = existing["id"]
         else:
@@ -354,7 +367,7 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     ensure_ready(cfg)
     conn = db.connect(cfg.db_path)
     _progress_ui(cfg)
-    run = db.latest_run(conn, icp.icp_hash()) if resume else None
+    run = _latest_run(conn, icp) if resume else None
     stage = run["stage"] if run else "planned"
     run_id = run["id"] if run else None
     warns: list[str] = []
@@ -382,7 +395,7 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     if stage in ("planned", "discovering") or run_id is None:
         run_id, dcounts, dwarn = run_discover(cfg, icp, icp_path, limit=limit, run_id=run_id)
         warns += dwarn
-        stage = db.latest_run(conn, icp.icp_hash())["stage"]
+        stage = _latest_run(conn, icp)["stage"]
         if getattr(icp.target, "mode", "local_business") == "company":
             from leadforge.enrich.resolve_domain import run_resolve
             run_resolve(conn, cfg, limit or icp.caps.max_sites)

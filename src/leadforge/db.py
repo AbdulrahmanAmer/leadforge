@@ -168,7 +168,12 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 # ------------------------------------------------------------------ runs & queries
 def create_run(conn: sqlite3.Connection, icp_path: str, icp_hash: str) -> str:
-    run_id = f"run_{now_iso().replace('-', '').replace(':', '').replace('T', '_')[:14]}_{sha1_hex(icp_hash + now_iso(), 4)}"
+    base = f"run_{now_iso().replace('-', '').replace(':', '').replace('T', '_')[:14]}_{sha1_hex(icp_hash + now_iso(), 4)}"
+    run_id = base
+    for n in range(1, 1000):  # the id is second-granular: a second run of one campaign inside that second must not collide
+        if not conn.execute("SELECT 1 FROM runs WHERE id=?", (run_id,)).fetchone():
+            break
+        run_id = f"{base}{n}"
     conn.execute(
         "INSERT INTO runs(id,icp_path,icp_hash,stage,started_at) VALUES(?,?,?,?,?)",
         (run_id, icp_path, icp_hash, "planned", now_iso()),

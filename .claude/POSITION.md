@@ -210,3 +210,29 @@ Companies House's 600 req/5 min, not our code. Live sweep still PAUSED; to resta
 `leadforge run --icp icp.yaml --resume` (885 tiled queries at ~25 s each on 2 browsers ~3 h + subdivision growth).
 Dashboards: 8765 (campaign, paused), 8766 (benchmark). NEXT candidates: streaming pipeline (enrich as discovery
 finds), register-density tiling, fewer CH calls per business (advanced-search by name+postcode returns status).
+
+## POSITION — 2026-09-03 ~00:15, SWEEP RESUMED AFTER LEAD-CAP STOP (pid 16480)
+
+The resumed sweep (pid 18760, new engine dvsa+maps_list+gosom, 2 browsers) hit `caps.max_leads: 6000` after 195
+of 1,543 tiles (6,000 businesses credited to run_20260902_22032_7eca; 6,816 in the DB) and moved to enrichment with
+1,348 tiles pending — the cap was a v0.2-era number. Fix shipped (tests 64 green, ruff clean):
+- `ICP.icp_hash()` now EXCLUDES `caps` and `notes` (operational limits are not campaign identity);
+  `ICP.icp_hash_legacy()` keeps the old value and `pipeline._latest_run()` falls back to it and re-stamps the row,
+  so campaigns started by older versions keep resuming. `db.create_run` is collision-proof within one second.
+- Live migration done by hand with the run STOPPED: `runs.icp_hash` 45eaca579771 -> 8108f1495954 for
+  run_20260902_22032_7eca (scratchpad/sweep/restamp.py), THEN icp.yaml caps raised to max_leads 30000 /
+  max_sites 30000 (backup `icp.yaml.pre-capraise`). `run --resume` re-entered discovery: 1,352 pending tiles,
+  "6021 unique leads so far" at restart.
+- Relaunch recipe (PowerShell): Start-Process C:\Python314\python.exe -ArgumentList -m,leadforge,run,--icp,icp.yaml,
+  --resume,--json -WorkingDirectory <campaign> -RedirectStandardOutput leadforge_data\logs\sweep3_stdout.log
+  -RedirectStandardError leadforge_data\logs\sweep3_stderr.log -WindowStyle Hidden -PassThru. Current pid 16480.
+- Heartbeat: session cron every 5 min (2-59/5) running scratchpad/sweep/heartbeat.py (pid from sweep.pid next to it,
+  read-only DB, dashboard 8765 ETA); it prints STOP_HEARTBEAT when finished/died and the tick deletes the job.
+  Dashboards: 8765 campaign, 8766 bench-after2.
+- After discovery the run continues into overlapped enrich/registry/gbp/validate, then pauses at dm_pending
+  (agent DM labeling), then `run --resume` for score+export. Expected sheet 9,000-12,000 rows; registry stage
+  (~1.65 s/business at the CH rate limit) is the long pole.
+UNPROVEN: that the cap is not hit again (30,000 vs a 9-12k projection — should hold). NOT DONE: commit/push of the
+hash change is pending the v0.3 gate (push only on gate exit 0).
+- Dashboard fix (same commit): measured paces persist in `leadforge_data/pace.json`; DEFAULT_PACE_S enrich 2.5 s,
+  registry 1.65 s. Campaign dashboard 8765 restarted on the new code (no --open). 8766 untouched.

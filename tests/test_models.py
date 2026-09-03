@@ -80,3 +80,20 @@ def test_too_short_area_rejected():
             "campaign": "x", "offer": {"what": "y"},
             "target": {"categories": ["z"], "geography": {"areas": ["TX"], "country": "US"}},
         })
+
+
+
+def test_icp_hash_ignores_caps_and_notes(sample_icp):
+    """Raising a cap mid-campaign must resume the same run, not re-plan it (2026-09-03)."""
+    base = sample_icp.icp_hash()
+    bumped = sample_icp.model_copy(update={"caps": sample_icp.caps.model_copy(update={"max_leads": 99999})})
+    noted = sample_icp.model_copy(update={"notes": "anything"})
+    assert bumped.icp_hash() == base and noted.icp_hash() == base
+    other = sample_icp.model_copy(update={"campaign": "other-campaign"})
+    assert other.icp_hash() != base
+
+
+def test_legacy_hash_includes_caps(sample_icp):
+    assert sample_icp.icp_hash_legacy() != sample_icp.icp_hash()
+    bumped = sample_icp.model_copy(update={"caps": sample_icp.caps.model_copy(update={"max_leads": 99999})})
+    assert bumped.icp_hash_legacy() != sample_icp.icp_hash_legacy()

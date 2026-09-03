@@ -614,3 +614,18 @@ def test_normalize_dispatches_on_provider_field_map_without_place_id():
     assert biz.place_id is None
     assert biz.phone_e164 == "+441483970410"          # dispatched via the provider's own field map
     assert biz.dedupe_key.startswith("na:")             # unchanged dedupe convention for place_id-less rows
+
+
+def test_resume_finds_a_run_stamped_with_the_legacy_hash_and_restamps_it(cfg):
+    """Upgrade path for the 2026-09-03 hash change: a run created by an older version (caps in the hash)
+    is still the campaign's run, and after one lookup it carries the current hash."""
+    from leadforge.pipeline import _latest_run
+    icp = _minimal_icp(max_leads=6000)
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, "icp.yaml", icp.icp_hash_legacy())
+    assert db.latest_run(conn, icp.icp_hash()) is None
+    found = _latest_run(conn, icp)
+    assert found is not None and found["id"] == run_id
+    assert db.latest_run(conn, icp.icp_hash())["id"] == run_id
+    # and the raised-cap ICP still resolves to the same run (the whole point)
+    assert _latest_run(conn, _minimal_icp(max_leads=30000))["id"] == run_id

@@ -32,8 +32,8 @@ from leadforge.util import _fmt_secs, progress_estimate
 # documented fallbacks when no measurement exists yet (docs/09; measured 2026-08-31 / 2026-09-03)
 DEFAULT_PACE_S = {
     "discover": 180.0,     # per Maps query (measured mean 3.0 min incl. stalls; median 2.0)
-    "enrich": 22.0,        # per site with 4 workers (408 sites in ~2.5 h on 2026-08-31)
-    "registry": 0.8,       # per business (Companies House 600 req / 5 min, 1-2 calls each)
+    "enrich": 2.5,         # per site with 12 workers (v0.3 default; 26 sites/min measured on 60 real sites, 2026-09-03)
+    "registry": 1.65,      # per business (Companies House 600 req / 5 min at ~2.5 calls each, measured 2026-09-03)
     "gbp": 0.02,           # per business, local
     "validate": 0.3,       # per email (DNS MX, cached per domain)
 }
@@ -124,6 +124,43 @@ def _counts(conn: sqlite3.Connection, run_id: str | None) -> dict:
     return out
 
 
+PACE_FILE = "pace.json"
+
+
+def _pace_store(data_dir: Path) -> dict:
+    try:
+        return json.loads((data_dir / PACE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _pick_pace(data_dir: Path, store: dict, stage: str, est: dict, default_label: str) -> tuple[float, str]:
+    """Measured on this process's feed > measured earlier in this workspace > documented default. The feed is
+    truncated on every process start (`set_progress_file`), so without the store a resumed run fell back to the
+    documented default for every stage it was not currently running (seen 2026-09-03: a 26 h walk-away time
+    built on a 22 s/site default while the measured pace was 2.3 s)."""
+    if est.get("per_item_s"):
+        store[stage] = {"per_item_s": est["per_item_s"], "measured_at": time.time()}
+        try:
+            (data_dir / PACE_FILE).write_text(json.dumps(store), encoding="utf-8")
+        except OSError:
+            pass
+        return est["per_item_s"], "measured on this run"
+    prior = store.get(stage, {}).get("per_item_s")
+    if prior:
+        return float(prior), "measured earlier in this workspace"
+    return DEFAULT_PACE_S[stage], default_label
+
+
+def _overlap_enabled(data_dir: Path) -> bool:
+    """Whether this workspace runs enrich/registry/validate overlapped (`enrich.overlap_stages`); defaults on."""
+    try:
+        from leadforge.config import load_config
+        return bool(load_config(data_dir.parent).enrich.overlap_stages)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def build_status(data_dir: Path, now: float | None = None) -> dict:
     """The whole picture as JSON: run, stage, machine timeline (measured or estimated per stage), human
     stages with their item counts, and the counts behind every number."""
@@ -141,6 +178,7 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     stats = json.loads(run["stats_json"]) if run else {}
     counts = _counts(conn, run_id)
     hist = _feed_history(feed, run_started)
+    store = _pace_store(data_dir)
     out.update({"run": run_id, "stage": run["stage"] if run else None,
                 "started_at": run["started_at"] if run else None,
                 "elapsed_s": (now - run_started) if run_started else None, "counts": counts})
@@ -151,10 +189,7 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     # discover
     d = progress_estimate(hist.get("discover", []), now)
     remaining_q = max(0, counts.get("queries_total", 0) - counts.get("queries_done", 0))
-    if d["per_item_s"]:
-        pace, src = d["per_item_s"], "measured on this run"
-    else:
-        pace, src = DEFAULT_PACE_S["discover"], "documented default"
+    pace, src = _pick_pace(data_dir, store, "discover", d, "documented default")
     machine.append({"stage": "discover", "state": "running" if stage == "discovering" else ("done" if counts.get("queries_total") and remaining_q == 0 else "pending"),
                     "done": counts.get("queries_done", 0), "total": counts.get("queries_total", 0),
                     "growth": d["growth"], "pace_s": pace, "pace_source": src,
@@ -164,7 +199,7 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     # enrich: sites with a domain not yet crawled/attempted
     todo = max(0, counts["with_website"] - counts["sites_crawled"] - counts["sites_attempted"])
     e = progress_estimate(hist.get("enrich", []), now)
-    pace, src = (e["per_item_s"], "measured on this run") if e["per_item_s"] else (DEFAULT_PACE_S["enrich"], "documented default (4 workers)")
+    pace, src = _pick_pace(data_dir, store, "enrich", e, "documented default (12 workers)")
     machine.append({"stage": "enrich", "state": "running" if stage == "enriching" else ("done" if todo == 0 and counts["sites_crawled"] else "pending"),
                     "done": counts["sites_crawled"] + counts["sites_attempted"], "total": counts["with_website"],
                     "growth": 0, "pace_s": pace, "pace_source": src, "eta_s": todo * pace,
@@ -172,21 +207,27 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     # registry
     todo_r = max(0, counts["businesses"] - counts["registry_checked"])
     r = progress_estimate(hist.get("registry", []), now)
-    pace, src = (r["per_item_s"], "measured on this run") if r["per_item_s"] else (DEFAULT_PACE_S["registry"], "Companies House rate limit")
+    pace, src = _pick_pace(data_dir, store, "registry", r, "documented default (Companies House rate limit)")
     machine.append({"stage": "registry", "state": "pending" if todo_r else "done", "done": counts["registry_checked"],
                     "total": counts["businesses"], "growth": 0, "pace_s": pace, "pace_source": src, "eta_s": todo_r * pace,
                     "note": f"{counts['registry_matched']} matched to an active company so far"})
     # validate
     v = progress_estimate(hist.get("validate", []), now)
-    pace, src = (v["per_item_s"], "measured on this run") if v["per_item_s"] else (DEFAULT_PACE_S["validate"], "documented default")
+    pace, src = _pick_pace(data_dir, store, "validate", v, "documented default")
     machine.append({"stage": "validate", "state": "pending" if counts["emails_unvalidated"] else "done",
                     "done": counts["emails"] - counts["emails_unvalidated"], "total": counts["emails"], "growth": 0,
                     "pace_s": pace, "pace_source": src, "eta_s": counts["emails_unvalidated"] * pace,
                     "note": "DNS MX per domain, never SMTP probing"})
-    machine_eta = sum(m["eta_s"] for m in machine)
+    # v0.3 runs enrich, registry and validate OVERLAPPED after discovery (enrich.overlap_stages, default on): the
+    # walk-away time is discover + the longest of the three, not their sum (the sum overstated it by ~2.5 h live).
+    overlapped = _overlap_enabled(data_dir)
+    after = [m["eta_s"] for m in machine if m["stage"] != "discover"]
+    machine_eta = machine[0]["eta_s"] + (max(after) if overlapped else sum(after))
     out["machine"] = {"stages": machine, "eta_s": machine_eta, "eta_human": _fmt_secs(machine_eta),
-                      "caveat": ("the enrich/registry totals grow as discovery finds businesses; "
-                                 "the sum is the walk-away time from now if pace holds")}
+                      "overlapped": overlapped,
+                      "caveat": ("the enrich/registry totals grow as discovery finds businesses; the walk-away time is "
+                                 + ("discover + the longest of enrich/registry/validate (they run overlapped)"
+                                    if overlapped else "the sum of the stages (overlap is off)") + ", if pace holds")}
 
     # ---- human / agent stages ---------------------------------------------------------------
     human = [

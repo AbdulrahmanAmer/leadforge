@@ -8,6 +8,17 @@ The truth, coverage and outreach release. Every change below was driven by a mea
 versions, plugin validate, CLI contract, DVSA fixture, export truth on a DB copy, outreach and drafting
 guardrail probes).
 
+### Fixed (2026-09-03, live sweep)
+- `caps.max_leads` and the other caps no longer form part of the campaign identity (`ICP.icp_hash`): raising a
+  cap and running `leadforge run --resume` continues the SAME run instead of re-planning every tile. Found live
+  when the new engine hit a v0.2-era 6,000 cap after 195 of 1,543 tiles. Runs created by older versions are found
+  through the legacy hash and re-stamped on first lookup (`pipeline._latest_run`). `db.create_run` no longer
+  collides when two runs of one campaign start inside the same second.
+- `leadforge dashboard`: measured per-stage paces persist in `leadforge_data/pace.json`, so a resumed process (whose
+  feed starts empty) reports "measured earlier in this workspace" instead of a documented default; the defaults
+  themselves now match v0.3 (2.5 s/site at 12 workers, 1.65 s/business at the Companies House limit). Before: a
+  26 h walk-away time built on the v0.2 22 s/site figure.
+
 ### Scope change (owner decision, ADR-011/012/013)
 - **Email sending is in scope, under coded guardrails.** `icm/SCOPE.md` #4 rewritten: dry-run by default,
   `--live` only with `outreach.armed: true` and `--i-am <approver>`, approval bound to the message's content
