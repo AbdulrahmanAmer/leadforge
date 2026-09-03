@@ -663,6 +663,19 @@ def _extract_detail_fields(page, data: dict) -> None:
                 data["plus_code"] = aria
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # measured live 2026-09-03: no full weekly-hours table without an extra click/expand (not
+        # "cheap"); this button's aria-label DOES carry a one-line summary for free, e.g.
+        # "Thursday, Open 24 hours, Copy open hours" — cheap, honest about being TODAY's line only
+        # (never conflated with normalize's `hours` dict field, which expects a structured weekly map).
+        hours_el = page.locator('button[aria-label*="open hours"]').first
+        if hours_el.count():
+            aria = (hours_el.get_attribute("aria-label") or "").strip()
+            aria = aria.replace(", Copy open hours", "").strip()
+            if aria:
+                data["hours_today_text"] = aria
+    except Exception:  # noqa: BLE001
+        pass
     if not data.get("web_site"):
         try:
             web_el = page.locator('a[data-item-id="authority"]').first
