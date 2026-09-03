@@ -329,3 +329,35 @@ def test_single_stage_runs_unaffected_by_overlap_flag(tmp_path, monkeypatch):
     assert on_checked == off_checked, (
         f"overlap_stages must not change stage='site' behavior: off={off_checked!r} on={on_checked!r}"
     )
+
+
+
+def test_ner_is_bounded_and_switchable(cfg, monkeypatch):
+    """v0.4.1: enrich.ner=false selects the heuristic extractor; when on, inferences share a semaphore
+    sized by enrich.ner_parallel (12 crawl workers must not run 12 concurrent torch inferences)."""
+    from leadforge.enrich import extract, runner
+
+    monkeypatch.setattr(extract, "ner_available", lambda: True)
+    monkeypatch.setattr(runner, "ner_available", lambda: True)
+    assert runner._people_fn(cfg) is extract.extract_people_ner
+    cfg.enrich.ner = False
+    assert runner._people_fn(cfg) is extract.extract_people
+
+    extract.configure_ner(parallel=1, threads=1)
+    assert extract._NER_LIMITS == {"parallel": 1, "threads": 1}
+    sem = extract._ner_slot()
+    assert sem.acquire(blocking=False) is True      # one slot
+    assert sem.acquire(blocking=False) is False     # no second concurrent inference
+    sem.release()
+
+    class FakeModel:
+        def predict_entities(self, text, labels, threshold):
+            assert sem.acquire(blocking=False) is False, "predict_entities must run inside the NER slot"
+            return [{"label": "person name", "text": "Sam Alpha", "start": 6, "end": 15},
+                    {"label": "job title", "text": "Owner", "start": 0, "end": 5}]
+
+    monkeypatch.setattr(extract, "_GLINER_MODEL", FakeModel())
+    people = extract.extract_people_ner("Owner Sam Alpha founded the shop.", "https://alpha.test/about")
+    assert people and people[0].name == "Sam Alpha" and people[0].title == "Owner"
+    assert sem.acquire(blocking=False) is True      # slot released after the call
+    sem.release()

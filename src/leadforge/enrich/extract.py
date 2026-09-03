@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html as html_mod
 import re
+import threading
 from dataclasses import dataclass
 
 import phonenumbers
@@ -391,11 +392,48 @@ def ner_available() -> bool:
         return False
 
 
+_NER_LIMITS: dict = {"parallel": 2, "threads": 2}
+_NER_SEM = None
+_NER_LOCK = threading.Lock()
+
+
+def configure_ner(parallel: int = 2, threads: int = 2) -> None:
+    """Bound the GLiNER path: at most `parallel` inferences in flight across all crawl workers, each on
+    `threads` torch intra-op threads. Unbounded, 12 workers x torch's default (all cores) thrashed an
+    8-core machine (2026-09-03). Safe to call before or after the model loads."""
+    global _NER_SEM
+    with _NER_LOCK:
+        _NER_LIMITS["parallel"] = max(1, int(parallel))
+        _NER_LIMITS["threads"] = max(1, int(threads))
+        _NER_SEM = threading.Semaphore(_NER_LIMITS["parallel"])
+        _apply_torch_threads()
+
+
+def _apply_torch_threads() -> None:
+    try:
+        import torch
+        torch.set_num_threads(_NER_LIMITS["threads"])
+    except Exception:  # noqa: BLE001 — torch absent (no [ner] extra) or refuses: nothing to bound
+        pass
+
+
+def _ner_slot():
+    global _NER_SEM
+    if _NER_SEM is None:
+        with _NER_LOCK:
+            if _NER_SEM is None:
+                _NER_SEM = threading.Semaphore(_NER_LIMITS["parallel"])
+    return _NER_SEM
+
+
 def _gliner_model():
     global _GLINER_MODEL
     if _GLINER_MODEL is None:
-        from gliner import GLiNER
-        _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+        with _NER_LOCK:
+            if _GLINER_MODEL is None:
+                from gliner import GLiNER
+                _GLINER_MODEL = GLiNER.from_pretrained("urchade/gliner_small-v2.1")
+                _apply_torch_threads()
     return _GLINER_MODEL
 
 
@@ -403,7 +441,8 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
     """GLiNER path — same return type and caps as extract_people(); caller falls back when unavailable."""
     model = _gliner_model()
     # 0.4 keeps short titles like "Owner" (scores ~0.45) that 0.5 drops.
-    ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.4)
+    with _ner_slot():
+        ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.4)
     names = [e for e in ents if e["label"] == "person name"]
     titles = [e for e in ents if e["label"] == "job title"]
 

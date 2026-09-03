@@ -106,7 +106,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                     text = SiteCrawler.extract_text(rendered)
                     page = Page(b["website"], rendered, text)
                     region = _region_for_business(b, cfg.default_region)
-                    people_fn = extract_people_ner if ner_available() else extract_people
+                    people_fn = _people_fn(cfg)
                     for email, label in extract_emails(rendered, text).items():
                         out["emails"].setdefault(email, {"label": label, "url": b["website"],
                                                           "context": _email_evidence(rendered, text, email)})
@@ -134,7 +134,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
             return out
         region = _region_for_business(b, cfg.default_region)
         # U4.7: GLiNER zero-shot people extraction when the [ner] extra is installed, else heuristic.
-        people_fn = extract_people_ner if ner_available() else extract_people
+        people_fn = _people_fn(cfg)
         for page in res.pages:
             for email, label in extract_emails(page.html, page.text).items():
                 out["emails"].setdefault(email, {"label": label, "url": page.url,
@@ -178,7 +178,17 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         crawler.close()
 
 
+def _people_fn(cfg: Config):
+    """GLiNER when the [ner] extra is installed AND enrich.ner is on (bounded by enrich.ner_parallel /
+    ner_threads), else the heuristic extractor — the same return type either way."""
+    if getattr(cfg.enrich, "ner", True) and ner_available():
+        return extract_people_ner
+    return extract_people
+
+
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
+    from leadforge.enrich.extract import configure_ner
+    configure_ner(getattr(cfg.enrich, "ner_parallel", 2), getattr(cfg.enrich, "ner_threads", 2))
     """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'gbp' (Google
     Business Profile facts for site-less businesses — the crawl stage covers sited ones inline),
     'infer', 'validate', 'all'.

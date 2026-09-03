@@ -134,6 +134,12 @@ class EnrichCfg(BaseModel):
                                        # `enrich --stage <one>` is never affected by this (single-stage
                                        # runs always use the original serial per-stage functions)
     dns_workers: int = 8              # MX-lookup thread pool size for validate_emails_parallel
+    # v0.4.1: GLiNER people extraction runs on the CPU inside every crawl worker; unbounded, 12 workers x
+    # torch's default 8 intra-op threads oversubscribed an 8-core box (live 2026-09-03: 2.7 cores of NER,
+    # crawl at 5.7 sites/min vs 26 measured without contention). ner=false selects the heuristic extractor.
+    ner: bool = True
+    ner_parallel: int = 2             # inferences in flight at once (a semaphore across the crawl workers)
+    ner_threads: int = 2              # torch intra-op threads per inference
 
 
 class RegistryCfg(BaseModel):

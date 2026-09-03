@@ -300,3 +300,15 @@ stop pid (sweep.pid), `leadforge prune-tiles --all-children` (parents have NULL 
 still find; benefit: ~13 h. RECOMMENDED to the owner; NOT applied without their word (scope decision).
 Push pending GATE_EXIT=0 (scratchpad/gate6.log).
 PUSHED 2026-09-03 ~13:45: 687d8b5 v0.4.1 + tag (gate 14/0 FAIL/1 SKIP). Sweep decision still with the owner.
+
+## POSITION — 2026-09-03 ~14:05, SWEEP PRUNED + RESUMED ON v0.4.1 (pid 23704) — owner said "prune"
+
+Owner decision "prune" (2026-09-03 ~14:00). Done: old process 16480 killed; DB backup
+leadforge_data/db.sqlite3.pre-prune-backup; `leadforge prune-tiles --all-children` skipped 3,726 queued child
+tiles (schema now v4); `run --resume` relaunched detached as pid 23704 (logs sweep4_stdout/stderr.log), which
+finished the 18 remaining depth-0 queries and entered the overlapped enrich/registry stage within a minute.
+Expect: crawl ~8.6k sites (26/min) overlapped with registry 5,214 (1.65 s each) ~5 h, then autopilot
+labeling (runner batches of 40 / ~50 s), scoring, drafting (auto_max 1500, ~27 s per 12), export -> the sheet
+under leadforge_data/exports/<run>/. Heartbeat cron c9bd4fc9 relaunches on stall/park; STOP when exported.
+v0.4.1 pushed: 687d8b5 + 0f40cd9 (SKILL.md version), tag v0.4.1. NOTE: one push went out on a red gate
+(SKILL.md version string) and was fixed forward within minutes — condition pushes on GATE_EXIT explicitly.
