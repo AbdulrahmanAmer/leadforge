@@ -232,7 +232,6 @@ of 1,543 tiles (6,000 businesses credited to run_20260902_22032_7eca; 6,816 in t
 - After discovery the run continues into overlapped enrich/registry/gbp/validate, then pauses at dm_pending
   (agent DM labeling), then `run --resume` for score+export. Expected sheet 9,000-12,000 rows; registry stage
   (~1.65 s/business at the CH rate limit) is the long pole.
-UNPROVEN: that the cap is not hit again (30,000 vs a 9-12k projection — should hold). NOT DONE: commit/push of the
-hash change is pending the v0.3 gate (push only on gate exit 0).
+UNPROVEN: that the cap is not hit again (30,000 vs a 9-12k projection — should hold). DONE: commit 1ebc641 pushed to origin/master after the v0.3 gate (14 checks, 0 FAIL, 1 SKIP).
 - Dashboard fix (same commit): measured paces persist in `leadforge_data/pace.json`; DEFAULT_PACE_S enrich 2.5 s,
   registry 1.65 s. Campaign dashboard 8765 restarted on the new code (no --open). 8766 untouched.
