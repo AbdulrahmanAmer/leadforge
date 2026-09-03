@@ -43,11 +43,16 @@ ACCOUNT_COLUMNS = COLUMNS + [
     "Other Systems", "Trigger", "Trigger Strength", "LinkedIn", "Contactability", "Data Confidence",
     "Status",
 ]
+# v0.4 autopilot (ADR-015): the drafted-message columns, default profile only — a human reviews the
+# newest non-rejected drafted message right on the Leads row. Nothing here is ever sent; sending stays
+# behind `leadforge outreach approve` / `--live`.
+DRAFT_COLUMNS = ["Draft Subject", "Draft Body", "Draft Grade", "Draft Author"]
 # default profile (v0.3) appends the truth/compliance columns: fit vs contactability split, the
 # phone-first Next Action, and the compliance facts a human decides outreach from.
 DEFAULT_EXTRA_COLUMNS = [
     "Fit", "Contactability", "Status", "Next Action", "Entity Type", "Lawful Basis (Email)",
     "Registry Name", "Registry Match", "Chain", "Site Status", "Email Confidence", "All Hooks",
+    *DRAFT_COLUMNS,
 ]
 DEFAULT_COLUMNS = COLUMNS + DEFAULT_EXTRA_COLUMNS
 _TIER_FILL = {
@@ -298,6 +303,31 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
                            if best_email[0] else "none",
         "All Hooks": "; ".join(hooks) if hooks else "no hooks triggered",
     })
+    # v0.4 autopilot (ADR-015): newest non-rejected drafted message for this business in THIS
+    # campaign — a business can be enrolled in more than one campaign (outreach_targets is unique on
+    # business_id+campaign), so the join is scoped to icp.campaign, not just business_id. `author` may
+    # not exist on a messages table this worktree's DB was migrated before B's schema-v3 landed —
+    # read it defensively rather than crash a whole export over one missing column.
+    msg = conn.execute(
+        "SELECT m.* FROM messages m JOIN outreach_targets t ON t.id=m.target_id "
+        "WHERE t.business_id=? AND t.campaign=? AND m.state!='rejected' ORDER BY m.id DESC LIMIT 1",
+        (s["business_id"], icp.campaign if icp else ""),
+    ).fetchone() if icp is not None else None
+    row["_has_draft"] = msg is not None
+    if msg is not None:
+        draft_author = (msg["author"] if "author" in msg.keys() else "agent") or "no draft"
+        row["_draft_author"] = draft_author
+        row.update({
+            "Draft Subject": msg["subject"] or "no draft",
+            "Draft Body": msg["body_text"] or "no draft",
+            "Draft Grade": msg["grade"] or "no draft",
+            "Draft Author": draft_author,
+        })
+    else:
+        row.update({
+            "Draft Subject": "no draft", "Draft Body": "no draft",
+            "Draft Grade": "no draft", "Draft Author": "no draft",
+        })
     return row
 
 
@@ -315,7 +345,8 @@ def export_run(conn: sqlite3.Connection, icp: ICP, run_id: str, out_dir: Path, f
     artifacts: list[str] = []
 
     if "xlsx" in formats:
-        artifacts.append(str(_write_xlsx(run_dir / f"{icp.campaign}.xlsx", rows, icp, run_id, columns)))
+        artifacts.append(str(_write_xlsx(run_dir / f"{icp.campaign}.xlsx", rows, icp, run_id, columns,
+                                         conn=conn, rows_raw=rows_raw)))
     if "csv" in formats:
         artifacts.append(str(_write_csv(run_dir / f"{icp.campaign}.csv", rows, columns)))
     artifacts.append(str(_write_report(run_dir / "report.json", rows, icp, run_id)))
@@ -332,7 +363,8 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str] = COLUMNS) -> Pa
 
 
 def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
-                columns: list[str] = COLUMNS) -> Path:
+                columns: list[str] = COLUMNS, *,
+                conn: sqlite3.Connection | None = None, rows_raw: list | None = None) -> Path:
     wb = Workbook()
     ws = wb.active
     ws.title = "Leads"
@@ -349,6 +381,8 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
     web_col = columns.index("Website") + 1
     maps_col = columns.index("Maps") + 1
     phone_col = columns.index("Phone") + 1
+    body_col = columns.index("Draft Body") + 1 if "Draft Body" in columns else None
+    wrap = Alignment(wrap_text=True, vertical="top")
     for ri in range(2, len(rows) + 2):
         ws.cell(row=ri, column=phone_col).number_format = "@"  # text — never scientific notation
         tier = ws.cell(row=ri, column=tier_col).value
@@ -362,14 +396,76 @@ def _write_xlsx(path: Path, rows: list[dict], icp: ICP, run_id: str,
             if isinstance(cell.value, str) and cell.value.startswith("http"):
                 cell.hyperlink = cell.value
                 cell.font = Font(color="0563C1", underline="single")
+        if body_col:
+            ws.cell(row=ri, column=body_col).alignment = wrap  # full draft body, readable in-cell
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
     _autosize(ws)
 
+    if conn is not None and rows_raw is not None and "Draft Body" in columns:
+        _drafts_sheet(wb, conn, rows_raw, icp)
     _summary_sheet(wb, rows, icp, run_id)
     _about_sheet(wb, icp)
     wb.save(path)
     return path
+
+
+def _draft_to_address(conn: sqlite3.Connection, business_row: sqlite3.Row, target_id: int) -> str:
+    """The outreach_targets.contact_id contact's value when set, else the row's best mailable
+    address (same ranking _row_for uses for the Leads sheet's Email column)."""
+    t = conn.execute("SELECT contact_id FROM outreach_targets WHERE id=?", (target_id,)).fetchone()
+    if t is not None and t["contact_id"]:
+        crow = conn.execute("SELECT value FROM contacts WHERE id=?", (t["contact_id"],)).fetchone()
+        if crow and crow["value"]:
+            return crow["value"]
+    contacts = db.contacts_for(conn, business_row["id"])
+    contacts_filled = fill_email_affinity(contacts, business_row["domain"])
+    ranked = rank_email_contacts(contacts_filled)
+    sendable = [c for c in ranked if c["tier"] not in ("invalid", "inferred")]
+    return sendable[0]["value"] if sendable else ""
+
+
+def _drafts_sheet(wb: Workbook, conn: sqlite3.Connection, rows_raw: list, icp: ICP) -> None:
+    """One row per non-rejected drafted message (every step, not just the newest) for businesses in
+    this run, scoped to this campaign — the human deliverable for reviewing what would go out before
+    `leadforge outreach approve`. Nothing here is ever sent by this sheet existing."""
+    ws = wb.create_sheet("Drafts")
+    headers = ["Business", "DM Name", "To", "Subject", "Body", "Grade", "Used Fact", "Author",
+               "State", "Created"]
+    ws.append(headers)
+    for ci in range(1, len(headers) + 1):
+        c = ws.cell(row=1, column=ci)
+        c.fill = _HEADER_FILL
+        c.font = _HEADER_FONT
+        c.alignment = Alignment(vertical="center")
+    wrap = Alignment(wrap_text=True, vertical="top")
+    for s in rows_raw:
+        bid = s["business_id"]
+        b = conn.execute("SELECT * FROM businesses WHERE id=?", (bid,)).fetchone()
+        if b is None:
+            continue
+        msgs = conn.execute(
+            "SELECT m.* FROM messages m JOIN outreach_targets t ON t.id=m.target_id "
+            "WHERE t.business_id=? AND t.campaign=? AND m.state!='rejected' ORDER BY m.id",
+            (bid, icp.campaign),
+        ).fetchall()
+        if not msgs:
+            continue
+        people = db.people_for(conn, bid)
+        dm = next((p for p in people if p["is_dm"] == 1), None)
+        dm_name = natural_name(dm["name"]) if dm else "not identified - ask for owner/manager"
+        for m in msgs:
+            to_addr = _draft_to_address(conn, b, m["target_id"])
+            author = (m["author"] if "author" in m.keys() else "agent") or "agent"
+            ws.append([_safe_cell(b["name"]), _safe_cell(dm_name), _safe_cell(to_addr or "-"),
+                      _safe_cell(m["subject"] or "-"), _safe_cell(m["body_text"] or "-"),
+                      _safe_cell(m["grade"] or "-"), _safe_cell(m["used_fact"] or "-"),
+                      _safe_cell(author), _safe_cell(m["state"]), _safe_cell(m["created_at"] or "-")])
+            ws.cell(row=ws.max_row, column=5).alignment = wrap
+    for col, width in (("A", 24), ("B", 20), ("C", 28), ("D", 32), ("E", 80), ("F", 8),
+                       ("G", 16), ("H", 10), ("I", 12), ("J", 20)):
+        ws.column_dimensions[col].width = width
+    ws.freeze_panes = "A2"
 
 
 def _summary_sheet(wb: Workbook, rows: list[dict], icp: ICP, run_id: str) -> None:
@@ -481,6 +577,13 @@ def _about_sheet(wb: Workbook, icp: ICP) -> None:
                                   "nothing came back) / not crawled"])
         ws.append(["Email Confidence", "plain-language affinity + tier for the exported Email address"])
         ws.append(["All Hooks", "every need signal that fired, not just the top one shown in the hook column"])
+        ws.append(["Draft Subject/Body/Grade/Author", "the newest non-rejected drafted message for "
+                                                       "this business in this campaign — drafted, "
+                                                       "never sent; approve with `leadforge outreach "
+                                                       "approve`, send only after `--live`."])
+        ws.append(["Drafts sheet", "every non-rejected drafted message (all steps) for this run's "
+                                   "businesses, with the To address and used fact, for review before "
+                                   "approving — nothing on this sheet has been sent."])
     ws.append([])
     ws.append(["Note", "Contact data is public-source and probabilistic. Confirm before high-stakes outreach; honor opt-outs via `leadforge suppress add`."])
     ws.column_dimensions["A"].width = 22
@@ -493,14 +596,30 @@ def _real_counts(rows: list[dict]) -> tuple[int, int]:
     return (sum(1 for r in rows if r.get("_has_dm")), sum(1 for r in rows if r.get("_has_email")))
 
 
+def _drafted_counts(rows: list[dict]) -> tuple[int, dict[str, int]]:
+    """(drafted, drafts_by_author): drafted = businesses in the run with a non-rejected message;
+    account_fit rows never carry `_has_draft` (drafting is default-profile only), so this reads 0/{}
+    for that profile without any special-casing here."""
+    drafted = sum(1 for r in rows if r.get("_has_draft"))
+    drafts_by_author: dict[str, int] = {}
+    for r in rows:
+        author = r.get("_draft_author")
+        if author:
+            drafts_by_author[author] = drafts_by_author.get(author, 0) + 1
+    return drafted, drafts_by_author
+
+
 def _write_report(path: Path, rows: list[dict], icp: ICP, run_id: str) -> Path:
     with_dm, with_email = _real_counts(rows)
+    drafted, drafts_by_author = _drafted_counts(rows)
     report = {
         "run": run_id, "campaign": icp.campaign, "generated": now_iso(), "total": len(rows),
         "tiers": {t: sum(1 for r in rows if r["Tier"] == t) for t in ("A", "B", "C", "D", "DQ")},
         "with_dm": with_dm,
         "with_email": with_email,
         "with_inferred_email": sum(1 for r in rows if r.get("_has_inferred")),
+        "drafted": drafted,
+        "drafts_by_author": drafts_by_author,
     }
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return path
@@ -525,6 +644,23 @@ def summarize_for_digest(conn: sqlite3.Connection, run_id: str) -> dict:
     out = {"leads": len(rows), "tier_a": tiers["A"], "tier_b": tiers["B"], "tier_c": tiers["C"], "dq": tiers["DQ"]}
     if tiers["D"]:
         out["tier_d"] = tiers["D"]
+    # v0.4 autopilot (ADR-015): drafted = businesses in this run with a non-rejected message,
+    # regardless of campaign (this function's signature carries no icp/campaign to filter by —
+    # unlike export_run's report.json, which scopes to icp.campaign via _row_for).
+    drafted = 0
+    drafts_by_author: dict[str, int] = {}
+    for s in rows:
+        m = conn.execute(
+            "SELECT m.* FROM messages m JOIN outreach_targets t ON t.id=m.target_id "
+            "WHERE t.business_id=? AND m.state!='rejected' ORDER BY m.id DESC LIMIT 1",
+            (s["business_id"],),
+        ).fetchone()
+        if m is not None:
+            drafted += 1
+            author = (m["author"] if "author" in m.keys() else "agent") or "agent"
+            drafts_by_author[author] = drafts_by_author.get(author, 0) + 1
+    out["drafted"] = drafted
+    out["drafts_by_author"] = drafts_by_author
     return out
 
 
