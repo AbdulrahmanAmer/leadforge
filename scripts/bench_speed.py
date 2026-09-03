@@ -59,6 +59,7 @@ def main() -> int:
     ap.add_argument("--ch-key", default="", help="Companies House key for the registry stage (optional)")
     ap.add_argument("--workspace", default="", help="reuse/create this workspace instead of a temp dir")
     ap.add_argument("--keep", action="store_true", help="keep the temp workspace")
+    ap.add_argument("--overlap", action="store_true", help="time enrich+registry+gbp+validate as ONE overlapped stage (stage=all), as `leadforge run` does")
     a = ap.parse_args()
 
     ws = Path(a.workspace) if a.workspace else Path(tempfile.mkdtemp(prefix="lf-bench-"))
@@ -123,15 +124,22 @@ def main() -> int:
     stage("discover", _discover, lambda: conn.execute("SELECT COUNT(*) FROM businesses").fetchone()[0])
     crawlable = conn.execute("SELECT COUNT(*) FROM businesses WHERE domain IS NOT NULL").fetchone()[0]
     print(f"   {crawlable} businesses have a website; crawling up to {a.sites}")
-    stage("enrich", lambda: run_enrich(conn, cfg, a.sites, stage="site"),
-          lambda: conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.crawled_at') IS NOT NULL "
-                               "OR json_extract(enrich_json,'$.attempted_at') IS NOT NULL").fetchone()[0])
-    stage("registry", lambda: run_enrich(conn, cfg, a.sites, stage="registry"),
-          lambda: conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.registry_checked') IS NOT NULL").fetchone()[0])
-    stage("gbp", lambda: run_enrich(conn, cfg, a.sites, stage="gbp"),
-          lambda: conn.execute("SELECT COUNT(*) FROM people WHERE origin='gbp'").fetchone()[0])
-    stage("validate", lambda: run_enrich(conn, cfg, a.sites, stage="validate"),
-          lambda: conn.execute("SELECT COUNT(*) FROM contacts WHERE kind='email'").fetchone()[0])
+    if a.overlap:
+        stage("enrich+reg", lambda: run_enrich(conn, cfg, a.sites, stage="all"),
+              lambda: conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.crawled_at') IS NOT NULL "
+                                   "OR json_extract(enrich_json,'$.attempted_at') IS NOT NULL").fetchone()[0])
+        print("   registry checked:", conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.registry_checked') IS NOT NULL").fetchone()[0],
+              "| matched active:", conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.registry_profile.company_number') IS NOT NULL").fetchone()[0])
+    else:
+        stage("enrich", lambda: run_enrich(conn, cfg, a.sites, stage="site"),
+              lambda: conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.crawled_at') IS NOT NULL "
+                                   "OR json_extract(enrich_json,'$.attempted_at') IS NOT NULL").fetchone()[0])
+        stage("registry", lambda: run_enrich(conn, cfg, a.sites, stage="registry"),
+              lambda: conn.execute("SELECT COUNT(*) FROM businesses WHERE json_extract(enrich_json,'$.registry_checked') IS NOT NULL").fetchone()[0])
+        stage("gbp", lambda: run_enrich(conn, cfg, a.sites, stage="gbp"),
+              lambda: conn.execute("SELECT COUNT(*) FROM people WHERE origin='gbp'").fetchone()[0])
+        stage("validate", lambda: run_enrich(conn, cfg, a.sites, stage="validate"),
+              lambda: conn.execute("SELECT COUNT(*) FROM contacts WHERE kind='email'").fetchone()[0])
     stage("score", lambda: score_run(conn, icp, run_id_box["run"], cfg=cfg),
           lambda: conn.execute("SELECT COUNT(*) FROM scores WHERE run_id=?", (run_id_box["run"],)).fetchone()[0])
     out_dir = ws / "exports"
