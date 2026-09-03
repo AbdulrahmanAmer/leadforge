@@ -61,6 +61,12 @@ def _contains_word(haystack: str, word: str) -> bool:
     return re.search(rf"\b{re.escape(word)}\b", haystack) is not None
 
 
+def _unpossess(token: str) -> str:
+    """"Arnold Service Centre's" -> "Arnold Service Centre": a possessive of a name the packet already holds
+    invents nothing, and live drafting (2026-09-03) rejected 3 of 10 otherwise-clean drafts on exactly this."""
+    return token[:-2] if token.endswith("'s") or token.endswith("\u2019s") else token
+
+
 def _interior_segments(text: str) -> list[str]:
     """Per sentence, the text AFTER its first word — dropped because ordinary English capitalises a
     sentence's first word regardless of evidence. Both proper-noun checks below scan only this: a
@@ -124,11 +130,15 @@ def check_draft(packet: dict, draft: dict) -> dict:
     for slot in (subject, observation):
         for seg in _interior_segments(slot):
             for m in _MULTI_CAP_RE.findall(seg):
-                if m in literals or _contains_word(haystack, m):
+                if m in literals or _contains_word(haystack, m) or _contains_word(haystack, _unpossess(m)):
                     continue
                 reasons.append(f"PROPER_NOUN: '{m}' is not in the packet or literals")
-            for w in _WORD_RE.findall(seg):
-                if not w[:1].isupper() or w in literals or _contains_word(haystack, w):
+            for wm in _WORD_RE.finditer(seg):
+                w = wm.group(0)
+                if wm.start() > 0 and seg[wm.start() - 1].isdigit():
+                    continue  # "1STOP" -> "STOP" is a fragment of an alphanumeric name, not a new proper noun
+                if (not w[:1].isupper() or w in literals or _contains_word(haystack, w)
+                        or _contains_word(haystack, _unpossess(w))):
                     continue
                 reasons.append(f"PROPER_NOUN: '{w}' is not in the packet or literals")
 

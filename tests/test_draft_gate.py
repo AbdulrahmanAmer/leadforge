@@ -167,3 +167,32 @@ def test_missing_draft_and_packet_do_not_crash():
     result = check_draft({}, {})
     assert result["ok"] is False
     assert result["reasons"]
+
+
+def test_possessive_of_a_packet_name_is_not_a_new_proper_noun():
+    """Live 2026-09-03: "Arnold Service Centre's online booking" was rejected although every word is the
+    business name. A possessive of a packet noun invents nothing; an unknown name still fails."""
+    packet = {"co": "Arnold Service Centre", "city": "Nottingham",
+              "facts": [{"k": "booking", "v": "shows an online-booking option on its site", "src": "site", "at": "x"}],
+              "constraints": {"max_subject_chars": 60, "max_observation_words": 45}}
+    ok = check_draft(packet, {"subject": "Arnold Service Centre's online booking",
+                              "observation": "Your site shows an online-booking option on its site already.",
+                              "used_fact": "booking"})
+    assert ok["ok"], ok["reasons"]
+    bad = check_draft(packet, {"subject": "Kens Garage's online booking",
+                               "observation": "Your site shows an online-booking option on its site already.",
+                               "used_fact": "booking"})
+    assert any(r.startswith("PROPER_NOUN") for r in bad["reasons"])
+
+
+def test_capitalised_fragment_glued_to_a_digit_is_not_a_proper_noun():
+    """Live 2026-09-03: the template draft for "1stop MOT Centre" quoted the legal name
+    "1STOP MOT CENTRE LIMITED" and the word scanner read "STOP" out of "1STOP"."""
+    packet = {"co": "1stop MOT Centre Limited", "city": "Nottingham",
+              "facts": [{"k": "legal_name", "v": "1STOP MOT CENTRE LIMITED", "src": "registry", "at": "x"},
+                        {"k": "incorporated_year", "v": "2011", "src": "registry", "at": "x"}],
+              "constraints": {"max_subject_chars": 60, "max_observation_words": 45}}
+    res = check_draft(packet, {"subject": "Quick note for 1stop MOT Centre Limited",
+                               "observation": "Saw 1STOP MOT CENTRE LIMITED has been trading since 2011.",
+                               "used_fact": "legal_name"})
+    assert res["ok"], res["reasons"]

@@ -235,3 +235,19 @@ of 1,543 tiles (6,000 businesses credited to run_20260902_22032_7eca; 6,816 in t
 UNPROVEN: that the cap is not hit again (30,000 vs a 9-12k projection — should hold). DONE: commit 1ebc641 pushed to origin/master after the v0.3 gate (14 checks, 0 FAIL, 1 SKIP).
 - Dashboard fix (same commit): measured paces persist in `leadforge_data/pace.json`; DEFAULT_PACE_S enrich 2.5 s,
   registry 1.65 s. Campaign dashboard 8765 restarted on the new code (no --open). 8766 untouched.
+
+## POSITION — 2026-09-03 ~06:10, v0.4 AUTOPILOT BUILD IN FLIGHT (sweep still discovering, pid 16480)
+
+Owner ask: wire labeling + scoring + drafting into `leadforge run` so a run ends in a sheet WITH drafted emails.
+Design decided and written to the builders contract:
+`C:/Users/DELL/AppData/Local/Temp/claude/D--GainLev-LeadForge-leadforge/bb93e453-b256-4096-9ee1-d9ef417ed812/scratchpad/autopilot/CONTRACT.md`
+- Headless agent runner = the operator's own Claude Code: `claude -p --model sonnet --output-format text
+  --no-session-persistence` with the prompt piped on STDIN. LIVE-PROVEN 2026-09-03: 2-line DM batch -> exit 0 in 13 s,
+  correct NDJSON + one MCP noise line (parser must keep only JSON-object lines). No API key. Auto-detected on PATH,
+  `agent.command: []` disables. Deterministic fallbacks: heuristic_auto labels, template drafts (messages.author).
+- Stages: enriched -> labeling -> scoring -> scored -> drafting -> exported; `pipeline.autopilot` (default true),
+  `run --no-autopilot` restores the dm_pending pause. Export: Draft Subject/Body/Grade/Author columns + Drafts sheet.
+- Four Sonnet builders in isolated worktrees off 987d4a8 (A runner+config, B draft service+template+schema v3,
+  C export, D pipeline+dm auto-label+docs+0.4.0 bump). Merge order after reports: A, B, C, D; then full gate; push.
+NOT DONE: merge, gate, live proof (plan: copy bench-after2 DB, set stage scored, `run --resume` -> drafts in sheet),
+then the campaign run picks it up at its dm_pending pause with `run --resume`.

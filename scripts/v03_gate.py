@@ -193,7 +193,8 @@ def check_export_on_copy(live_db: Path | None, tmp: Path) -> None:
     cfg = load_config(ws)
     conn = db.connect(cfg.db_path)
     ver = conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
-    rec("copy migrates to schema v2", ver == "2", f"schema_version={ver}")
+    from leadforge.db import SCHEMA_VERSION
+    rec(f"copy migrates to schema v{SCHEMA_VERSION}", ver == str(SCHEMA_VERSION), f"schema_version={ver}")
     icp = load_icp(icp_path)
     run = db.latest_run(conn)
     counts = score_run(conn, icp, run["id"], cfg=cfg)

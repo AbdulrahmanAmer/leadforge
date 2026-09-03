@@ -170,7 +170,8 @@ class DraftCfg(BaseModel):
     auto_purpose: str = "gainlev_leadgen"   # one of draft.skeletons.PURPOSES
     auto_tiers: list[str] = Field(default_factory=lambda: ["A", "B"])
     auto_max: int = 500                     # targets drafted per run
-    template_fallback: bool = True          # deterministic template drafts when no runner is available
+    template_fallback: bool = True
+    retries: int = 1                   # re-ask the runner once for drafts the gate rejected, with the reasons          # deterministic template drafts when no runner is available
 
 
 class AgentCfg(BaseModel):

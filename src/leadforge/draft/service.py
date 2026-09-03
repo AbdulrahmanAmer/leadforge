@@ -21,7 +21,7 @@ from pathlib import Path
 
 from leadforge.config import Config
 from leadforge.draft.gate import check_draft
-from leadforge.draft.packet import build_packet, tokens_est
+from leadforge.draft.packet import DISTINCTIVE_KEYS, build_packet, tokens_est
 from leadforge.draft.skeletons import deterministic_slots, load_skeleton, render_body
 from leadforge.draft.template import template_drafts
 from leadforge.models import ICP
@@ -172,6 +172,24 @@ def build_packets(conn, cfg: Config, icp: ICP, target_ids: list[int], purpose: s
     return lines, counts
 
 
+def infer_used_fact(packet: dict, draft: dict) -> str:
+    """The packet fact the draft actually quotes, when the model forgot to cite one (live 2026-09-03: a
+    12-packet batch came back with 11 citations, and one earlier batch with none although every line
+    quoted a fact value verbatim). Inference only ever names a fact whose VALUE appears in the text —
+    the gate's own USED_FACT test — so it can never launder an invented claim; distinctive facts win
+    over baseline ones, and a text quoting nothing stays uncited (and is rejected as before)."""
+    text = f"{draft.get('subject') or ''}\n{draft.get('observation') or ''}".casefold()
+    best, best_rank = "", -1
+    for f in packet.get("facts") or []:
+        key, value = str(f.get("k") or ""), str(f.get("v") or "")
+        if not key or not value or value.casefold() not in text:
+            continue
+        rank = 2 if key in DISTINCTIVE_KEYS else (0 if key in ("category", "city") else 1)
+        if rank > best_rank:
+            best, best_rank = key, rank
+    return best
+
+
 def apply_drafts(conn, cfg: Config, packet_by_target: dict[int, dict], drafts: Iterable[dict], *,
                  author: str = "agent", campaign: str | None = None) -> dict:
     """Ingest drafts (from the CLI's drafts.ndjson, or a batch of runner/template output); every
@@ -191,6 +209,10 @@ def apply_drafts(conn, cfg: Config, packet_by_target: dict[int, dict], drafts: I
             counts["insufficient_evidence"] += 1
             continue
 
+        if not draft.get("used_fact"):
+            inferred = infer_used_fact(packet, draft)
+            if inferred:
+                draft = {**draft, "used_fact": inferred}
         result = check_draft(packet, draft)
         step = conn.execute("SELECT COUNT(*) c FROM messages WHERE target_id=?", (tid,)).fetchone()["c"] + 1
         purpose = packet.get("purpose", "")
@@ -231,8 +253,13 @@ DRAFT_INSTRUCTIONS = (
     "to be true.\n"
     "2. Write ONLY 'subject' and 'observation'. Never write the greeting, offer line, CTA, "
     "signature, postal address, privacy line or opt-out line -- those are filled in separately.\n"
-    "3. Cite exactly one fact as 'used_fact' (its k), and make sure the drafted text actually "
-    "references it -- the key or its value must appear in subject+observation.\n"
+    "3. Cite exactly one fact as 'used_fact' (its k) and QUOTE THAT FACT'S VALUE VERBATIM in the "
+    "observation (for rating '4.6 stars (120 reviews)' write exactly those words; for booking "
+    "'shows an online-booking option on its site' write exactly that) -- a mechanical gate rejects "
+    "any draft whose text does not contain the used fact's value or key word.\n"
+    "3b. Every capitalised word or multi-word name you write must appear verbatim in the packet "
+    "(the business name 'co', the city, legal_name, dm_name). Never coin a new capitalised phrase "
+    "('Nottingham MOT') and never abbreviate or re-order the business name.\n"
     "4. Never invent a number, name, email, URL, or a competitor/social-proof/results claim "
     "('dozens of garages...', 'we cut their...', 'guaranteed').\n"
     "5. Negation matters: if the packet has no 'booking' fact, don't claim they take bookings "
@@ -243,10 +270,33 @@ DRAFT_INSTRUCTIONS = (
     "than pad with a generic line. Abstaining is a normal, counted outcome, not a failure.\n"
     "8. Keep 'observation' to one sentence, under constraints.max_observation_words; keep "
     "'subject' under constraints.max_subject_chars. Short beats clever.\n\n"
+    "9. A line carrying 'rejected_attempt' is a retry: your previous draft for that target failed "
+    "the gate for the listed reasons -- write a corrected draft that fixes every reason.\n\n"
     "Reply with ONLY one JSON line per packet line: "
     '{"target","subject","observation","used_fact"} or {"target","abstain":true}. '
     "Do not use any tools. No prose."
 )
+
+
+def _rejected_lines(conn, batch_lines: list[dict]) -> list[dict]:
+    """The packet lines of `batch_lines` whose target has a rejected message and no drafted one, each
+    annotated with the newest rejection (`rejected_attempt`: subject + gate reasons) for the retry."""
+    out: list[dict] = []
+    for ln in batch_lines:
+        tid = ln["target"]
+        if conn.execute("SELECT 1 FROM messages WHERE target_id=? AND state='drafted' LIMIT 1", (tid,)).fetchone():
+            continue
+        row = conn.execute("SELECT subject, gate_json FROM messages WHERE target_id=? AND state='rejected' "
+                           "ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+        if row is None:
+            continue
+        try:
+            reasons = json.loads(row["gate_json"]).get("reasons", [])
+        except (TypeError, ValueError):
+            reasons = []
+        out.append({**{k: v for k, v in ln.items() if k != "rejected_attempt"},
+                    "rejected_attempt": {"subject": row["subject"], "reasons": reasons}})
+    return out
 
 
 def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[list[str]], list[dict]] | None,
@@ -315,8 +365,27 @@ def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[li
                 if cfg.draft.template_fallback:
                     _apply(batch, template_drafts(batch), "template")
                 # else: template fallback disabled -> this batch simply drafts nothing
-            else:
-                _apply(batch, drafts, "agent")
+                continue
+            _apply(batch, drafts, "agent")
+            # gated retry (live 2026-09-03: 9 of 10 first drafts failed USED_FACT/PROPER_NOUN; the reasons
+            # are exactly what the model needs to fix them) -- then the template for whatever still fails
+            remaining = batch
+            for _attempt in range(max(0, int(getattr(cfg.draft, "retries", 1)))):
+                remaining = _rejected_lines(conn, remaining)
+                if not remaining:
+                    break
+                result["batches"] += 1
+                retry_lines = [json.dumps(header, ensure_ascii=False)] + [
+                    json.dumps(ln, ensure_ascii=False) for ln in remaining
+                ]
+                try:
+                    retry_drafts = runner(retry_lines)
+                except Exception:
+                    break
+                _apply(remaining, retry_drafts or [], "agent")
+            still = _rejected_lines(conn, remaining) if remaining else []
+            if still and cfg.draft.template_fallback:
+                _apply(still, template_drafts(still), "template")
     elif cfg.draft.template_fallback:
         result["batches"] = 1
         _apply(packet_lines, template_drafts(packet_lines), "template")

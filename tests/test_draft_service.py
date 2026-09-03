@@ -338,3 +338,62 @@ def test_auto_draft_uses_explicit_purpose_and_campaign_over_config_and_icp_defau
     assert m["purpose"] == "follow_up"
     t = conn.execute("SELECT campaign FROM outreach_targets").fetchone()
     assert t["campaign"] == "other-camp"
+
+
+def test_auto_draft_retries_a_rejected_draft_with_the_gate_reasons_then_templates_the_rest(cfg, conn):
+    """Live 2026-09-03: 9 of 10 first drafts failed the gate on fixable reasons. One retry carries the
+    reasons back to the runner; what still fails gets the deterministic template so the row is never empty."""
+    rid = db.create_run(conn, "icp.yaml", "h")
+    _seed_business(conn, "b1", tier="A", run_id=rid, enrich=_HIRING_ENRICH)
+    _seed_business(conn, "b2", tier="A", run_id=rid, enrich=_HIRING_ENRICH)
+    icp = _icp()
+    acfg = _autopilot_cfg(cfg, batch=40)
+    calls: list[list[dict]] = []
+
+    def runner(lines: list[str]) -> list[dict]:
+        rows = [json.loads(ln) for ln in lines[1:]]
+        calls.append(rows)
+        out = []
+        for row in rows:
+            tid, co = row["target"], row["packet"]["co"]
+            if "rejected_attempt" in row and tid == min(r["target"] for r in rows):
+                # the retry fixes the first target (quotes the fact value verbatim); the other stays broken
+                # (invented number) on every attempt -> template
+                out.append({"target": tid, "subject": "Quick note", "observation": "Saw the site has a live careers/jobs page.",
+                            "used_fact": "hiring"})
+            else:
+                out.append({"target": tid, "subject": "Quick note",
+                            "observation": "We helped 40 garages like yours.", "used_fact": "hiring"})
+        return out
+
+    result = service.auto_draft(conn, acfg, icp, rid, runner=runner)
+    assert len(calls) == 2 and result["batches"] == 2
+    assert all("rejected_attempt" in r for r in calls[1]) and len(calls[1]) == 2
+    assert calls[1][0]["rejected_attempt"]["reasons"]  # the gate's reasons travel with the retry
+    assert result["drafted"] == 2 and result["author"] == "mixed"
+    by_target = {}
+    for m in conn.execute("SELECT target_id, state, author FROM messages WHERE state='drafted'"):
+        by_target[m["target_id"]] = m["author"]
+    assert sorted(by_target.values()) == ["agent", "template"]
+
+
+def test_apply_drafts_infers_the_cited_fact_from_a_verbatim_quote_but_never_from_nothing(cfg, conn):
+    rid = db.create_run(conn, "icp.yaml", "h")
+    _seed_business(conn, "b1", tier="A", run_id=rid, enrich=_HIRING_ENRICH)
+    icp = _icp()
+    acfg = _autopilot_cfg(cfg)
+    tids = service.ensure_targets(conn, rid, {"A"}, icp.campaign)
+    lines, _ = service.build_packets(conn, acfg, icp, tids, "gainlev_leadgen")
+    packet_by_target = {ln["target"]: ln["packet"] for ln in lines[1:]}
+    tid = tids[0]
+    quoted = {"target": tid, "subject": "Quick note", "observation": "Noticed the site has a live careers/jobs page."}
+    counts = service.apply_drafts(conn, acfg, packet_by_target, [quoted], author="agent")
+    assert counts["applied"] == 1 and counts["rejected"] == 0
+    assert conn.execute("SELECT used_fact FROM messages WHERE target_id=?", (tid,)).fetchone()[0] == "hiring"
+    conn.execute("DELETE FROM messages")
+    conn.execute("UPDATE outreach_targets SET state='enrolled'")
+    bare = {"target": tid, "subject": "Quick note", "observation": "Hope business is going well this year."}
+    counts = service.apply_drafts(conn, acfg, packet_by_target, [bare], author="agent")
+    assert counts["applied"] == 0 and counts["rejected"] == 1
+    reasons = json.loads(conn.execute("SELECT gate_json FROM messages").fetchone()[0])["reasons"]
+    assert any("cites no used_fact" in r for r in reasons)
