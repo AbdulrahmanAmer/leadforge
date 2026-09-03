@@ -312,3 +312,26 @@ labeling (runner batches of 40 / ~50 s), scoring, drafting (auto_max 1500, ~27 s
 under leadforge_data/exports/<run>/. Heartbeat cron c9bd4fc9 relaunches on stall/park; STOP when exported.
 v0.4.1 pushed: 687d8b5 + 0f40cd9 (SKILL.md version), tag v0.4.1. NOTE: one push went out on a red gate
 (SKILL.md version string) and was fixed forward within minutes — condition pushes on GATE_EXIT explicitly.
+
+## POSITION — 2026-09-03 ~14:30, RUN RELAUNCHED WITH BOUNDED NER (pid 16940); gate for 4e3b407 running
+
+After the prune the resumed run was CPU-bound: python at ~2.7 cores (GLiNER inside 12 crawl workers, torch
+default threads), machine at 100%, crawl 5.7 sites/min (vs 26 benchmark), registry 2.9 s (vs 1.65).
+Shipped 4e3b407: enrich.ner (default true), ner_parallel 2 (semaphore), ner_threads 2 (torch cap), runner
+`_people_fn(cfg)`; test in test_enrich_speed. Old pid 23704 killed, relaunched as 16940 (sweep5_*.log).
+NEXT: when gate8.log is GATE_EXIT=0 push (CONDITION IT); measure sites/min from progress.jsonl over 5+ min
+AFTER the gate's suite stops loading the CPU; if still < ~15/min set `enrich.ner: false` in the campaign
+leadforge.yaml and relaunch (heuristic extractor; registry still supplies directors). Dashboard 8765 pid 20896.
+MEASURED 2026-09-03 ~14:55 (clean window, gate finished): bounded NER -> 14.5 sites/min (was 5.7), registry 2.06 s each (was 2.9); ~9.2k sites left => enrichment ~10-11 h, then labeling/drafting ~2 h. NER kept ON for DM quality; `enrich.ner: false` would roughly halve enrichment time if the owner prefers speed.
+
+## POSITION — 2026-09-03 ~15:25, RUN PARKED BY OWNER ("stop the run right now and park all this ... we can continue later")
+
+Heartbeat cron c9bd4fc9 DELETED; run process 16940 killed; DB backup leadforge_data/db.sqlite3.parked-backup.
+State at park: 15,827 businesses; 1,099 of 10,069 sites crawled/attempted; registry checked ~1.9k; 534 DM-pending.
+Run stage set to 'enriched' by hand and campaign draft.auto_max set to 120 (was 1500) so the owner can look at a
+sheet now: `run --resume` (log leadforge_data/logs/park_export_stdout.log) -> labeling (runner) -> scoring ->
+drafting (<=120) -> export under leadforge_data/exports/run_20260902_22032_7eca/.
+TO CONTINUE LATER: in the campaign folder, `python -c "import sqlite3;c=sqlite3.connect('leadforge_data/db.sqlite3');
+c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'\");c.commit()"` then
+`leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
+with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
