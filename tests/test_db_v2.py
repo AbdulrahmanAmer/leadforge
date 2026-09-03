@@ -35,7 +35,10 @@ def test_v1_database_migrates_additively(tmp_path):
     path = tmp_path / "old.sqlite3"
     _v1_db(path)
     conn = db.connect(path)
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "2"
+    # v0.4 (schema v3, test_db_v3.py) added messages.author after this test was written: migrate()
+    # always converges a database to the current SCHEMA_VERSION in one connect(), so a v1 database
+    # now lands on "3", not "2" -- the v2-specific columns/tables below are unaffected either way.
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
     for table, col in (("suppression", "source"), ("suppression", "client_id"), ("people", "origin"), ("contacts", "affinity")):
         assert col in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
     # origin back-filled from labeled_by so old registry candidates keep their provenance
