@@ -209,3 +209,23 @@ def test_resume_reenters_labeling_and_drafting_idempotently(cfg, sample_icp, pat
     db.set_stage(conn, r1["run"], "labeling")
     r3 = run_pipeline(cfg, sample_icp, icp_path, resume=True, autopilot=True)
     assert r3["stage"] == "exported"
+
+
+def test_run_parked_at_dm_pending_resumes_into_autopilot_labeling(cfg, sample_icp, patched, monkeypatch, tmp_path):
+    """The live hand-off: the v0.3-code sweep process pauses at dm_pending; `run --resume` on v0.4 must
+    label, score, draft and export instead of reporting dm_pending again."""
+    calls = _stub_agent_runner(monkeypatch)
+    monkeypatch.setattr(cfg.draft, "auto_tiers", ["A", "B", "C", "D"])
+    from leadforge.pipeline import run_pipeline
+    icp_path = _icp_path(sample_icp, tmp_path)
+
+    r1 = run_pipeline(cfg, sample_icp, icp_path, autopilot=False)
+    assert r1["stage"] == "dm_pending" and r1["counts"]["dm_pending"] >= 1
+
+    r2 = run_pipeline(cfg, sample_icp, icp_path, resume=True, autopilot=True)
+    assert r2["stage"] == "exported"
+    assert r2["counts"]["dm_labeled"] >= 1 and r2["counts"]["dm_unlabeled"] == 0
+    assert r2["counts"]["drafted"] >= 1 and r2["counts"]["runner"] == "agent"
+    assert len(calls) == 2
+    conn = db.connect(cfg.db_path)
+    assert conn.execute("SELECT stage FROM runs WHERE id=?", (r2["run"],)).fetchone()["stage"] == "exported"

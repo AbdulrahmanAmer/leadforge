@@ -449,6 +449,12 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         else:
             stage = "scoring"
 
+    # v0.4: a run parked at dm_pending by an older process or by --no-autopilot resumes straight into
+    # autopilot labeling when autopilot is on (the live hand-off from the v0.3 sweep process, 2026-09-03:
+    # without this the resumed run just reported dm_pending again).
+    if stage == "dm_pending" and not skip_dm and autopilot:
+        stage = "labeling" if db.dm_pending(conn, 1) else "scoring"
+
     # LABEL (autopilot only; re-entered idempotently on resume — auto_label just continues from
     # whatever is still dm_pending). Leftovers export as unlabeled rather than blocking the run
     # (docs/06: digest counts dm_unlabeled, `next` points at `dm export` when it is > 0).
