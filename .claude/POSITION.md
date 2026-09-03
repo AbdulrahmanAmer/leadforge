@@ -286,3 +286,4 @@ tests green, ruff clean; full gate running (scratchpad/gate4.log). Campaign lead
 agent{sonnet,40,100} + draft{gainlev_leadgen, A/B, auto_max 1500} (backup leadforge.yaml.pre-v0.4); dashboard
 8765 relaunched (pid 23628). Push on GATE_EXIT=0. Sweep pid 16480 still discovering (~580/2960 tiles, 11.8k).
 PUSHED 2026-09-03 ~09:50: master 7dc398b -> origin (gate: 14 checks, 0 FAIL, 1 SKIP; full suite 692 passed).
+PUSHED 2026-09-03 ~10:25: f7a9678 (dm_pending -> autopilot labeling hand-off), tag v0.4.0 moved to it; gate 14/0 FAIL/1 SKIP.
