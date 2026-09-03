@@ -22,7 +22,7 @@ from pathlib import Path
 from leadforge.models import Business, Contact, Evidence, Person, Score
 from leadforge.util import now_iso, sha1_hex
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS runs (
 
 CREATE TABLE IF NOT EXISTS queries (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL REFERENCES runs(id),
-  query_text TEXT NOT NULL, tile_json TEXT, status TEXT NOT NULL DEFAULT 'pending', result_count INTEGER DEFAULT 0
+  query_text TEXT NOT NULL, tile_json TEXT, status TEXT NOT NULL DEFAULT 'pending', result_count INTEGER DEFAULT 0,
+  new_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS businesses (
@@ -141,6 +142,11 @@ _V2_COLUMNS = {
 _V3_COLUMNS = {
     "messages": [("author", "TEXT DEFAULT 'agent'")],
 }
+# v4 (v0.4.1): how many NEW businesses a query added — the novelty signal that gates subdivision and
+# lets `prune-tiles` drop children of tiles that found nothing new. NULL = recorded by an older version.
+_V4_COLUMNS = {
+    "queries": [("new_count", "INTEGER")],
+}
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -186,6 +192,13 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if name not in have:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         version = 3
+    if version < 4:
+        for table, cols in _V4_COLUMNS.items():
+            have = _columns(conn, table)
+            for name, decl in cols:
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        version = 4
     if version != int(row[0]):
         conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(version),))
     conn.commit()
@@ -239,9 +252,68 @@ def pending_queries(conn: sqlite3.Connection, run_id: str) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM queries WHERE run_id=? AND status='pending' ORDER BY id", (run_id,)).fetchall()
 
 
-def finish_query(conn: sqlite3.Connection, query_id: int, status: str, count: int) -> None:
-    conn.execute("UPDATE queries SET status=?, result_count=? WHERE id=?", (status, count, query_id))
+def finish_query(conn: sqlite3.Connection, query_id: int, status: str, count: int,
+                 new_count: int | None = None) -> None:
+    conn.execute("UPDATE queries SET status=?, result_count=?, new_count=? WHERE id=?",
+                 (status, count, new_count, query_id))
     conn.commit()
+
+
+def _tile_of(row: sqlite3.Row) -> dict | None:
+    try:
+        t = json.loads(row["tile_json"]) if row["tile_json"] else None
+    except (TypeError, ValueError):
+        return None
+    return t if isinstance(t, dict) and "bbox" in t else None
+
+
+def prune_child_tiles(conn: sqlite3.Connection, run_id: str, min_new: int = 3, *, all_children: bool = False,
+                      dry_run: bool = False) -> dict:
+    """Mark pending subdivision children (tile depth >= 1) as 'skipped' when their parent tile — the
+    DONE query with the same text, one depth up, whose bbox contains the child's centre — added fewer
+    than `min_new` NEW businesses (parent.new_count < min_new). Parents recorded by a version that did
+    not store new_count (NULL) are left alone unless `all_children`, which skips every pending child
+    (the blunt instrument for a run whose per-tile yield was measured out of band). 'skipped' is not
+    'pending', so `run --resume` treats discovery as complete. Returns counts; `dry_run` changes nothing."""
+    pending = [r for r in conn.execute(
+        "SELECT id, query_text, tile_json FROM queries WHERE run_id=? AND status='pending'", (run_id,)).fetchall()]
+    done = conn.execute(
+        "SELECT query_text, tile_json, new_count FROM queries WHERE run_id=? AND status='done' AND tile_json IS NOT NULL",
+        (run_id,)).fetchall()
+    parents: dict[tuple[str, int], list[tuple[list, int | None]]] = {}
+    for r in done:
+        t = _tile_of(r)
+        if t is None:
+            continue
+        parents.setdefault((r["query_text"], int(t.get("depth", 0))), []).append((t["bbox"], r["new_count"]))
+    out = {"pending": len(pending), "children": 0, "skipped": 0, "kept_parent_yielded": 0, "kept_parent_unknown": 0}
+    to_skip: list[int] = []
+    for r in pending:
+        t = _tile_of(r)
+        if t is None or int(t.get("depth", 0)) < 1:
+            continue
+        out["children"] += 1
+        if all_children:
+            to_skip.append(r["id"])
+            continue
+        cx = (t["bbox"][0] + t["bbox"][2]) / 2
+        cy = (t["bbox"][1] + t["bbox"][3]) / 2
+        parent_new = None
+        for bbox, new_count in parents.get((r["query_text"], int(t["depth"]) - 1), []):
+            if bbox[0] <= cx <= bbox[2] and bbox[1] <= cy <= bbox[3]:
+                parent_new = new_count
+                break
+        if parent_new is None:
+            out["kept_parent_unknown"] += 1
+        elif parent_new < min_new:
+            to_skip.append(r["id"])
+        else:
+            out["kept_parent_yielded"] += 1
+    out["skipped"] = len(to_skip)
+    if to_skip and not dry_run:
+        conn.executemany("UPDATE queries SET status='skipped' WHERE id=?", [(i,) for i in to_skip])
+        conn.commit()
+    return out
 
 
 # ------------------------------------------------------------------ businesses (merge upsert)

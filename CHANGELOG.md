@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.1] — 2026-09-03
+
+### Changed
+- **Novelty-gated subdivision (ADR-016).** A saturated tile now spawns children only when it added at least
+  `discovery.subdivide_min_new` (default 3) NEW businesses. Measured on the live 10-city sweep: after the base
+  grid, the depth-1 children of well-covered tiles came back saturated too and added ~0.6 businesses each
+  (~15 s apiece), while each still spawned four more children — the plan grew from 1,543 to 4,600+ tiles and
+  the discovery ETA drifted past 13 h. Every query now records `new_count` (schema v4).
+- **`leadforge prune-tiles [--min-new N] [--all-children] [--dry-run]`** skips queued children whose parent
+  found nothing new (or all pending children for a run recorded before `new_count` existed); skipped tiles are
+  not pending, so `run --resume` moves on to enrichment. The dashboard's remaining-work count excludes them.
+
 ## [0.4.0] — 2026-09-03
 
 The autopilot release (ADR-015, owner request 2026-09-03): `leadforge run` now continues on its own after

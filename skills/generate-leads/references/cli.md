@@ -27,6 +27,7 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `render-check URL` | diagnose one site: robots → plain fetch → browser → contacts | — | `emails`, `blocked`, `rendered` |
 | `outreach identity add\|list` | sending identities (from name/email, postal address, privacy URL, opt-out channel) | `--label`, `--from-email`, … | `id`, `live_complete` |
 | `outreach mailbox add\|list` | mailboxes that send for an identity; secrets by env var NAME only | `--identity`, `--address`, `--transport file\|smtp`, `--config k=ENV`, `--daily-cap` | `id` |
+| `prune-tiles` | skip queued subdivision children whose parent tile found nothing new (ADR-016) | `--min-new N` (3), `--all-children`, `--dry-run` | `pending`, `children`, `skipped`, `kept_parent_yielded`, `kept_parent_unknown` |
 | `outreach plan` | enrol scored leads as outreach targets (entity type, lawful basis, suppression, chain dedupe) | `--campaign`, `--tier A,B`, `--identity`, `--limit`, `--client` | `enrolled`, `no_sendable_email`, `entity_gate`, `chain_duplicate`, `suppressed` |
 | `draft export` | one evidence packet per enrolled target for you to draft from | `--campaign`, `--purpose`, `--max`, `--out`, `--run`/`--tier` (standalone) | `targets`, `grade_a/b/c`, `insufficient_evidence`; artifact = packet path |
 | `draft apply` | ingest your drafts through the no-fabrication gate | `--in F`, `--packets F` | `drafted`, `rejected`, `abstained` |

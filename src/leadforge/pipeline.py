@@ -198,7 +198,14 @@ def _apply_query_result(conn, cfg: Config, icp: ICP, run_id: str, q, pq, listing
     # re-fetches it, saturates again, and would otherwise insert a second set of 4 children —
     # quarter_tile(pq.tile) is deterministic (same parent bbox -> same 4 quadrant dicts), so the
     # json.dumps of a child's to_json() matches the tile_json string already on disk byte-for-byte.
-    if status == "done" and tiled_honoured and len(listings) >= cfg.discovery.subdivide_at \
+    # v0.4.1 novelty gate: a saturated tile whose results were all already known (its neighbours and
+    # the other categories found them) does not get children — live 2026-09-03, the depth-1 children
+    # of such tiles came back saturated too and added ~0.6 businesses each for ~15 s apiece.
+    novel_enough = per_query_new >= max(0, int(getattr(cfg.discovery, "subdivide_min_new", 0)))
+    if not novel_enough and status == "done" and tiled_honoured and len(listings) >= cfg.discovery.subdivide_at \
+            and pq.tile.depth < cfg.discovery.max_subdivisions:
+        ctx["subdivisions_skipped"] = ctx.get("subdivisions_skipped", 0) + 1
+    if status == "done" and tiled_honoured and novel_enough and len(listings) >= cfg.discovery.subdivide_at \
             and pq.tile.depth < cfg.discovery.max_subdivisions:
         children = quarter_tile(pq.tile)
         existing_tiles = {
@@ -215,7 +222,7 @@ def _apply_query_result(conn, cfg: Config, icp: ICP, run_id: str, q, pq, listing
                 ctx["known_ids"].add(nr["id"])
                 ctx["queue"].append(nr)
 
-    db.finish_query(conn, q["id"], status, len(listings))
+    db.finish_query(conn, q["id"], status, len(listings), new_count=per_query_new)
 
 
 def _run_discover_serial(conn, cfg: Config, icp: ICP, run_id: str, chain, ctx: dict, limit, warns) -> None:

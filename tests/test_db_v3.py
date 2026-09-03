@@ -77,7 +77,7 @@ def test_v2_database_migrates_to_v3_additively(tmp_path):
     path = tmp_path / "v2.sqlite3"
     _v2_db(path)
     conn = db.connect(path)
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
     assert "author" in {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
     # the pre-existing row backfills to the column default, never NULL
     row = conn.execute("SELECT author FROM messages WHERE target_id=1").fetchone()
@@ -85,14 +85,14 @@ def test_v2_database_migrates_to_v3_additively(tmp_path):
     conn.close()
     # idempotent: a second connect on an already-v3 database is a no-op, never errors
     conn2 = db.connect(path)
-    assert conn2.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+    assert conn2.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
 
 
 def test_v1_database_migrates_straight_to_v3(tmp_path):
     path = tmp_path / "v1.sqlite3"
     _v1_db(path)
     conn = db.connect(path)
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
     for table, col in (("suppression", "source"), ("suppression", "client_id"), ("people", "origin"),
                        ("contacts", "affinity"), ("messages", "author")):
         assert col in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}, f"{table}.{col}"
@@ -105,7 +105,7 @@ def test_fresh_database_has_author_column_from_the_ddl(tmp_path):
     SCHEMA_VERSION) -- so `messages.author` must come from the DDL itself, not only the migration."""
     path = tmp_path / "fresh.sqlite3"
     conn = db.connect(path)
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == "3"
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
     assert "author" in {r[1] for r in conn.execute("PRAGMA table_info(messages)")}
 
 
@@ -130,3 +130,12 @@ def test_new_message_row_defaults_author_to_agent(conn):
     conn.commit()
     row = conn.execute("SELECT author FROM messages WHERE target_id=?", (tid,)).fetchone()
     assert row["author"] == "agent"
+
+
+def test_v1_database_lands_on_schema_v4_with_queries_new_count(tmp_path):
+    path = tmp_path / "old.sqlite3"
+    _v1_db(path)
+    conn = db.connect(path)
+    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
+    assert "new_count" in {r[1] for r in conn.execute("PRAGMA table_info(queries)")}
+    db.connect(path)  # idempotent

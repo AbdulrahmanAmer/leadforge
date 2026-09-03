@@ -131,6 +131,19 @@ coverage trade-off against speed, not a bug); `Business.cid` becomes populated f
 both providers, and normalize.py must not assume `place_id` is the only non-name+street dedupe anchor
 going forward.
 
+## ADR-016 — Novelty-gated saturation subdivision (v0.4.1)
+**Context:** ADR-013 subdivides every tiled query that returns >= `subdivide_at` results, because Google Maps
+caps a search at ~100-120 results and the cap hides businesses. Live 2026-09-03 (10 cities, 6 categories):
+once the base grid was done, 60 of 60 consecutive depth-1 children came back saturated AND added ~0.6 new
+businesses each — their results were already known from neighbouring tiles and sibling categories — while each
+still spawned 4 depth-2 children. The plan grew from 1,543 to 4,600+ tiles; discovery ETA drifted from 3 h to
+13+ h for a few hundred more rows. **Decision:** record `new_count` per query (schema v4) and subdivide a
+saturated tile only when it added >= `discovery.subdivide_min_new` (default 3) new businesses; provide
+`leadforge prune-tiles` to drop already-queued children whose parent found nothing new (or every pending child,
+for runs recorded before `new_count`). **Consequences:** coverage of a dense area now stops where novelty stops,
+not where the result cap stops; a genuinely under-covered tile (many new results) still subdivides exactly as
+before; the trade-off is explicit and configurable (0 restores ADR-013 behaviour).
+
 ## ADR-015 — Autopilot: `run` finishes itself through the operator's own headless Claude Code (v0.4)
 **Context:** the owner asked (2026-09-03) for a fully automated `leadforge run` that ends in a sheet
 carrying drafted emails, without the operator manually round-tripping `dm export`/`dm apply` and

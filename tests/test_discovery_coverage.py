@@ -79,6 +79,7 @@ def test_saturation_subdivision_creates_children_and_respects_max_depth(cfg, mon
 def test_subdivision_children_use_same_query_text_and_parent_stays_marked_done(cfg, monkeypatch):
     monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
     cfg.discovery.subdivide_at = 2
+    cfg.discovery.subdivide_min_new = 0  # ADR-016 gate off: this test is about subdivision mechanics
     cfg.discovery.max_subdivisions = 1
     icp = _minimal_icp(max_leads=100_000)
     icp_path = cfg.workspace / "icp.yaml"
@@ -203,6 +204,7 @@ def test_crash_between_child_insert_and_parent_finish_does_not_duplicate_childre
     against tile_json rows already persisted for this (run_id, query_text)."""
     monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
     cfg.discovery.subdivide_at = 2
+    cfg.discovery.subdivide_min_new = 0  # ADR-016 gate off: this test is about subdivision mechanics
     cfg.discovery.max_subdivisions = 1
     icp = _minimal_icp(max_leads=100_000)
     icp_path = cfg.workspace / "icp.yaml"
@@ -233,7 +235,7 @@ def test_crash_between_child_insert_and_parent_finish_does_not_duplicate_childre
     real_finish = db.finish_query
     state = {"crashed": False}
 
-    def crashing_finish(conn_, qid, status, count):
+    def crashing_finish(conn_, qid, status, count, **kw):
         if not state["crashed"]:
             state["crashed"] = True
             raise RuntimeError("simulated crash after children persisted, before parent finished")
@@ -629,3 +631,71 @@ def test_resume_finds_a_run_stamped_with_the_legacy_hash_and_restamps_it(cfg):
     assert db.latest_run(conn, icp.icp_hash())["id"] == run_id
     # and the raised-cap ICP still resolves to the same run (the whole point)
     assert _latest_run(conn, _minimal_icp(max_leads=30000))["id"] == run_id
+
+
+def test_saturated_tile_with_nothing_new_does_not_subdivide(cfg, monkeypatch):
+    """ADR-016 (live 2026-09-03): a saturated tile whose listings were all already known spawns no
+    children; the root (all new) still does. The provider returns the SAME 12 listings every fetch."""
+    monkeypatch.setattr("leadforge.pipeline.ensure_ready", lambda c: None)
+    cfg.discovery.subdivide_at = 12
+    cfg.discovery.max_subdivisions = 2
+    cfg.discovery.subdivide_min_new = 3
+    icp = _minimal_icp(max_leads=100_000)
+    icp_path = cfg.workspace / "icp.yaml"
+    icp_path.write_text(yaml.safe_dump(icp.model_dump(mode="json")), encoding="utf-8")
+
+    @register
+    class FakeTiledSame(DiscoveryProvider):
+        name = "faketiled_same"
+        supports_tiles = True
+
+        def available(self):
+            return True, "fake"
+
+        def fetch(self, query, limit=None):
+            return [RawListing(provider=self.name, fetched_at=now_iso(), data={
+                "title": f"Shop {i}", "place_id": f"PID_SAME_{i}"}) for i in range(12)]
+
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    root_tile = Tile(bbox=(-2.4, 53.3, -2.0, 53.6), cell_km=5.0, depth=0)
+    db.add_queries(conn, run_id, [("shops in Manchester", root_tile.to_json())])
+
+    from leadforge.pipeline import run_discover
+    run_discover(cfg, icp, icp_path, run_id=run_id, provider="faketiled_same")
+    conn = db.connect(cfg.db_path)
+    rows = conn.execute("SELECT tile_json, new_count, status FROM queries WHERE run_id=?", (run_id,)).fetchall()
+    depths = Counter(json.loads(r["tile_json"])["depth"] for r in rows)
+    assert depths[0] == 1 and depths[1] == 4     # root: 12 new -> 4 children
+    assert 2 not in depths                        # children: 0 new -> no grandchildren
+    by_depth = {json.loads(r["tile_json"])["depth"]: r["new_count"] for r in rows}
+    assert by_depth[0] == 12 and by_depth[1] == 0  # new_count recorded per query
+    assert all(r["status"] == "done" for r in rows)
+
+
+def test_prune_child_tiles_skips_children_of_parents_that_found_nothing_new(cfg):
+    conn = db.connect(cfg.db_path)
+    run_id = db.create_run(conn, "icp.yaml", "h")
+    parent_dry = Tile(bbox=(0.0, 0.0, 1.0, 1.0), cell_km=5.0, depth=0)
+    parent_rich = Tile(bbox=(2.0, 2.0, 3.0, 3.0), cell_km=5.0, depth=0)
+    parent_old = Tile(bbox=(4.0, 4.0, 5.0, 5.0), cell_km=5.0, depth=0)
+    db.add_queries(conn, run_id, [("shops", parent_dry.to_json()), ("shops", parent_rich.to_json()),
+                                  ("shops", parent_old.to_json())])
+    ids = [r["id"] for r in conn.execute("SELECT id FROM queries WHERE run_id=? ORDER BY id", (run_id,))]
+    db.finish_query(conn, ids[0], "done", 120, new_count=0)
+    db.finish_query(conn, ids[1], "done", 120, new_count=40)
+    db.finish_query(conn, ids[2], "done", 120, new_count=None)   # recorded by an older version
+    from leadforge.grid import quarter_tile
+    children = [("shops", c.to_json()) for p in (parent_dry, parent_rich, parent_old) for c in quarter_tile(p)]
+    db.add_queries(conn, run_id, children)
+    db.add_queries(conn, run_id, [("shops in town", None)])      # an untiled pending query is never touched
+
+    dry = db.prune_child_tiles(conn, run_id, 3, dry_run=True)
+    assert dry == {"pending": 13, "children": 12, "skipped": 4, "kept_parent_yielded": 4, "kept_parent_unknown": 4}
+    assert conn.execute("SELECT COUNT(*) FROM queries WHERE status='skipped'").fetchone()[0] == 0
+    real = db.prune_child_tiles(conn, run_id, 3)
+    assert real["skipped"] == 4
+    assert conn.execute("SELECT COUNT(*) FROM queries WHERE status='pending'").fetchone()[0] == 9
+    blunt = db.prune_child_tiles(conn, run_id, 3, all_children=True)
+    assert blunt["skipped"] == 8
+    assert conn.execute("SELECT COUNT(*) FROM queries WHERE status='pending'").fetchone()[0] == 1

@@ -65,6 +65,8 @@ class DiscoveryCfg(BaseModel):
     area_bbox: dict[str, list[float]] = Field(default_factory=dict)
     subdivide_at: int = 100        # a tiled query returning >= this many listings is split into 4 child tiles
     max_subdivisions: int = 2
+    subdivide_min_new: int = 3     # ...but only when the saturated tile itself added >= this many NEW businesses
+                                   # (live 2026-09-03: saturated children of well-covered tiles yielded ~0.6 each; 0 = always)
     est_min_per_query: float = 2.0         # measured 2026-08-31: 1.7 min untiled
     est_min_per_tiled_query: float = 4.0   # measured 2026-08-31: 3.5-4.7 min tiled
     dvsa: DvsaCfg = Field(default_factory=DvsaCfg)

@@ -549,6 +549,28 @@ def dashboard(ctx: typer.Context, port: int = typer.Option(8765, "--port"),
     emit_digest(True, "dashboard", counts={}, warnings=[], next_=None)
 
 
+@app.command("prune-tiles")
+def prune_tiles(ctx: typer.Context,
+                min_new: int = typer.Option(3, "--min-new", help="skip pending children whose parent tile added fewer NEW businesses than this"),
+                all_children: bool = typer.Option(False, "--all-children", help="skip EVERY pending child tile (parents recorded without new_count)"),
+                dry_run: bool = typer.Option(False, "--dry-run", help="count only, change nothing")):
+    """Drop queued subdivision children that cannot pay for themselves: a saturated tile whose results
+    were all already known spawns children that come back saturated-and-known too (measured live
+    2026-09-03: ~0.6 new businesses per 15 s child). Marks them 'skipped'; `run --resume` then treats
+    discovery as complete. Safe to re-run; never touches done, degraded or depth-0 tiles."""
+    cfg = _cfg(ctx)
+    conn = db.connect(cfg.db_path)
+    run = db.latest_run(conn)
+    if not run:
+        emit_digest(False, "prune-tiles", warnings=["no run found"])
+        raise typer.Exit(4)
+    counts = db.prune_child_tiles(conn, run["id"], min_new, all_children=all_children, dry_run=dry_run)
+    _say(ctx, f"{'would skip' if dry_run else 'skipped'} {counts['skipped']} of {counts['children']} pending child tiles "
+              f"(kept: {counts['kept_parent_yielded']} whose parent yielded, {counts['kept_parent_unknown']} with an unknown parent)")
+    emit_digest(True, "prune-tiles", run=run["id"], counts={**counts, "dry_run": dry_run},
+                next_=None if dry_run or not counts["skipped"] else "leadforge run --resume")
+
+
 @app.command()
 def dedupe(ctx: typer.Context, dry_run: bool = typer.Option(False, "--dry-run", help="count only, change nothing")):
     """Fold register rows (DVSA, Companies House) into the Maps row that carries the same phone and looks

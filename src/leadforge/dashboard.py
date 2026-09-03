@@ -109,6 +109,8 @@ def _counts(conn: sqlite3.Connection, run_id: str | None) -> dict:
             "new_this_run": q("SELECT COUNT(*) FROM businesses WHERE first_run_id=?", run_id),
             "queries_total": q("SELECT COUNT(*) FROM queries WHERE run_id=?", run_id),
             "queries_done": q("SELECT COUNT(*) FROM queries WHERE run_id=? AND status='done'", run_id),
+            "queries_pending": q("SELECT COUNT(*) FROM queries WHERE run_id=? AND status IN ('pending','degraded')", run_id),
+            "queries_skipped": q("SELECT COUNT(*) FROM queries WHERE run_id=? AND status='skipped'", run_id),
             "queries_degraded": q("SELECT COUNT(*) FROM queries WHERE run_id=? AND status IN ('degraded','failed')", run_id),
             "queries_saturated": q("SELECT COUNT(*) FROM queries WHERE run_id=? AND status='done' AND tile_json LIKE '%bbox%' "
                                    "AND result_count>=100", run_id),
@@ -188,7 +190,8 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     stage = run["stage"] if run else "planned"
     # discover
     d = progress_estimate(hist.get("discover", []), now)
-    remaining_q = max(0, counts.get("queries_total", 0) - counts.get("queries_done", 0))
+    # v0.4.1: remaining = what will actually run; 'skipped' children (prune-tiles / novelty gate) are not work
+    remaining_q = counts.get("queries_pending", max(0, counts.get("queries_total", 0) - counts.get("queries_done", 0)))
     pace, src = _pick_pace(data_dir, store, "discover", d, "documented default")
     machine.append({"stage": "discover", "state": "running" if stage == "discovering" else ("done" if counts.get("queries_total") and remaining_q == 0 else "pending"),
                     "done": counts.get("queries_done", 0), "total": counts.get("queries_total", 0),
