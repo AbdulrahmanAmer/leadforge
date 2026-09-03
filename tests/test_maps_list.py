@@ -396,3 +396,42 @@ def test_parallel_queries_is_faster_than_serial(tmp_path, monkeypatch):
     t_serial = _run_sleepy_discover(1, tmp_path, monkeypatch)
     assert t_parallel < 0.5, f"parallel_queries=4 took {t_parallel:.2f}s (expected < 0.5s)"
     assert t_serial >= 0.8, f"serial (parallel_queries=1) took {t_serial:.2f}s (expected >= 0.8s)"
+
+
+class _FakePage:
+    """Just enough of a Playwright page for _check_block: url, locator().count(), content()."""
+
+    def __init__(self, url="https://www.google.com/maps/search/x", content="<html>ok</html>", captcha=False):
+        self.url, self._content, self._captcha = url, content, captcha
+
+    def locator(self, sel):
+        page = self
+
+        class _Loc:
+            def count(self_inner):
+                return 1 if (page._captcha and "recaptcha" in sel) else 0
+
+        return _Loc()
+
+    def content(self):
+        return self._content
+
+
+def _provider_no_browser():
+    from leadforge.config import Config
+    from leadforge.providers.maps_list import MapsListProvider
+
+    return MapsListProvider(Config())
+
+
+def test_block_detection_raises_on_sorry_redirect_captcha_and_unusual_traffic():
+    from leadforge.util import ProviderDegraded
+
+    prov = _provider_no_browser()
+    prov._check_block(_FakePage())  # a normal page passes
+    with pytest.raises(ProviderDegraded, match="sorry"):
+        prov._check_block(_FakePage(url="https://www.google.com/sorry/index?continue=maps"))
+    with pytest.raises(ProviderDegraded, match="captcha"):
+        prov._check_block(_FakePage(captcha=True))
+    with pytest.raises(ProviderDegraded, match="unusual traffic"):
+        prov._check_block(_FakePage(content="<html>Our systems have detected unusual traffic from your computer network</html>"))
