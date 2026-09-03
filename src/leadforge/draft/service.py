@@ -184,6 +184,8 @@ def infer_used_fact(packet: dict, draft: dict) -> str:
         key, value = str(f.get("k") or ""), str(f.get("v") or "")
         if not key or not value or value.casefold() not in text:
             continue
+        if key == "legal_name" and value.casefold() == str(packet.get("co") or "").casefold():
+            continue  # the trading name quoted back is not a registry citation
         rank = 2 if key in DISTINCTIVE_KEYS else (0 if key in ("category", "city") else 1)
         if rank > best_rank:
             best, best_rank = key, rank
@@ -271,7 +273,11 @@ DRAFT_INSTRUCTIONS = (
     "8. Keep 'observation' to one sentence, under constraints.max_observation_words; keep "
     "'subject' under constraints.max_subject_chars. Short beats clever.\n\n"
     "9. A line carrying 'rejected_attempt' is a retry: your previous draft for that target failed "
-    "the gate for the listed reasons -- write a corrected draft that fixes every reason.\n\n"
+    "the gate for the listed reasons -- write a corrected draft that fixes every reason.\n"
+    "10. Style: the subject is a short, specific hook about the observation (e.g. 'Your online booking "
+    "at <co>'), never '<co> -- <city>'. Vary the observation openings across the batch (do not start "
+    "every line with 'I noticed'); write to the reader ('your site shows ...'), one plain sentence, no "
+    "flattery, no exclamation marks.\n\n"
     "Reply with ONLY one JSON line per packet line: "
     '{"target","subject","observation","used_fact"} or {"target","abstain":true}. '
     "Do not use any tools. No prose."

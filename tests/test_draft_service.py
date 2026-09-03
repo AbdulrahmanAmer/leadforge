@@ -355,7 +355,7 @@ def test_auto_draft_retries_a_rejected_draft_with_the_gate_reasons_then_template
         calls.append(rows)
         out = []
         for row in rows:
-            tid, co = row["target"], row["packet"]["co"]
+            tid = row["target"]
             if "rejected_attempt" in row and tid == min(r["target"] for r in rows):
                 # the retry fixes the first target (quotes the fact value verbatim); the other stays broken
                 # (invented number) on every attempt -> template
@@ -397,3 +397,16 @@ def test_apply_drafts_infers_the_cited_fact_from_a_verbatim_quote_but_never_from
     assert counts["applied"] == 0 and counts["rejected"] == 1
     reasons = json.loads(conn.execute("SELECT gate_json FROM messages").fetchone()[0])["reasons"]
     assert any("cites no used_fact" in r for r in reasons)
+
+
+def test_infer_used_fact_prefers_the_quoted_distinctive_fact_and_ignores_a_legal_name_equal_to_the_trading_name():
+    packet = {"co": "Fred Brown Car Repairs Limited",
+              "facts": [{"k": "city", "v": "Nottingham"}, {"k": "rating", "v": "4.5 stars (115 reviews)"},
+                        {"k": "legal_name", "v": "FRED BROWN CAR REPAIRS LIMITED"},
+                        {"k": "booking", "v": "shows an online-booking option on its site"}]}
+    text = {"subject": "Your bookings at Fred Brown Car Repairs Limited",
+            "observation": "Fred Brown Car Repairs Limited in Nottingham holds 4.5 stars (115 reviews)."}
+    assert service.infer_used_fact(packet, text) == "rating"
+    quoted_booking = {"subject": "x", "observation": "Your site shows an online-booking option on its site."}
+    assert service.infer_used_fact(packet, quoted_booking) == "booking"
+    assert service.infer_used_fact(packet, {"subject": "x", "observation": "Hope all is well."}) == ""
