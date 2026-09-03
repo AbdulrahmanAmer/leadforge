@@ -59,13 +59,30 @@ class CrawlCfg(BaseModel):
     pages_per_site: int = 6
     headed_browser: bool = False  # browser-escalation runs VISIBLY (debug aid; real-browser rendering, no stealth flags)
     stale_after_years: int = 2  # copyright year older than this many years back => stale_site signal
-    timeout_s: float = 15.0
+    # v0.3 speed unit (2026-09-02): the home page is the ONLY fetch that gates whether a site is
+    # crawled at all, so it keeps the longer timeout; secondary/candidate pages (about, team, contact,
+    # sitemap probe...) get the shorter page_timeout_s — a dead or slow secondary page used to cost the
+    # full 15s EACH, and a 6-page site chained that into minutes. site_budget_s caps the whole crawl()
+    # call's wall clock (home fetch + every secondary page) so one slow-but-alive site can never eat
+    # more than its share of a batch — once exceeded, crawl() stops fetching further pages and returns
+    # what it already collected (still ok=True if the home page loaded; signals["budget_exhausted"]=True).
+    timeout_s: float = 10.0          # was 15.0 — home page fetch only now
+    page_timeout_s: float = 6.0      # secondary/candidate page + sitemap-probe fetch timeout
+    site_budget_s: float = 45.0      # per-site wall-clock budget across the whole crawl() call
     max_text_bytes: int = 400_000
 
 
 class PolitenessCfg(BaseModel):
     delay_s: float = 2.0
-    workers: int = 4
+    # v0.3 speed unit (2026-09-02): was 4. HostThrottle (util.py) serializes every request to a given
+    # host to one-in-flight with >= delay_s (+-30% jitter) between them, regardless of `workers` — this
+    # knob only controls how many DIFFERENT hosts run concurrently. Measured on a 20-site sample
+    # (scratchpad/speed/enrich/result_A.json vs result_B.json): raising workers alone (4 -> 16) did NOT
+    # improve throughput because the slow tail (403/Cloudflare blocks, dead hosts, the browser-render
+    # semaphore) dominated — see crawl.site_budget_s / crawl.page_timeout_s / enrich.browser_concurrency,
+    # which is what actually lets more workers help. 12 is the number those fixes are measured against
+    # (scripts/bench_enrich.py) — per-host pacing is unchanged at any worker count.
+    workers: int = 12
     user_agent: str = "LeadForgeBot/0.1 (internal lead research)"
 
 
@@ -79,6 +96,22 @@ class ValidationCfg(BaseModel):
     # v0.3 (owner decision 5): which freemail addresses count as the business's own -
     # linked (local part matches the business or a known person), any, none (own-domain only)
     freemail_policy: str = "linked"
+
+
+class EnrichCfg(BaseModel):
+    """v0.3 speed unit (2026-09-02): browser-escalation throughput, overlapped stages, DNS pooling.
+    None of this touches politeness — HostThrottle's per-host delay/single-flight is unaffected; these
+    knobs only change how many DIFFERENT hosts/domains/lookups run at once and how the 'all' stage
+    sequence is scheduled."""
+
+    browser_concurrency: int = 4     # was a hardcoded threading.Semaphore(2) in browser.py
+    rendered_pages_per_site: int = 2  # was the hardcoded MAX_RENDERED_PAGES_PER_SITE = 3
+    render_timeout_s: float = 20.0    # the rendered fetch's own timeout (was borrowing crawl.timeout_s,
+                                       # which just dropped to 10s — nowhere near enough for a real render)
+    overlap_stages: bool = True       # stage='all' interleaves registry(backlog)+validate with the crawl;
+                                       # `enrich --stage <one>` is never affected by this (single-stage
+                                       # runs always use the original serial per-stage functions)
+    dns_workers: int = 8              # MX-lookup thread pool size for validate_emails_parallel
 
 
 class RegistryCfg(BaseModel):
@@ -142,6 +175,7 @@ class Config(BaseModel):
     discovery: DiscoveryCfg = Field(default_factory=DiscoveryCfg)
     crawl: CrawlCfg = Field(default_factory=CrawlCfg)
     politeness: PolitenessCfg = Field(default_factory=PolitenessCfg)
+    enrich: EnrichCfg = Field(default_factory=EnrichCfg)
     validation: ValidationCfg = Field(default_factory=ValidationCfg)
     registry: RegistryCfg = Field(default_factory=RegistryCfg)
     social: SocialCfg = Field(default_factory=SocialCfg)

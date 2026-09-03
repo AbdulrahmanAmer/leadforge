@@ -23,10 +23,30 @@ from urllib.parse import urlsplit
 
 from leadforge.util import LOG, EnvError
 
-MAX_RENDERED_PAGES_PER_SITE = 3
-# at most 2 concurrent Chromium instances regardless of politeness.workers — renders are the
-# heavyweight exception, not the norm
-_RENDER_GATE = threading.Semaphore(2)
+# Fallback defaults for callers with no cfg.enrich (e.g. bare test doubles) — real runs always go
+# through cfg.enrich.rendered_pages_per_site / cfg.enrich.browser_concurrency / cfg.enrich.render_timeout_s.
+MAX_RENDERED_PAGES_PER_SITE = 2
+DEFAULT_BROWSER_CONCURRENCY = 4
+DEFAULT_RENDER_TIMEOUT_S = 20.0
+
+# v0.3 speed unit (2026-09-02, build item 2): was a hardcoded threading.Semaphore(2) — renders are the
+# heavyweight exception (a real Chromium instance) regardless of politeness.workers, so they get their
+# own concurrency knob, cfg.enrich.browser_concurrency (default 4). A Semaphore's size is fixed at
+# construction, so the gate is lazily (re)built to match whatever concurrency the caller's cfg asks for;
+# in production that's set once per process, so this never thrashes mid-run.
+_render_gate_lock = threading.Lock()
+_render_gate: threading.Semaphore | None = None
+_render_gate_size: int | None = None
+
+
+def _get_render_gate(concurrency: int) -> threading.Semaphore:
+    global _render_gate, _render_gate_size
+    concurrency = max(1, int(concurrency))
+    with _render_gate_lock:
+        if _render_gate is None or _render_gate_size != concurrency:
+            _render_gate = threading.Semaphore(concurrency)
+            _render_gate_size = concurrency
+        return _render_gate
 
 
 def is_available() -> bool:
@@ -61,9 +81,14 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
             except ImportError:
                 kwargs = {"headless": False, "verbose": False}
 
+        # v0.3 speed unit (2026-09-02, build item 2): a render's OWN timeout — cfg.crawl.timeout_s is
+        # the plain-HTTP home-page timeout (dropped to 10s, nowhere near enough for a real browser
+        # render) and cfg.enrich.render_timeout_s (default 20s) is deliberately separate from it.
+        render_timeout_s = getattr(getattr(cfg, "enrich", None), "render_timeout_s", DEFAULT_RENDER_TIMEOUT_S)
+
         async def _run() -> str:
             async with AsyncWebCrawler(**kwargs) as crawler:
-                res = await crawler.arun(url=url, page_timeout=int(cfg.crawl.timeout_s * 1000))
+                res = await crawler.arun(url=url, page_timeout=int(render_timeout_s * 1000))
                 # a failed/4xx+ render is not contact data: without this gate, a parked-domain or
                 # 404 page became ok=True and its registrar/ad phone entered the call sheet
                 status = getattr(res, "status_code", None)
@@ -76,7 +101,8 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
                 md = getattr(res, "markdown", "") or ""
                 return _md_to_html(str(md))
 
-        with _RENDER_GATE:
+        concurrency = getattr(getattr(cfg, "enrich", None), "browser_concurrency", DEFAULT_BROWSER_CONCURRENCY)
+        with _get_render_gate(concurrency):
             return asyncio.run(_run())
     except Exception as e:  # noqa: BLE001 — a render failure never kills the run
         LOG.warning("render failed %s: %s", url, type(e).__name__)

@@ -7,6 +7,8 @@ one request in flight per host, page/site caps, identifying User-Agent, hard tim
 from __future__ import annotations
 
 import re
+import threading
+import time
 import urllib.robotparser
 from dataclasses import dataclass, field
 from datetime import date
@@ -103,7 +105,26 @@ class CrawlResult:
     error: str = ""
 
 
+
+# v0.3 speed unit (2026-09-02): a DNS/connection failure means the HOST is unreachable, not just this
+# one URL — the very next request to it (robots.txt, or page 2 of a franchise chain that shares this
+# domain and gets its own fresh SiteCrawler instance in _process_one) would fail the exact same way
+# after paying the exact same connect/DNS timeout again. Caching "this host is dead" at the CLASS level
+# (shared across every SiteCrawler instance in the process — one instance per business) turns a chain of
+# N businesses on one dead host into ONE timeout instead of N. Only true connection-establishment
+# failures qualify (DNS resolution, refused/unreachable connect) — a slow-but-alive server (ReadTimeout)
+# or an HTTP error status is NOT "dead" and must not short-circuit future attempts.
+_CONNECTION_FAILURE_TYPES = (httpx.ConnectError, httpx.ConnectTimeout)
+
+
+def _is_connection_failure(e: Exception) -> bool:
+    return isinstance(e, _CONNECTION_FAILURE_TYPES)
+
+
 class SiteCrawler:
+    _dead_hosts: dict[str, str] = {}  # host -> reason, shared process-wide across all instances
+    _dead_hosts_lock = threading.Lock()
+
     def __init__(self, cfg: Config, throttle: HostThrottle | None = None):
         self.cfg = cfg
         self.throttle = throttle or HostThrottle(cfg.politeness.delay_s)
@@ -117,6 +138,24 @@ class SiteCrawler:
     def close(self) -> None:
         self.client.close()
 
+    # --- dead-host cache (process-wide) -------------------------------------------
+    @classmethod
+    def _host_dead_reason(cls, host: str) -> str | None:
+        with cls._dead_hosts_lock:
+            return cls._dead_hosts.get(host)
+
+    @classmethod
+    def _mark_host_dead(cls, host: str, reason: str) -> None:
+        with cls._dead_hosts_lock:
+            cls._dead_hosts[host] = reason
+
+    @classmethod
+    def reset_dead_hosts(cls) -> None:
+        """Test-only: the cache is process-wide by design, so a test that deliberately exercises a
+        connection failure must clear it afterward or it leaks into unrelated tests reusing the host."""
+        with cls._dead_hosts_lock:
+            cls._dead_hosts.clear()
+
     # --- robots ------------------------------------------------------------------
     def _robots_for(self, base: str) -> urllib.robotparser.RobotFileParser:
         host = urlsplit(base).netloc
@@ -124,6 +163,11 @@ class SiteCrawler:
         if rp is not None:
             return rp
         rp = urllib.robotparser.RobotFileParser()
+        dead = self._host_dead_reason(host)
+        if dead is not None:
+            rp.parse(["User-agent: *", "Disallow: /"])  # known-dead host -> unreachable -> disallow
+            self._robots[host] = rp
+            return rp
         try:
             self.throttle.wait(host)
             resp = self.client.get(urljoin(base, "/robots.txt"))
@@ -134,7 +178,9 @@ class SiteCrawler:
                 rp.parse(["User-agent: *", "Disallow: /"])
             else:
                 rp.parse([])  # 4xx = 'unavailable' -> no robots published -> allow
-        except httpx.HTTPError:
+        except httpx.HTTPError as e:
+            if _is_connection_failure(e):
+                self._mark_host_dead(host, f"transport:{type(e).__name__}")
             rp.parse(["User-agent: *", "Disallow: /"])  # transport failure = unreachable = disallow
         self._robots[host] = rp
         return rp
@@ -148,15 +194,22 @@ class SiteCrawler:
     # decide whether a real browser could plausibly do better (only for block-shaped statuses).
     _BLOCK_STATUSES = {401, 403, 405, 406, 429, 503}
 
-    def _get(self, url: str) -> httpx.Response | None:
+    def _get(self, url: str, timeout: float | None = None) -> httpx.Response | None:
+        """timeout overrides the client's default (home-page) timeout — pass cfg.crawl.page_timeout_s
+        for secondary/candidate pages so a dead or slow non-home page costs less than the home fetch."""
         self.last_failure: str | None = None
+        host = urlsplit(url).netloc
+        dead = self._host_dead_reason(host)
+        if dead is not None:
+            self.last_failure = dead
+            return None
         if not self._allowed(url):
             LOG.info("robots disallow: %s", url)
             self.last_failure = "robots"
             return None
-        self.throttle.wait(urlsplit(url).netloc)
+        self.throttle.wait(host)
         try:
-            resp = self.client.get(url)
+            resp = self.client.get(url) if timeout is None else self.client.get(url, timeout=timeout)
             if resp.status_code >= 400:
                 self.last_failure = f"status:{resp.status_code}"
                 return None
@@ -168,6 +221,8 @@ class SiteCrawler:
         except httpx.HTTPError as e:
             LOG.debug("fetch failed %s: %s", url, type(e).__name__)
             self.last_failure = f"transport:{type(e).__name__}"
+            if _is_connection_failure(e):
+                self._mark_host_dead(host, self.last_failure)
             return None
 
     # --- text extraction ---------------------------------------------------------
@@ -213,7 +268,7 @@ class SiteCrawler:
                 seen.setdefault(full.split("#")[0], None)
         links = list(seen)
         if len(links) < 2:  # sitemap probe
-            resp = self._get(urljoin(base_url, "/sitemap.xml"))
+            resp = self._get(urljoin(base_url, "/sitemap.xml"), timeout=self.cfg.crawl.page_timeout_s)
             if resp is not None:
                 for loc in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", resp.text)[:200]:
                     if PAGE_KEYWORDS.search(urlsplit(loc).path) and urlsplit(loc).netloc.removeprefix("www.") == base_host:
@@ -226,12 +281,18 @@ class SiteCrawler:
         """business_domain (v0.3, optional): the listing's own domain, used only to compute
         signals["offsite_redirect"] (does the final URL's host differ, www-insensitive?). Existing
         callers that omit it keep working — offsite_redirect just reads False."""
+        start = time.monotonic()
         result = CrawlResult(ok=False)
         if not self._allowed(website):
             result.error = "robots-disallowed"  # the site said no — the browser must not go either
             return result
-        resp = self._get(website)
+        resp = self._get(website)  # home page: client default timeout (cfg.crawl.timeout_s)
         if resp is None:
+            # v0.3 speed unit (2026-09-02, build item 1c): a block-shaped status or a connection error
+            # on the HOME page returns right here — the candidate-links loop below is never reached, so
+            # a dead/blocking host never pays for secondary-page fetches too. This was already true
+            # structurally (the loop is unreachable from this branch); the test suite now proves it
+            # against a real server rather than trusting the control flow by inspection.
             cause = getattr(self, "last_failure", None) or "unknown"
             result.error = f"home unreachable ({cause})"
             # Only a block-shaped refusal (WAF/bot wall) earns the rendered-browser retry — a
@@ -255,8 +316,16 @@ class SiteCrawler:
         if self.looks_js_shell(home_html, home_text):
             result.needs_browser = True
 
+        # v0.3 speed unit (2026-09-02, build item 1a): a per-site wall-clock budget — once exceeded,
+        # stop fetching further pages and return what was already collected. The home page already
+        # loaded (we're past the `resp is None` return above), so this is still ok=True: a partial
+        # crawl beats none. Secondary pages get the shorter page_timeout_s (build item 1b) so a single
+        # dead/slow non-home page can never eat more than its own small share of the budget.
         for link in self._candidate_links(str(resp.url), home_html):
-            sub = self._get(link)
+            if time.monotonic() - start > self.cfg.crawl.site_budget_s:
+                result.signals["budget_exhausted"] = True
+                break
+            sub = self._get(link, timeout=self.cfg.crawl.page_timeout_s)
             if sub is None:
                 continue
             html = sub.text[: self.cfg.crawl.max_text_bytes]

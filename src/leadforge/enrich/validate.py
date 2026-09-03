@@ -6,6 +6,7 @@ No SMTP RCPT probing (ADR: catch-alls lie + IP-reputation risk). Phone validity 
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
 from leadforge.config import Config
@@ -91,6 +92,29 @@ def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:
     if label == "role":
         return "role", meta
     return "valid", meta
+
+
+# v0.3 speed unit (2026-09-02, build item 5): MX lookups are I/O-bound (a DNS round-trip per NEW
+# domain) and validate_email's own per-domain cache (_mx_cached) is a functools.lru_cache — documented
+# thread-safe — so resolving a BATCH of contact rows through a small worker pool is safe and cuts wall
+# clock roughly to (batch / min(dns_workers, distinct_domains)) instead of one timeout-or-round-trip at
+# a time. Row objects (sqlite3.Row or dict) are read-only here — no DB access happens on the pool
+# workers, only get_resolver()/_mx_cached()'s own network calls; every actual conn.execute() still
+# happens on the caller's thread, using the (id, tier, meta) results this returns.
+def validate_emails_parallel(rows: list, cfg: Config) -> list[tuple[int, str, dict]]:
+    """rows: sqlite3.Row/dict-like items with 'id', 'value' (the email) and 'label'.
+    -> [(row_id, tier, meta), ...] in completion order (NOT necessarily input order)."""
+    if not rows:
+        return []
+    workers = max(1, int(getattr(getattr(cfg, "enrich", None), "dns_workers", 8)))
+    results: list[tuple[int, str, dict]] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(validate_email, r["value"], r["label"], cfg): r for r in rows}
+        for fut in as_completed(futures):
+            r = futures[fut]
+            tier, meta = fut.result()
+            results.append((r["id"], tier, meta))
+    return results
 
 
 # --------------------------------------------------------------------------------------------------
