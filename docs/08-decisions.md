@@ -144,6 +144,13 @@ labeling; the autopilot keeps the isolated `claude -p` runner (ADR-015, Layer 2)
 run holds 526 Claude picks and 566 rejections, a starting training set — and beats the first-candidate rule
 by a clear margin on a held-out split. The NER model worker (Layer 3) is task-keyed so a future model can be
 added without new processes.
+**Update 2026-09-25 — attempt 2** (scripts/bench/laya_dm_shadow_v2.py): attempt 1 overflowed Laya's documented
+option token budget (`common.py` truncates options to (head_max_len-16)/n tokens). With short "Name — Title"
+options, snippets moved into the state and head_max_len 384: 58.7% without "none" (picks c0 123/150 — position
+echo, equal to the 58.0% first-candidate rule), 4.7% with "none" (answers none 130/150). Zero-shot has no
+signal for this task. **Next:** local fine-tune of the head (encoder frozen; 421M model does not fit a full
+fine-tune in 4 GB) on 483 single-pick + 175 reject-all Claude labels, 70/10/20 split, candidate order
+shuffled; bar = beat the first-candidate rule in shuffled order by ≥10 points. Work dir: E:/LeadForge/laya-dm.
 
 ## ADR-016 — Novelty-gated saturation subdivision (v0.4.1)
 **Context:** ADR-013 subdivides every tiled query that returns >= `subdivide_at` results, because Google Maps

@@ -28,5 +28,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 - master is 53 commits ahead of origin (incl. this one) — NOT pushed (owner decides; push publishes to GitHub).
 - Open: resume the parked UK campaign (D:/GainLev/LeadForge/campaign-uk-autorepair) on 0.5.0 when the owner
   wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
+- IN FLIGHT: Laya head fine-tune (owner chose local, head-only) in E:/LeadForge/laya-dm; bar = +10 pts over
+  first-candidate rule in shuffled order on a 20% held-out split (ADR-017 update).
 - Open follow-ups: lcmautomotive-style post-redirect link miss; Laya fine-tune idea (ADR-017); war-room crash
   cause UNPROVEN.
