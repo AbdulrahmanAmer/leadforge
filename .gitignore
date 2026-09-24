@@ -19,6 +19,9 @@ venv/
 .ruff_cache/
 .coverage
 
+# semantic code index (local, rebuildable)
+.vector_index/
+
 # editors/os
 .vscode/
 .idea/

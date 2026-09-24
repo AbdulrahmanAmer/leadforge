@@ -46,6 +46,7 @@ ner = ["gliner>=0.2"]                  # optional local zero-shot person/title e
 addressing = ["usaddress>=0.5.10"]     # better US address splitting (compiled wheel; optional)
 social = ["yt-dlp>=2024.1.0"]          # youtube presence probe backend; without it every network reports "unknown"
 dev = ["pytest>=8.2", "ruff>=0.5", "pytest-timeout>=2.3"]
+codeindex = ["faiss-cpu", "sentence-transformers", "numpy"]  # local semantic code search (scripts/code_index.py)
 
 [project.scripts]
 leadforge = "leadforge.cli:main"
