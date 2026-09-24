@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Refresh the local code indexes after each commit, detached so the commit returns immediately.
+# Enable once per clone:  git config core.hooksPath .githooks
+# Skips silently when a tool is missing (the indexes are local conveniences, never required).
+root="$(git rev-parse --show-toplevel)" || exit 0
+log="$root/.vector_index/refresh.log"
+(
+  mkdir -p "$root/.vector_index"
+  if python -c "import faiss, sentence_transformers" >/dev/null 2>&1; then
+    python "$root/scripts/code_index.py" build >>"$log" 2>&1
+  fi
+  if command -v codebase-memory-mcp >/dev/null 2>&1; then
+    codebase-memory-mcp cli index_repository "{\"repo_path\":\"$root\"}" >>"$log" 2>&1
+  fi
+) </dev/null >/dev/null 2>&1 &
+exit 0
