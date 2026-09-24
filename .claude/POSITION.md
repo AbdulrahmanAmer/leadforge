@@ -25,7 +25,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
   the lever), L5 Laya = measured no-go (ADR-017), L6 skill v2 + bin/leadforge + release 0.5.0.
 - Acceptance: real Bath GB campaign via skill flow exported 20 leads in 4.4 min (plan said 5).
 - Suite 765 passed, 1 skipped (~70-95 s, `pytest -n 6`); ruff clean; `claude plugin validate .` passes.
-- master is ~60 commits ahead of origin — NOT pushed (owner decides; push publishes to GitHub).
+- master is 53 commits ahead of origin (incl. this one) — NOT pushed (owner decides; push publishes to GitHub).
 - Open: resume the parked UK campaign (D:/GainLev/LeadForge/campaign-uk-autorepair) on 0.5.0 when the owner
   wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
 - Open follow-ups: lcmautomotive-style post-redirect link miss; Laya fine-tune idea (ADR-017); war-room crash
