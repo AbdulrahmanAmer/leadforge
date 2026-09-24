@@ -83,7 +83,15 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - **Gate:** measure per-call latency and process count before/after on one real DM batch; tests for the
   timeout and the logged-failure path.
 
-## Layer 3 — Throughput
+## Layer 3 — Throughput — NER worker DONE 2026-09-24 (ef6073c..7952026)
+
+- MEASURED, same 200 sites from identical copies of the parked DB, `enrich --limit 200`, this laptop:
+  crawl 16.4 → 22.9 sites/min (1.4x; 12.1 → 8.7 min). Yield unchanged: people rows 154 = 154, businesses
+  with people 61 → 62, with email 16 → 17. Worker proven on cuda (196 ms/page, on nvidia-smi's list,
+  `ner_fallback: 0`); startup ~30 s once per enrichment. Probe: scripts/bench/worker_device_probe.py.
+- Why only 1.4x: crawling is network- and politeness-bound; NER was the CPU part that got removed.
+  Remaining levers below (registry overlap, more crawl workers now that CPU is free).
+- Side finding: `--limit` caps the crawl only — registry lookups ran over the whole 13,528 backlog.
 
 - Move NER out of the crawl pool. Today GLiNER runs inside `_process_one` in the 12-thread I/O pool
   (`enrich/runner.py:118,305`), so CPU work stalls network workers. Target shape: crawl threads (I/O

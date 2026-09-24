@@ -18,12 +18,12 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-24 ~20:45, OWNER GRANTED FULL CONTROL; BUILDING LAYERS 1-6
+## POSITION — 2026-09-24 ~23:10, LAYERS 0-3 DONE (NER worker); NEXT = LAYER 4 (quality)
 
-- Owner: "all permissions ... full control related to this project" — act without per-step asks; report
-  measured outcomes. Never destroy D:/GainLev/LeadForge/campaign-uk-autorepair; never send live outreach.
-- Done: L0 (pytest -n 6 718/86 s, hooks, CLI import); D: worktrees removed (all 4 merged, clean);
-  GPU bench (GLiNER 821->193 ms/page, Laya 2678->741 ms); claude -p isolation measured (15 s->5.5 s).
-- IN FLIGHT: main env torch -> 2.10.0+cu126; then L1 + L2 builders in parallel worktrees.
-- ORDER: L1 || L2 -> L3 (GPU model worker) -> L4 (quality, parked-DB copy) -> L5 (Laya shadow) -> L6 skill.
-- UNPROVEN: war-room crash cause; GLiNER+Laya in one process on 4 GB.
+- L1: run --detach / status --run / --from-stage (E2E proven on a DB copy; fix 2a4b2ca). CLI import ~0.45 s.
+- L2: isolated claude -p 15 s -> 5.2 s warm. L3: GPU NER worker, crawl 16.4 -> 22.9 sites/min, same yield.
+- Suite: 751 passed, 1 skipped, ~68 s (`pytest -n 6`); LEADFORGE_NO_NER_MODEL=1 keeps real GLiNER out of tests.
+- Bench workspaces (scratchpad): bench-before / bench-after / e2e — copies of the parked DB; D: campaign untouched.
+- L4 targets (docs/UPGRADE-PLAN.md): 115 silent zero-page sites, 83 HTTP 403 not sent to browser, link aggregators.
+- Worktrees: agent worktrees now start from local master (verify `git log -1` in the brief).
+- UNPROVEN: war-room crash cause; GLiNER + Laya in one process (L5).
