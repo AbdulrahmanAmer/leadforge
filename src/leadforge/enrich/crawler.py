@@ -89,6 +89,32 @@ def _booking_platform_hit(pages: list) -> str | None:
     return None
 
 
+# Layer 4 (2026-09-24, ADR-pending): link-in-bio / aggregator hosts are never the real business site —
+# crawling them directly yields a "site" with no business content (zero pages of substance). Instead we
+# follow the first outbound link that is neither another aggregator nor a social platform; if none is
+# found the crawl fails with a named reason ("aggregator") instead of silently returning zero pages.
+AGGREGATOR_HOSTS = {"linktr.ee", "beacons.ai", "linkin.bio", "lnk.bio", "w3w.co"}
+SOCIAL_HOSTS = {
+    "facebook.com", "instagram.com", "twitter.com", "x.com", "linkedin.com", "tiktok.com",
+    "youtube.com", "youtu.be", "pinterest.com", "threads.net", "snapchat.com", "whatsapp.com",
+    "wa.me", "m.me", "t.me", "telegram.me", "bsky.app", "mastodon.social",
+}
+
+
+def _bare_host(url: str) -> str:
+    return urlsplit(url).netloc.casefold().removeprefix("www.")
+
+
+def is_aggregator_host(host: str) -> bool:
+    host = (host or "").casefold().removeprefix("www.")
+    return any(host == h or host.endswith("." + h) for h in AGGREGATOR_HOSTS)
+
+
+def _is_social_or_aggregator_host(host: str) -> bool:
+    host = (host or "").casefold().removeprefix("www.")
+    return is_aggregator_host(host) or any(host == h or host.endswith("." + h) for h in SOCIAL_HOSTS)
+
+
 @dataclass
 class Page:
     url: str
@@ -250,6 +276,26 @@ class SiteCrawler:
         root_div = bool(re.search(r'id=["\'](root|app|__next)["\']', html))
         return scripts >= 4 or root_div
 
+    # --- aggregator / link-in-bio handling ----------------------------------------
+    @staticmethod
+    def _first_real_link(base_url: str, home_html: str) -> str | None:
+        """First outbound link on a link-in-bio page whose host is neither another aggregator nor a
+        known social platform. Order-preserving (first anchor in document order wins)."""
+        tree = HTMLParser(home_html)
+        seen: set[str] = set()
+        for a in tree.css("a[href]"):
+            href = (a.attributes.get("href") or "").strip()
+            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
+            full = urljoin(base_url, href)
+            host = _bare_host(full)
+            if not host or host in seen:
+                continue
+            seen.add(host)
+            if not _is_social_or_aggregator_host(host):
+                return full
+        return None
+
     # --- page selection ----------------------------------------------------------
     def _candidate_links(self, base_url: str, home_html: str) -> list[str]:
         tree = HTMLParser(home_html)
@@ -283,6 +329,8 @@ class SiteCrawler:
         callers that omit it keep working — offsite_redirect just reads False."""
         start = time.monotonic()
         result = CrawlResult(ok=False)
+        if is_aggregator_host(_bare_host(website)):
+            return self._crawl_aggregator(website, business_domain)
         if not self._allowed(website):
             result.error = "robots-disallowed"  # the site said no — the browser must not go either
             return result
@@ -302,6 +350,10 @@ class SiteCrawler:
             result.needs_browser = status in self._BLOCK_STATUSES
             return result
         home_html = resp.text[: self.cfg.crawl.max_text_bytes]
+        # A non-aggregator start URL can still redirect to one (e.g. a shortener landing on linktr.ee) —
+        # check the post-redirect host too, not just the one the business listing gave us.
+        if is_aggregator_host(_bare_host(str(resp.url))):
+            return self._crawl_aggregator(str(resp.url), business_domain, home_html=home_html)
         home_text = self.extract_text(home_html)
         result.pages.append(Page(str(resp.url), home_html, home_text))
         result.signals["https"] = str(resp.url).startswith("https://")
@@ -334,6 +386,30 @@ class SiteCrawler:
         result.signals.update(self.compute_signals(result.pages, self.cfg.crawl.stale_after_years))
         result.ok = True
         return result
+
+    def _crawl_aggregator(self, agg_url: str, business_domain: str | None,
+                           home_html: str | None = None) -> CrawlResult:
+        """agg_url's host is a known link-in-bio aggregator (linktr.ee, w3w.co, ...). Never crawl it as
+        the business site: follow the first outbound link whose host is neither another aggregator nor a
+        social platform, and crawl THAT as the real site. If no such link exists (or the aggregator page
+        itself can't be fetched), fail with a named reason so this is never a silent zero-page result."""
+        result = CrawlResult(ok=False)
+        if home_html is None:
+            if not self._allowed(agg_url):
+                result.error = "robots-disallowed"
+                return result
+            resp = self._get(agg_url)
+            if resp is None:
+                result.error = "aggregator"  # the aggregator page itself was unreachable
+                return result
+            home_html = resp.text[: self.cfg.crawl.max_text_bytes]
+        target = self._first_real_link(agg_url, home_html)
+        if not target:
+            result.error = "aggregator"
+            return result
+        # Recurse into the resolved real site with the remaining time budget; _first_real_link already
+        # excludes aggregator/social hosts so this cannot loop back into _crawl_aggregator.
+        return self.crawl(target, business_domain=business_domain)
 
     @staticmethod
     def compute_signals(pages: list[Page], stale_after_years: int) -> dict:
