@@ -21,7 +21,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 ## POSITION — 2026-09-24, AUDITS DONE; PLAN WRITTEN; NEXT = LAYER 0
 
 - Plan: docs/UPGRADE-PLAN.md (L0 dev loop -> L6 skill v2; skill spec docs/specs/skill-v2.md = LAST).
-- Done: war-room removed; Laya spec kept as 0%-built proposal; autopilot test ruff-clean (14 passed);
+- Done: war-room removed end to end (repo files + 10 opencode 'Debate R1' sessions; opencode parent sessions kept for investigation); Laya spec kept as 0%-built proposal; autopilot test ruff-clean (14 passed);
   semantic index scripts/code_index.py (b05a5f1, hit@5 19/22); graph MCP registered; install -> E:.
 - Parked campaign data: D:/GainLev/LeadForge/campaign-uk-autorepair (read-only).
 - Gotcha: pytest addopts "-q" + extra -q hides the pass count; run without -q.
