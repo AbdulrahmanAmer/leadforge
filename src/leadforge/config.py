@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class FallbackRestCfg(BaseModel):
@@ -140,6 +140,23 @@ class EnrichCfg(BaseModel):
     ner: bool = True
     ner_parallel: int = 2             # inferences in flight at once (a semaphore across the crawl workers)
     ner_threads: int = 2              # torch intra-op threads per inference
+    # Layer 3 (throughput, 2026-09-24): GLiNER now runs in ONE separate model-worker process instead of
+    # inside the crawl ThreadPoolExecutor, so crawl threads never block on torch. ner_parallel/ner_threads
+    # above still bound the legacy in-thread path used as the worker's own fallback when it fails to start.
+    ner_device: Literal["auto", "cpu", "cuda"] = "auto"  # auto = cuda when torch.cuda.is_available()
+    ner_batch: int = 8                # max requests the worker groups into one GLiNER call
+    ner_batch_wait_ms: float = 25.0   # max time the worker waits to fill a batch before running it short
+    ner_timeout_s: float = 5.0        # per-request timeout; on expiry the caller falls back to heuristics
+
+    @field_validator("ner_device", mode="before")
+    @classmethod
+    def _normalize_ner_device(cls, v: Any) -> Any:
+        # yaml/env values arrive as arbitrary strings ("Auto", "CUDA", ...); normalize case so the
+        # Literal validator (which is case-sensitive) doesn't reject a value spelled differently
+        # than the three canonical ones — pydantic still rejects anything that isn't one of them.
+        if isinstance(v, str):
+            return v.strip().lower()
+        return v
 
 
 class RegistryCfg(BaseModel):

@@ -26,6 +26,15 @@ crawl:
   timeout_s: 15
   max_text_bytes: 400000
 
+enrich:                            # crawl-time enrichment throughput/quality knobs (Layer 3)
+  ner: true                        # GLiNER zero-shot people extraction; false = heuristic extractor only
+  ner_device: auto                 # auto | cpu | cuda — auto picks cuda when torch.cuda.is_available()
+  ner_batch: 8                     # requests the model worker groups into one GLiNER call
+  ner_batch_wait_ms: 25.0          # max wait to fill a batch before running it short
+  ner_timeout_s: 5.0               # per-request timeout; on expiry a crawl thread falls back to heuristics
+  ner_parallel: 2                  # legacy in-thread NER fallback only (worker unavailable): inferences in flight
+  ner_threads: 2                   # legacy in-thread NER fallback only: torch intra-op threads per inference
+
 politeness:
   delay_s: 2.0                    # per-host, +/-30% jitter; 1 request in flight per host
   workers: 4                      # hosts crawled in parallel
