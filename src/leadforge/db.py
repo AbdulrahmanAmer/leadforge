@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS suppression (
 -- ---------------------------------------------------------------- v0.3 outreach lifecycle (ADR-011)
 CREATE TABLE IF NOT EXISTS sending_identities (
   id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL UNIQUE, client_id TEXT DEFAULT '',
-  owner_entity TEXT DEFAULT 'gainlev', from_name TEXT DEFAULT '', from_email TEXT DEFAULT '',
+  owner_entity TEXT DEFAULT '', from_name TEXT DEFAULT '', from_email TEXT DEFAULT '',
   reply_to TEXT DEFAULT '', postal_address TEXT DEFAULT '', privacy_url TEXT DEFAULT '',
   unsubscribe_mailto TEXT DEFAULT '', unsubscribe_url TEXT DEFAULT '', created_at TEXT
 );

@@ -21,7 +21,7 @@ def test_config_defaults_include_agent_and_pipeline_sections():
 def test_draft_cfg_autopilot_defaults():
     d = DraftCfg()
     assert d.auto is True
-    assert d.auto_purpose == "gainlev_leadgen"
+    assert d.auto_purpose == "client_campaign"  # neutral default (Layer 6); gainlev_leadgen is GainLev-branded
     assert d.auto_tiers == ["A", "B"]
     assert d.auto_max == 500
     assert d.template_fallback is True

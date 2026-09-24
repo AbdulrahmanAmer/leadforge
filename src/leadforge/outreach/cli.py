@@ -85,7 +85,7 @@ def identity_add(
     unsubscribe_mailto: str = typer.Option("", "--unsubscribe-mailto"),
     unsubscribe_url: str = typer.Option("", "--unsubscribe-url"),
     client: str = typer.Option("", "--client"),
-    owner_entity: str = typer.Option("gainlev", "--owner-entity"),
+    owner_entity: str = typer.Option("", "--owner-entity"),
 ):
     """Register a sending identity. Requires --from-email; live-complete needs from_name, postal
     address, privacy URL and at least one unsubscribe channel."""

@@ -24,7 +24,7 @@ MAILBOX_CONFIG_KEYS = {
 def add_identity(conn: sqlite3.Connection, *, label: str, from_email: str, from_name: str = "",
                   reply_to: str = "", postal_address: str = "", privacy_url: str = "",
                   unsubscribe_mailto: str = "", unsubscribe_url: str = "", client_id: str = "",
-                  owner_entity: str = "gainlev") -> int:
+                  owner_entity: str = "") -> int:
     if not label or not label.strip():
         raise LeadForgeError("identity label is required")
     if not from_email or "@" not in from_email:
