@@ -129,7 +129,11 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - **Gate:** yield per crawled site before/after on a fixed sample; no fabricated contacts (existing
   no-fabrication gate stays green).
 
-## Layer 5 — Laya, shadow mode (optional)
+## Layer 5 — Laya, shadow mode (optional) — MEASURED NO-GO for DM labeling (ADR-017)
+
+- 150 businesses vs Claude's picks: 0.7% agreement with a "none" option (answers none 94%), 50.0% without —
+  below the 58.0% first-candidate rule. Fast (235 ms GPU) but not accurate zero-shot. Revisit only after
+  fine-tuning on LeadForge labels. Nothing was integrated.
 
 - Run Laya's typed-decision classifier beside the `claude -p` DM labeler on the parked run's 393 labeled
   businesses; compare agreement, latency, cost. Replace nothing until the numbers justify it. Weights come

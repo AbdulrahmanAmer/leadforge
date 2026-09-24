@@ -131,6 +131,20 @@ coverage trade-off against speed, not a bug); `Business.cid` becomes populated f
 both providers, and normalize.py must not assume `place_id` is the only non-name+street dedupe anchor
 going forward.
 
+## ADR-017 — Laya is not used for decision-maker labeling (measured no-go, 2026-09-24)
+
+**Context:** Layer 5 of docs/UPGRADE-PLAN.md proposed Laya (`convaiinnovations/laya`, a typed-decision
+classifier) as a local, GPU-run alternative to the `claude -p` DM labeler. **Measurement**
+(scripts/bench/laya_dm_shadow.py; copy of the parked UK campaign DB; 150 businesses, seed 7, with ≥2 distinct
+candidates and exactly one Claude pick; Quadro M1200): with a "none" option Laya answered "none" 141/150 times
+(agreement with Claude 0.7%); without it, agreement was 50.0% — below the naive "always the first candidate"
+rule (58.0%). Speed was fine (235-253 ms per decision on GPU). **Decision:** do not integrate Laya for DM
+labeling; the autopilot keeps the isolated `claude -p` runner (ADR-015, Layer 2) with heuristic fallback.
+**Revisit when:** Laya (or a similar small classifier) is fine-tuned on LeadForge's own labels — the parked
+run holds 526 Claude picks and 566 rejections, a starting training set — and beats the first-candidate rule
+by a clear margin on a held-out split. The NER model worker (Layer 3) is task-keyed so a future model can be
+added without new processes.
+
 ## ADR-016 — Novelty-gated saturation subdivision (v0.4.1)
 **Context:** ADR-013 subdivides every tiled query that returns >= `subdivide_at` results, because Google Maps
 caps a search at ~100-120 results and the cap hides businesses. Live 2026-09-03 (10 cities, 6 categories):
