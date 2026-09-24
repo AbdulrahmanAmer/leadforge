@@ -18,20 +18,15 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-25 ~01:00, L0-3 + 4a DONE, workers 24 (crawl 16.4->26.3/min); L4b + L6 IN FLIGHT
+## POSITION — 2026-09-25 ~01:20, UPGRADE COMPLETE (0.5.0, local); NOT PUSHED
 
-- L1: run --detach / status --run / --from-stage (E2E proven on a DB copy; fix 2a4b2ca). CLI import ~0.45 s.
-- L2: isolated claude -p 15 s -> 5.2 s warm. L3: GPU NER worker, crawl 16.4 -> 22.9 sites/min, same yield.
-- Suite: 751 passed, 1 skipped, ~68 s (`pytest -n 6`); LEADFORGE_NO_NER_MODEL=1 keeps real GLiNER out of tests.
-- Bench workspaces (scratchpad): bench-before / bench-after / e2e — copies of the parked DB; D: campaign untouched.
-- L4 targets (docs/UPGRADE-PLAN.md): 115 silent zero-page sites, 83 HTTP 403 not sent to browser, link aggregators.
-- Worktrees: agent worktrees now start from local master (verify `git log -1` in the brief).
-- L5: Laya zero-shot DM labeling 0.7% / 50.0% agreement vs 58.0% first-candidate rule -> not integrated.
-- L4a merged: aggregator sites followed/flagged, silent empty crawl impossible (error=empty_crawl). Sample of 102
-  problem sites: yield flat (77->78 zero-page, emails 3->3) — most are real bot-walls/robots; no evasion added.
-  Suite 759 passed, 1 skipped, ~64 s.
-- NEXT after L4a: contact-page depth (L4b), then L6 skill v2 per docs/specs/skill-v2.md.
-- IN FLIGHT (parallel worktrees): L4b contact-page depth (crawler.py); L6 skill v2 + bin/leadforge shim +
-  plan enrichment estimate + neutral defaults + release 0.5.0 (per docs/specs/skill-v2.md).
-- AFTER L6: final acceptance = tiny real campaign end to end via the new skill flow (detach/status).
-- UNPROVEN: war-room crash cause.
+- All layers done or decided: L0 dev loop, L1 run control, L2 isolated agent (15 s -> 5.2 s/call), L3 GPU NER +
+  24 workers (crawl 16.4 -> 26.3 sites/min, same yield), L4a/4b quality fixes (small measured gains; coverage is
+  the lever), L5 Laya = measured no-go (ADR-017), L6 skill v2 + bin/leadforge + release 0.5.0.
+- Acceptance: real Bath GB campaign via skill flow exported 20 leads in 4.4 min (plan said 5).
+- Suite 765 passed, 1 skipped (~70-95 s, `pytest -n 6`); ruff clean; `claude plugin validate .` passes.
+- master is ~60 commits ahead of origin — NOT pushed (owner decides; push publishes to GitHub).
+- Open: resume the parked UK campaign (D:/GainLev/LeadForge/campaign-uk-autorepair) on 0.5.0 when the owner
+  wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
+- Open follow-ups: lcmautomotive-style post-redirect link miss; Laya fine-tune idea (ADR-017); war-room crash
+  cause UNPROVEN.

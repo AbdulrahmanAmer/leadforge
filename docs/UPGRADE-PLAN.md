@@ -1,6 +1,6 @@
 # LeadForge upgrade plan — layered, measured
 
-Status: plan (2026-09-24). Each layer ships as its own commits with its own gate, bottom-up; a layer
+Status: EXECUTED 2026-09-24/25 — released as 0.5.0 (see CHANGELOG). Original plan text kept below with results. Each layer ships as its own commits with its own gate, bottom-up; a layer
 starts only when the one below it is green. Progress is tracked in `.claude/POSITION.md`.
 
 Inputs: three read-only audits on 2026-09-24 (pipeline gaps, parked-run performance, Laya spec), each
@@ -163,7 +163,15 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - Runs inside the Layer 3 model worker, not its own process (GPU memory: 2.3 + 0.7 of 4 GB).
 - **Gate:** an agreement report; decision recorded as an ADR.
 
-## Layer 6 — Skill v2 (last)
+## Layer 6 — Skill v2 (last) — DONE 2026-09-25 (235598d..93cebe2, release 0.5.0)
+
+- Two skills (generate-leads 120-line body, send-outreach 93), `bin/leadforge` self-installing launcher (cold
+  5m47s, warm 1.8 s), plan carries est_enrich_min/est_total_min, owner-specific defaults removed.
+- ACCEPTANCE 2026-09-25 (real campaign, fresh workspace, skill flow intake → plan → run --detach → status
+  polling): auto repair shops, Bath GB, cap 20 → plan estimated 5 min, exported in 4.4 min; 20 leads (A 6,
+  B 13, C 1); 15 agent drafts via the isolated runner, 7 rejected by the no-fabrication gate, 4 abstained.
+- Layer 4b (contact links): 40 low-yield sites → 1 genuine link miss; most lack email or block bots.
+  Fix: sites with email 26 → 27 of 80 at +1.9% requests.
 
 - Per `docs/specs/skill-v2.md`: split lead-gen and outreach skills, launch-and-monitor, plugin-root
   bootstrap, neutral defaults, and GPU detection (doctor says whether NER/Laya will use the GPU; never
