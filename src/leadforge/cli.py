@@ -102,7 +102,7 @@ def intake(
     _say(ctx, f"icp.yaml written: campaign={icp.campaign}, {len(icp.target.categories)} categories, "
               f"hash={icp.icp_hash()}")
     emit_digest(True, "intake", counts={"errors": 0, "categories": len(icp.target.categories)},
-                warnings=warns, artifacts=[str(Path(out).resolve())], next_="leadforge run --icp " + out)
+                warnings=warns, artifacts=[str(Path(out).resolve())], next_="leadforge plan --icp " + out + " --json")
 
 
 # ----------------------------------------------------------------------------- plan
@@ -142,7 +142,7 @@ def plan(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
         warns.append(f"saturated tiles subdivide automatically (discovery.subdivide_at); worst case "
                      f"~{counts['est_runtime_min_max_subdivided'] / 60:.0f}h if every tile splits "
                      f"{cfg.discovery.max_subdivisions}x")
-    emit_digest(True, "plan", counts=counts, warnings=warns, next_="leadforge run --icp " + icp)
+    emit_digest(True, "plan", counts=counts, warnings=warns, next_="leadforge run --icp " + icp + " --detach --json")
 
 
 # ----------------------------------------------------------------------------- discover
