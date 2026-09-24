@@ -437,12 +437,26 @@ def _gliner_model():
     return _GLINER_MODEL
 
 
-def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
-    """GLiNER path — same return type and caps as extract_people(); caller falls back when unavailable."""
-    model = _gliner_model()
-    # 0.4 keeps short titles like "Owner" (scores ~0.45) that 0.5 drops.
-    with _ner_slot():
-        ents = model.predict_entities(text[:6000], ["person name", "job title"], threshold=0.4)
+NER_LABELS = ["person name", "job title"]
+NER_THRESHOLD = 0.4  # keeps short titles like "Owner" (scores ~0.45) that 0.5 drops
+NER_TEXT_CHARS = 6000  # matches the GPU benchmark (scripts/bench/gliner_bench.py) and worker requests
+
+
+def _ner_plausible_name(name: str) -> bool:
+    words = name.split()
+    return (1 <= len(words) <= 4
+            and all(w[0].isupper() for w in words)
+            and not any(w.casefold() in NAME_WORD_STOPLIST for w in words)
+            and name.casefold() not in NAME_STOPWORDS)
+
+
+def people_from_ner_entities(ents: list[dict], text: str, source_url: str,
+                             max_candidates: int = 8) -> list[PersonCandidate]:
+    """Layer 3: the post-processing half of the old extract_people_ner, split out so the in-thread
+    path (extract_people_ner, below) and the model-worker path (enrich/runner.py's worker-backed
+    _people_fn, calling this with entities from ner_worker.NerWorker.predict) produce byte-identical
+    PersonCandidate lists from the same raw GLiNER entities — results cannot drift between paths
+    because there is only one implementation of what happens after inference."""
     names = [e for e in ents if e["label"] == "person name"]
     titles = [e for e in ents if e["label"] == "job title"]
 
@@ -450,19 +464,12 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         # character gap between the two spans (0 when adjacent/overlapping)
         return max(t["start"] - n["end"], n["start"] - t["end"], 0)
 
-    def _plausible_name(name: str) -> bool:
-        words = name.split()
-        return (1 <= len(words) <= 4
-                and all(w[0].isupper() for w in words)
-                and not any(w.casefold() in NAME_WORD_STOPLIST for w in words)
-                and name.casefold() not in NAME_STOPWORDS)
-
     out: list[PersonCandidate] = []
     seen: set[str] = set()
     for n in names:
         name = re.sub(r"\s+", " ", n["text"]).strip()  # GLiNER spans can cross layout newlines
         key = name.casefold()
-        if key in seen or not _plausible_name(name):
+        if key in seen or not _ner_plausible_name(name):
             continue
         win_start, win_end = max(0, n["start"] - 120), min(len(text), n["end"] + 120)
         window = text[win_start:win_end]
@@ -480,3 +487,17 @@ def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> l
         if len(out) >= max_candidates:
             break
     return out
+
+
+def extract_people_ner(text: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
+    """GLiNER path — same return type and caps as extract_people(); caller falls back when unavailable.
+
+    Legacy IN-THREAD path (runs torch inference on the calling thread) — Layer 3 (2026-09-24) moved
+    the default crawl path to a separate model-worker process (enrich/ner_worker.py) so crawl threads
+    never run torch; this function now serves as: (a) the worker's own fallback target when it fails
+    to start, and (b) direct unit-test coverage for the pre-worker behavior, sharing post-processing
+    with the worker path via people_from_ner_entities so the two can never silently diverge."""
+    model = _gliner_model()
+    with _ner_slot():
+        ents = model.predict_entities(text[:NER_TEXT_CHARS], NER_LABELS, threshold=NER_THRESHOLD)
+    return people_from_ner_entities(ents, text, source_url, max_candidates)
