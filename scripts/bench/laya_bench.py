@@ -2,8 +2,8 @@
 import sys
 import time
 
-import torch
 import laya
+import torch
 
 dev = sys.argv[1]
 t0 = time.time()
