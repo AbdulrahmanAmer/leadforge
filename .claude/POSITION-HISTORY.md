@@ -1,0 +1,322 @@
+# POSITION HISTORY — archived blocks moved out of POSITION.md on 2026-09-24
+
+Oldest first. POSITION.md keeps only recent blocks; the session hook injects its last block.
+
+## Background (2026-08-31, two releases shipped this day)
+
+- **v0.1.4** — a 34-agent adversarial audit of the whole tool; every confirmed finding fixed (honest
+  coverage stats, natural DM name order, geography actually scored, Excel formula-injection,
+  resume/config-set/digest-contract criticals, `-grid-bbox` was lng-first = wrong continent).
+- **v0.2.0** — grid tiling live-proven, browser fallback live-proven, opt-in inferred emails.
+
+### Machine quirks that will bite otherwise
+- VPN DNS (10.255.255.x) drops MX queries → `validate.get_resolver()` falls back to 8.8.8.8/1.1.1.1.
+- Windows cp1252 pipes broke the LF_DIGEST contract → `cli.main()` forces UTF-8 on stdout/stderr.
+- A no-args `google_maps_scraper.exe` double-clicked in Explorer starts an idle web-UI — looks like a
+  leaked process but is not ours; the stall watchdog is fine.
+- crawl4ai renders fine here (example.com in 0.54s); many UK garage sites 403 **both** httpx and
+  headless Chromium — that is the site's WAF, correctly reported as "render returned nothing".
+- Files are CRLF; a postwrite hook warns. Harmless, git normalizes on commit.
+
+### Segment fact (why inferred emails do nothing for trades)
+UK garages publish `info@` or nothing: **112 same-domain emails across 709 businesses, ZERO with a
+`.` or `_` local part.** Professional services (Guildford accountancy campaign) DO carry
+`first.last@` (`duncan.sweetland@`, `samantha.webber@`). So `validation.infer_emails` (opt-in,
+anchored-only, never SMTP) correctly produces nothing on trade campaigns — by design, not by bug.
+
+### UNPROVEN / deliberately excluded (do NOT re-litigate without a reason)
+- `fallback_rest` docker up-path — no docker on this machine.
+- Excel/LibreOffice visual check — operator-only, cannot be automated here.
+- Facebook/Instagram presence probes — excluded on ToS grounds (`icm/SCOPE.md` #3).
+- **No SMTP / RCPT probing, ever** (`icm/SCOPE.md` #5). An earlier plan draft proposed it; that was
+  wrong and was withdrawn. Inference uses public evidence + MX only.
+
+---
+
+## CURRENT POSITION — 2026-08-31, end of session
+
+**v0.2.0 SHIPPED. Nothing in flight, nothing blocked.** Working tree clean, all pushed to
+https://github.com/AbdulrahmanAmer/leadforge, tagged `v0.2.0`, both CI runs (master + tag) **success**.
+Gate: **192 tests pass · ruff clean · `claude plugin validate .` passes**.
+
+**THE measurement that drives scaling:** Google Maps caps results at **~106–120 per search,
+SERVER-SIDE**. `discovery.depth` is already maxed — scrolling/deepening does nothing. **Grid tiling is
+the only fix and it is now proven live:** 4 tiled queries (`auto repair shop`, Birmingham) found
+**107 businesses the entire 709-lead 3-category × 5-city campaign had missed** (Birmingham 221 → 310,
++40%), 0 degraded, **0 duplicate place_ids**. Tiling stays **opt-in**
+(`leadforge config set discovery.grid_mode auto`) — it adds a Nominatim geocode per area and
+multiplies query count 10–60×.
+
+**Live campaign — `D:\GainLev\LeadForge\campaign-uk-autorepair\`:** 816 businesses (was 709), 274
+Tier A, 419 named DMs, 194 published emails. Latest sheet:
+`leadforge_data/exports_v2/run_20260831_13432_c75e/uk-autorepair-it-solutions.xlsx`. Pre-tiling DB
+backup: `leadforge_data/db.sqlite3.pre-grid-backup`. Grid-test ICP left at `icp.gridtest.yaml`.
+Second workspace: `D:\GainLev\LeadForge\campaign-uk-test\` (Guildford accountants, 15 leads).
+
+**NEXT MOVE (agreed, not started):** a **full tiled sweep** — all 3 categories × 5 cities with
+`grid_mode: auto`. On today's evidence that is several hundred more leads. Walk-away run: every query
+checkpoints, `--resume` continues after any interruption. **Run `leadforge plan` FIRST** and read the
+estimated hours — a tiled 3×5 plan is large (the plan digest now reports cells / queries / hours).
+
+---
+
+## POSITION — 2026-09-02, assessment session (no code changed; report published)
+
+**Report:** https://claude.ai/code/artifact/12a2c6af-4482-4871-9cd5-88b53145c1dd (the owners' decision memo:
+coverage, accuracy, sendable funnel, outreach + drafting design, own-client discovery, phased plan, decisions).
+
+**Corrections to the block above (measured, not inferred):**
+- The 709/816-lead campaign is **4 cities, not 5 or 10**. `queries` table: 12 of 30 done, **18 still `pending`**
+  (Bristol, Leicester, Nottingham, Southampton, Reading, Coventry = 0 rows). Cause: the 1000 lead cap counted RAW
+  listings (1,089 after query 12). Counting was fixed in v0.1.4 but the campaign data was never completed, and the
+  run is `exported`, so `--resume` will NOT retry the 18 pending queries (only `degraded` ones, and only before the DM gate).
+- **BLOCKED — tiled sweep — geocoder.** `leadforge plan` with `grid_mode=auto` fails: 'Manchester',
+  'Manchester, Greater Manchester' and 'Manchester, England' are all rejected as ambiguous (Nominatim returns the same
+  city twice; `grid._distinct_places` compares address labels BEFORE coordinates). 'City of Manchester' geocodes to
+  the Manchester Ship Canal. Unblock = same-place rule (coords first), addresstype filter (city/town/borough), and a
+  per-area bbox override. Also `leadforge plan` has no `--json` flag (SKILL.md says it does).
+- Tiled sweep size (computed with make_tiles on Nominatim bboxes): 298 tiles under max_tiles=60/area → 894 queries
+  ≈ 52 h at the MEASURED 3.5 min/tiled query (tool's `_EST_MIN_PER_QUERY=8` says 119 h; untiled measured 1.7 min).
+  Uncapped 3 km = 959 tiles ≈ 168 h. Grid-test tiles at ~10 km returned 110/100 → still saturated; split any tile ≥100.
+- **gosom v1.17.4 is the LATEST release (2026-08-22)** — no upgrade exists. `-fast-mode` = ≤21 results, no grid.
+- **Universe denominators:** DVSA "Active MOT test stations" CSV (OGL, quarterly, 23,087 rows, 23,085 with phone):
+  2,535 stations across the 10 cities vs 244 MOT-tagged found; in the 4 covered cities 1,045 stations, **317 phone-
+  matched to our DB, 717 absent**. Companies House SIC 45200 active: 7,518 across the 10 cities vs 816 found.
+  CSV cached at the session scratchpad `dvsa/active-mot-stations.csv`; URL in the report's Method section.
+- **Raw gosom cache holds GBP fields we discard** (848 unique places): `about` attributes (Appointments recommended
+  629 / required 134), `order_online` links (139), owner review replies (358; 75 signed with a first name), a first
+  name credited in ≥3 reviews (76), `status`. `-extra-reviews` is off (8 reviews/place).
+
+**Accuracy defects confirmed by adversarial re-measurement (details + fixes in the report):**
+7 junk freemail emails tiered valid/personal (impallari@gmail.com ×3 font credit, test@/sample@ builder script), 3 tier-A
+rows where junk outranked info@own-domain; registry match has no name check → 7–10% wrong company; 40/187 profiled
+matches DISSOLVED (26 with DM installed, 13 tier A); registry_profile persisted on only 187 (crawl path discards it →
+"not matched" on ~280 matched rows); 42% of heuristic people candidates are review authors/garbage; hook
+weak_social_presence fires on 630 with 473 zero-evidence (115 'phantom' crawls stamped crawled_at with 0 pages);
+booking regex false on Halfords/Hillcliffe(top lead)/Master MOT; industry_match gives 0.1 to 404 rows (Google category
+strings) — fixing it alone makes A ≈ 58% → recalibrate thresholds; 3 factors (30 pts) constant; 28 tier-A rows have no
+email and no DM. Sendable funnel today: 816 → 473 site → 194 email → 112 own-domain → 98 active-Ltd+email → 45 A+DM+own-domain.
+
+**Scope note:** icm/SCOPE.md #4 (no sending) is still in force. The owner is CONSIDERING reversing it; nothing may be
+built past a dry-run/render step until SCOPE.md is amended in writing with an ADR. Transactional ESPs ban cold outreach.
+
+**NEXT MOVE (proposed, awaiting owner decisions listed in the report §8):** Phase 0 = geocoder fix + tile
+subdivision + full 10-city tiled sweep; DVSA + Companies House SIC as discovery providers merged by phone; keep the GBP
+fields; ship the precision fixes as one release. Then a phone-first outcome loop before any sending layer.
+
+---
+
+## POSITION — 2026-09-02, v0.3 BUILD IN PROGRESS (owner decisions taken; one-shot E2E + push requested)
+
+**Owner decisions (binding, also in docs/09-v0.3-build-plan.md):** sending in scope with guardrails (ADR-011);
+phone-first, email second touch; hybrid sender identity per client; NO paid dependencies (pluggable transport,
+in-harness drafting, free domain resolution); freemail emailable after plausibility check; director names only
+when gated; own-client ICP = anyone needing outreach except call centres (SIC 82200 excluded); full 10-city tiled
+sweep in the background after the code ships.
+
+**Wave 0 DONE — commit d7eb4ce** (202 tests, ruff clean): SCOPE #4 amended, ADR-011/012/013, db schema v2,
+compliance.py, config sections, `--json` hoisting in cli.main, `outreach`/`draft` sub-app stubs, provider
+field-map registry, interface stubs (classify_email_affinity, email_context, rank_email_contacts, name_similarity),
+docs/09 build plan, tests/test_compliance.py + tests/test_db_v2.py.
+
+**Wave 1 RUNNING — Workflow run `wf_ecc94138-118`** (5 builders A/B/C1/C2/D in isolated worktrees branched
+from d7eb4ce, each reviewed by a fresh-context Fable reviewer, one fix round). Patches land at
+`<scratchpad>/wave1/<unit>/<unit>.patch`; each builder commits on its worktree branch. NEXT: merge accepted
+branches into master, run the full gate, then launch Wave 2 (E outreach, F drafting, H company mode), then
+Wave 3 (docs, version 0.3.0 everywhere, CHANGELOG, STATE, tag, push), then data ops (DVSA load + tiled sweep).
+
+**If resuming after a compaction:** `git worktree list` shows the builder worktrees; `git branch --list` the
+unit branches; the workflow journal is at
+`~/.claude/projects/D--GainLev-LeadForge-leadforge/bb93e453-b256-4096-9ee1-d9ef417ed812/subagents/workflows/wf_ecc94138-118/journal.jsonl`.
+
+**Wave 1 MERGED into master (0be8074 + 53c61f3 cfg pass-through + 3159d0b package-data): 326 tests, ruff clean.**
+Accepted: B (dvsa provider), C2 (runner/registry truth), C1 (extraction truth; test_crawler_politeness.py
+exception granted). A and D merged WITH known reviewer findings, now being fixed in the polish round.
+**RUNNING — Workflow `wf_0c94adb2-499`** (base 3159d0b): polish A/B/C1/C2/D + Wave 2 builds E (outreach)
+and F (drafting), worktrees under `.claude/worktrees/wf_0c94adb2-499-*`, patches at `<scratchpad>/wave2/<unit>/`.
+NEXT after it: merge, full gate, pass cfg to score_run call sites (cli.py:269, pipeline.py:258) once D adds the
+param, launch H (company mode: providers/companies_house.py, resolve_domain.py, company.py, models.py Target.mode,
+intake.py, grid.py dispatch), then Wave 3 docs/SKILL/CHANGELOG/STATE + tag v0.3.0 + push, then data ops.
+Precomputed clean city bboxes for the sweep: `<scratchpad>/plan/area_bbox.yaml` (discovery.area_bbox format).
+
+---
+
+## POSITION — 2026-09-03, v0.3.0 RELEASED (all waves merged)
+
+**Code:** master = v0.3.0 (Waves 0/1/polish/2 + register queries + docs). Gate `python scripts/v03_gate.py
+--live-db <db>` = 19/19 PASS, full suite 518 passed, ruff clean, `claude plugin validate` OK. One flaky failure
+observed once in a full run (did not reproduce in 4 subsequent runs; drafting builder saw the same once) —
+UNPROVEN which test; watch CI.
+**Lessons recorded:** the Workflow harness branches worktrees from ORIGIN/master (last pushed commit), not local
+HEAD — push before launching worktree agents, and tell agents to `git merge-base --is-ancestor <base> HEAD ||
+git reset --hard <base>`. An agent running `pip install -e .` inside a worktree re-points the editable install
+of the MAIN tree at that worktree — re-run `pip install -e .[dev]` in the main tree after any wave. pytest here
+needs `-o addopts=""` to print the summary line. Reviewer+fixer loops on Fable were ~half the token spend; the
+deterministic gate script + orchestrator-applied small fixes replaced them for Wave 2 at ~1/3 the cost.
+**Live campaign workspace prepared:** `campaign-uk-autorepair/leadforge.yaml` has grid_mode auto, providers
+[gosom, dvsa], subdivide_at 100, area_bbox for all 10 cities (precomputed, settlement-level); `icp.yaml` caps
+raised to 6000 leads / 6000 sites (backups: `*.pre-v0.3`). `leadforge plan` = 295 cells, 885 tiled queries
++ 10 register queries, ~59 h estimated (worst case with subdivision far higher). DVSA CSV cached in
+`leadforge_data/cache/dvsa/`.
+**NEXT:** the sweep runs detached (see below); when `leadforge status` shows `dm_pending`, label DMs
+(`dm export`/`dm apply`), then `run --resume` to score + export; then `outreach plan` / `draft export` for the
+eligible cohort, and a calling sprint with `outreach outcome add`. GainLev's own ICP: `config/icp.company.example.yaml`
+(Stockport pilot) — needs `discovery.providers: [companies_house]` + the CH key in a fresh workspace.
+
+---
+
+## POSITION — 2026-09-03, SWEEP PAUSED; SPEED PROGRAM (owner: "not limited to gosom, build our own")
+
+**Sweep paused by the owner** at 26/947 queries (16 Maps + 10 register; 0 degraded); resume later with
+`run --resume` in the campaign folder if wanted. Audit of its output: 2,576 new businesses (1,862 DVSA register in
+minutes; 714 Maps rows: phone 94%, rating 98%, postcode 98%, website 66%). Two real bugs found + fixed + pushed
+(1913e87): phone merge only worked register->Maps (197 twins; `leadforge dedupe` repaired them, backup
+`db.sqlite3.pre-dedupe-backup`), and DVSA facts never persisted (enrich_for was module-level; 2,162 rows backfilled).
+
+**Measured (scratchpad/speed):** gosom c=2 28/min; c=8 46-61/min; c=16 63/min; 2 parallel c=8 = 71/min aggregate;
+0 block signs in 12 min; gosom source: the result-list JSON already carries phone/website/rating/address/coords
+(EntryFromJSON) but normal mode queues a PlaceJob for EVERY result. Native list-first Playwright probe: 120 cards in
+25-28 s per search (phone 99%, website 70-76%, CID+lat/lng 100%) = 250-290 places/min per browser, no place visits.
+Enrichment: 20-site samples 4.8-6.6 sites/min; tail-dominated (403/Cloudflare, dead hosts x 15 s timeouts, browser
+Semaphore(2)); workers=16 alone did not help.
+
+**IN FLIGHT (two Sonnet builders, separate worktrees):** `speed` branch — providers/maps_list.py (list-first,
+persistent browser, known-CID skip, details only for new places, discovery.parallel_queries); `speed-enrich`
+branch — fail-fast tail, browser gate 4, workers 12, overlapped registry/validate stages, DNS pool, bench_enrich.py.
+NEXT: merge both, `scripts/bench_speed.py` end-to-end on a copy (target: 1,000 enriched+scored rows < 60 min),
+then register-density adaptive tiling; gosom demoted to fallback. Research results: tasks/wnxprvm3w.output.
+
+**Measured paces 2026-09-03 (scripts/bench_speed.py baseline, Nottingham, dvsa+maps_list, 2 browsers):**
+discover 352 businesses in 46 s (0.13 s/item); enrich 40 sites in 200 s at 4 workers/6 pages (5.0 s/site ->
+83 min per 1,000; the enrich builder on branch `speed-enrich` targets <= 2 s/site); registry 2.1 s/business ->
+35 min per 1,000, bounded by Companies House 600 req/5 min (~2.5 calls/business: search+profile+officers; a
+later cut = advanced-search by name+postcode returns status directly, saving the profile call); score+export
+seconds. Fixed today on master: two-way phone merge + `dedupe` repair (1913e87), DVSA facts persisted, registry
+jurisdiction gate now maps 'United Kingdom' -> GB (37c53b0; DVSA/maps_list rows were silently skipped before),
+maps_list merged (ed61148, ADR-014). Live 2-browser proof: 4 queries -> 281 unique businesses in 141 s, 0 blocks.
+
+**AFTER benchmark 2026-09-03 (master fdfd97a+, scripts/bench_speed.py --overlap, Nottingham, dvsa+maps_list, 2 browsers,
+workers 12 / pages 4, real Companies House key):** discover 356 businesses in 48 s; enrich 60 sites + registry 356
+lookups (210 matched active, 87 auto DMs) + gbp + validate OVERLAPPED in 588 s (registry-bound at ~1.65 s/business);
+score+export < 1 s; TOTAL 636 s for a scored 356-row sheet. Projection for 1,000 businesses (~600 with websites):
+discover 2-3 min, overlapped enrich/registry ~35 min (registry 28-35 min at the CH rate limit; crawl 23-35 min at
+17-26 sites/min), score/export seconds -> ~40 min. The hour target holds on measured paces; the binding constraint is
+Companies House's 600 req/5 min, not our code. Live sweep still PAUSED; to restart on the new engine set
+`discovery.providers: [dvsa, maps_list, gosom]`, `discovery.parallel_queries: 2` in campaign leadforge.yaml and
+`leadforge run --icp icp.yaml --resume` (885 tiled queries at ~25 s each on 2 browsers ~3 h + subdivision growth).
+Dashboards: 8765 (campaign, paused), 8766 (benchmark). NEXT candidates: streaming pipeline (enrich as discovery
+finds), register-density tiling, fewer CH calls per business (advanced-search by name+postcode returns status).
+
+## POSITION — 2026-09-03 ~00:15, SWEEP RESUMED AFTER LEAD-CAP STOP (pid 16480)
+
+The resumed sweep (pid 18760, new engine dvsa+maps_list+gosom, 2 browsers) hit `caps.max_leads: 6000` after 195
+of 1,543 tiles (6,000 businesses credited to run_20260902_22032_7eca; 6,816 in the DB) and moved to enrichment with
+1,348 tiles pending — the cap was a v0.2-era number. Fix shipped (tests 64 green, ruff clean):
+- `ICP.icp_hash()` now EXCLUDES `caps` and `notes` (operational limits are not campaign identity);
+  `ICP.icp_hash_legacy()` keeps the old value and `pipeline._latest_run()` falls back to it and re-stamps the row,
+  so campaigns started by older versions keep resuming. `db.create_run` is collision-proof within one second.
+- Live migration done by hand with the run STOPPED: `runs.icp_hash` 45eaca579771 -> 8108f1495954 for
+  run_20260902_22032_7eca (scratchpad/sweep/restamp.py), THEN icp.yaml caps raised to max_leads 30000 /
+  max_sites 30000 (backup `icp.yaml.pre-capraise`). `run --resume` re-entered discovery: 1,352 pending tiles,
+  "6021 unique leads so far" at restart.
+- Relaunch recipe (PowerShell): Start-Process C:\Python314\python.exe -ArgumentList -m,leadforge,run,--icp,icp.yaml,
+  --resume,--json -WorkingDirectory <campaign> -RedirectStandardOutput leadforge_data\logs\sweep3_stdout.log
+  -RedirectStandardError leadforge_data\logs\sweep3_stderr.log -WindowStyle Hidden -PassThru. Current pid 16480.
+- Heartbeat: session cron every 5 min (2-59/5) running scratchpad/sweep/heartbeat.py (pid from sweep.pid next to it,
+  read-only DB, dashboard 8765 ETA); it prints STOP_HEARTBEAT when finished/died and the tick deletes the job.
+  Dashboards: 8765 campaign, 8766 bench-after2.
+- After discovery the run continues into overlapped enrich/registry/gbp/validate, then pauses at dm_pending
+  (agent DM labeling), then `run --resume` for score+export. Expected sheet 9,000-12,000 rows; registry stage
+  (~1.65 s/business at the CH rate limit) is the long pole.
+UNPROVEN: that the cap is not hit again (30,000 vs a 9-12k projection — should hold). DONE: commit 1ebc641 pushed to origin/master after the v0.3 gate (14 checks, 0 FAIL, 1 SKIP).
+- Dashboard fix (same commit): measured paces persist in `leadforge_data/pace.json`; DEFAULT_PACE_S enrich 2.5 s,
+  registry 1.65 s. Campaign dashboard 8765 restarted on the new code (no --open). 8766 untouched.
+
+## POSITION — 2026-09-03 ~06:10, v0.4 AUTOPILOT BUILD IN FLIGHT (sweep still discovering, pid 16480)
+
+Owner ask: wire labeling + scoring + drafting into `leadforge run` so a run ends in a sheet WITH drafted emails.
+Design decided and written to the builders contract:
+`C:/Users/DELL/AppData/Local/Temp/claude/D--GainLev-LeadForge-leadforge/bb93e453-b256-4096-9ee1-d9ef417ed812/scratchpad/autopilot/CONTRACT.md`
+- Headless agent runner = the operator's own Claude Code: `claude -p --model sonnet --output-format text
+  --no-session-persistence` with the prompt piped on STDIN. LIVE-PROVEN 2026-09-03: 2-line DM batch -> exit 0 in 13 s,
+  correct NDJSON + one MCP noise line (parser must keep only JSON-object lines). No API key. Auto-detected on PATH,
+  `agent.command: []` disables. Deterministic fallbacks: heuristic_auto labels, template drafts (messages.author).
+- Stages: enriched -> labeling -> scoring -> scored -> drafting -> exported; `pipeline.autopilot` (default true),
+  `run --no-autopilot` restores the dm_pending pause. Export: Draft Subject/Body/Grade/Author columns + Drafts sheet.
+- Four Sonnet builders in isolated worktrees off 987d4a8 (A runner+config, B draft service+template+schema v3,
+  C export, D pipeline+dm auto-label+docs+0.4.0 bump). Merge order after reports: A, B, C, D; then full gate; push.
+NOT DONE: merge, gate, live proof (plan: copy bench-after2 DB, set stage scored, `run --resume` -> drafts in sheet),
+then the campaign run picks it up at its dm_pending pause with `run --resume`.
+
+## POSITION — 2026-09-03 ~07:40, AUTOPILOT: A/B/C MERGED + LIVE-TUNED, D IN FLIGHT (sweep pid 16480 still discovering)
+
+Merged into master: A 3b43e6c (agent_runner + config), C 28443bf (Draft columns + Drafts sheet), B ef47941 (draft
+service, template drafter, schema v3). Post-merge fixes a82b4c3 + 30aa126: gate tolerates possessives of packet
+names and digit-glued fragments (1STOP), DRAFT_INSTRUCTIONS spell out the gate rules + style, one gated retry
+carrying the reasons (draft.retries=1), template fallback for what still fails, `infer_used_fact` when the model
+quotes a fact but forgets to cite it. LIVE on the benchmark copy (scratchpad/autopilot/live-proof, 356 scored):
+first pass 1/10 accepted -> now 11/12 accepted, 0 rejected, 1 abstained, 27 s per 12-packet sonnet batch.
+Gate script now asserts db.SCHEMA_VERSION (3), not "2". Builder D (pipeline wiring, dm auto-label, docs, 0.4.0)
+still running in .claude/worktrees/agent-a15b7cb9ff544120b. NEXT: merge D, full gate, live proof `run --resume`
+on the copy (stage discovered -> labeling -> scoring -> drafting -> exported with drafts in the sheet), push.
+
+## POSITION — 2026-09-03 ~09:05, AUTOPILOT MERGED (198cef1) + LIVE E2E PROVEN; gate suite 2 red (names pending)
+
+D merged (ee09cc6 via 198cef1). LIVE E2E on the benchmark copy: `leadforge run --icp icp.yaml --resume --json` from
+stage discovered -> exported in one call: dm_labeled 85, dm_unlabeled 0, drafted 47, draft_rejected 0,
+draft_abstained 4, runner agent, 356 leads (A 82 / B 79 / C 195). Gate on the merged tree: 14 checks, 1 FAIL =
+full suite "2 failed, 688 passed" (ran concurrently with the live run; names being collected in
+scratchpad/suite3.log). NOT PUSHED yet (push only on gate exit 0). Campaign sweep pid 16480 still discovering
+(~560/2900 tiles, 11.6k businesses); when its old-code process pauses at dm_pending, `run --resume` on 0.4.0
+carries it through labeling -> scoring -> drafting -> export. Campaign leadforge.yaml still needs
+`draft.auto_purpose: gainlev_leadgen` (default already) and an outreach identity (owner input: postal address,
+from name/email, unsubscribe) for real footers.
+
+## POSITION — 2026-09-03 ~09:40, v0.4.0 READY PENDING GATE (commits through 7dc398b, NOT pushed)
+
+Since 198cef1: 98dd5a9 Next Action stays phone-first for enrolled/drafted targets ("(email draft ready)" suffix);
+7dc398b autopilot tests patch real entry points (the sys.modules stubs lost to the real modules after the merge
+and the FULL SUITE SHELLED OUT TO THE REAL CLAUDE — conftest autouse guard now blanks shutil.which in
+agent_runner), gate `_haystack` drops fact `at` timestamps (an :47 clock made "47 garages" pass). Targeted
+tests green, ruff clean; full gate running (scratchpad/gate4.log). Campaign leadforge.yaml now carries
+agent{sonnet,40,100} + draft{gainlev_leadgen, A/B, auto_max 1500} (backup leadforge.yaml.pre-v0.4); dashboard
+8765 relaunched (pid 23628). Push on GATE_EXIT=0. Sweep pid 16480 still discovering (~580/2960 tiles, 11.8k).
+PUSHED 2026-09-03 ~09:50: master 7dc398b -> origin (gate: 14 checks, 0 FAIL, 1 SKIP; full suite 692 passed).
+PUSHED 2026-09-03 ~10:25: f7a9678 (dm_pending -> autopilot labeling hand-off), tag v0.4.0 moved to it; gate 14/0 FAIL/1 SKIP.
+
+## POSITION — 2026-09-03 ~13:30, v0.4.1 NOVELTY GATE COMMITTED (687d8b5), gate running; SWEEP DECISION PENDING
+
+Measured on the live sweep (log-derived yields, scratchpad analysis): base-grid queries added ~13 new businesses
+each; once the queue reached the depth-1 children (60/60 saturated) yield fell to ~0.6-1 per tile at ~14 s
+each, while every saturated child still spawned 4 more (plan 1,543 -> 4,600+, ETA 3 h -> 13+ h). Shipped:
+`discovery.subdivide_min_new` (3), `queries.new_count` (schema v4), `leadforge prune-tiles [--min-new N]
+[--all-children] [--dry-run]`, dashboard remaining = pending only. The RUNNING process is old code: to apply,
+stop pid (sweep.pid), `leadforge prune-tiles --all-children` (parents have NULL new_count), then
+`run --resume` -> enrichment on v0.4.1. Cost of pruning: up to ~2,000 businesses the ~3,500 children might
+still find; benefit: ~13 h. RECOMMENDED to the owner; NOT applied without their word (scope decision).
+Push pending GATE_EXIT=0 (scratchpad/gate6.log).
+PUSHED 2026-09-03 ~13:45: 687d8b5 v0.4.1 + tag (gate 14/0 FAIL/1 SKIP). Sweep decision still with the owner.
+
+## POSITION — 2026-09-03 ~14:05, SWEEP PRUNED + RESUMED ON v0.4.1 (pid 23704) — owner said "prune"
+
+Owner decision "prune" (2026-09-03 ~14:00). Done: old process 16480 killed; DB backup
+leadforge_data/db.sqlite3.pre-prune-backup; `leadforge prune-tiles --all-children` skipped 3,726 queued child
+tiles (schema now v4); `run --resume` relaunched detached as pid 23704 (logs sweep4_stdout/stderr.log), which
+finished the 18 remaining depth-0 queries and entered the overlapped enrich/registry stage within a minute.
+Expect: crawl ~8.6k sites (26/min) overlapped with registry 5,214 (1.65 s each) ~5 h, then autopilot
+labeling (runner batches of 40 / ~50 s), scoring, drafting (auto_max 1500, ~27 s per 12), export -> the sheet
+under leadforge_data/exports/<run>/. Heartbeat cron c9bd4fc9 relaunches on stall/park; STOP when exported.
+v0.4.1 pushed: 687d8b5 + 0f40cd9 (SKILL.md version), tag v0.4.1. NOTE: one push went out on a red gate
+(SKILL.md version string) and was fixed forward within minutes — condition pushes on GATE_EXIT explicitly.
+
+## POSITION — 2026-09-03 ~14:30, RUN RELAUNCHED WITH BOUNDED NER (pid 16940); gate for 4e3b407 running
+
+After the prune the resumed run was CPU-bound: python at ~2.7 cores (GLiNER inside 12 crawl workers, torch
+default threads), machine at 100%, crawl 5.7 sites/min (vs 26 benchmark), registry 2.9 s (vs 1.65).
+Shipped 4e3b407: enrich.ner (default true), ner_parallel 2 (semaphore), ner_threads 2 (torch cap), runner
+`_people_fn(cfg)`; test in test_enrich_speed. Old pid 23704 killed, relaunched as 16940 (sweep5_*.log).
+NEXT: when gate8.log is GATE_EXIT=0 push (CONDITION IT); measure sites/min from progress.jsonl over 5+ min
+AFTER the gate's suite stops loading the CPU; if still < ~15/min set `enrich.ner: false` in the campaign
+leadforge.yaml and relaunch (heuristic extractor; registry still supplies directors). Dashboard 8765 pid 20896.
+MEASURED 2026-09-03 ~14:55 (clean window, gate finished): bounded NER -> 14.5 sites/min (was 5.7), registry 2.06 s each (was 2.9); ~9.2k sites left => enrichment ~10-11 h, then labeling/drafting ~2 h. NER kept ON for DM quality; `enrich.ner: false` would roughly halve enrichment time if the owner prefers speed.
+
