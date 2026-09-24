@@ -18,10 +18,11 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-24, CLEANUP + AUDIT SESSION (Opus 5.5; no source code changed yet)
+## POSITION — 2026-09-24, CLEANUP + AUDIT SESSION (Opus 5.5)
 
-- War-room remnants deleted (agent_chat/, run_laya_debate.py, debate_round_1_prompts.json). Likely crash cause: 10 always-on agents each spawning `claude -p` (each loads ~8 MCP servers) + browser reconnect every 3 s. UNPROVEN (not reproduced). Never spawn claude CLI per agent turn from a server.
-- Code graph: codebase-memory project `E-LeadForge-leadforge` indexed (2546 nodes); MCP registered at local scope for this repo. Name search works; plain-English search is keyword-only (weak).
-- Kept for review (untracked, from opencode): LAYA_INTEGRATION_SPEC.md, tests/test_autopilot_integration.py, build_vector_index.py + .vector_index/. leadforge_data/ kept (owner).
-- IN FLIGHT: three read-only audits (Laya spec, pipeline gaps, parked-run perf). Parked run is probably under D:/GainLev/LeadForge/leadforge.
-- NEXT: write docs/UPGRADE-PLAN.md from the audits; semantic vector index; profile before any speed claim.
+- Done+committed: war-room files deleted (2e9aa03 area); POSITION split; docs/specs/skill-v2.md (skill rewrite = LAST layer); Laya spec -> docs/specs/laya-integration.md marked 0% built; tests/test_autopilot_integration.py (14 passed on E:).
+- Env: editable install re-pointed D:/GainLev/LeadForge/leadforge -> E:/LeadForge/leadforge (same commit 4b1b3a2). Parked campaign lives at D:/GainLev/LeadForge/campaign-uk-autorepair (DB + logs; do not modify).
+- Measured (parked run): enrich 17-24 sites/min, registry 3.2-3.7 s/item, maps 15.7 s/query. Quality: email on 2.7% of businesses, DM rows 7.6%, tier A 3.0%.
+- agent_runner.py:64 spawns full `claude -p` (all MCP servers + hooks per call). Fix: --strict-mcp-config + no hooks; UNPROVEN until measured.
+- IN FLIGHT: pipeline-gaps audit; scripts/code_index.py semantic index builder (Sonnet). Graph MCP registered (local scope).
+- NEXT: docs/UPGRADE-PLAN.md (layers), verify code_index eval myself, then build layer by layer.
