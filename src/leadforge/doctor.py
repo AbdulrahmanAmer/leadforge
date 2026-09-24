@@ -256,11 +256,29 @@ def run_doctor(cfg: Config, fix: bool = False, strict: bool = False, full: bool 
     add(CheckResult("optional-extras", True, msg=", ".join(extras) if extras else
                     "none installed (fine) — [browser]/[ner]/[social]/[addressing] available"))
 
+    add(CheckResult("ner-device", True, msg=_ner_device_report(cfg)))
+
     if rep.ok:
         _write_stamp(cfg)
     if strict and not rep.ok:
         raise EnvError("; ".join(r.name for r in rep.results if not r.ok))
     return rep
+
+
+def _ner_device_report(cfg: Config) -> str:
+    """Layer 3: info only, never a failure — reports which device `leadforge enrich` will actually
+    use for GLiNER (the model-worker process, enrich/ner_worker.py), not whether NER works at all
+    (that is optional-extras' job)."""
+    if not getattr(cfg.enrich, "ner", True):
+        return "off (enrich.ner: false)"
+    if not _importable("gliner"):
+        return "off ([ner] extra not installed — heuristic extractor only)"
+    from leadforge.enrich.ner_worker import resolve_device
+    requested = getattr(cfg.enrich, "ner_device", "auto")
+    device = resolve_device(requested)
+    if requested == "auto":
+        return f"{device} (auto)"
+    return device
 
 
 def _importable(mod: str) -> bool:
