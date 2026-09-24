@@ -12,7 +12,12 @@ from pathlib import Path
 
 import typer
 
-from leadforge import __version__, db
+from leadforge import __version__
+
+# `db` pulls in leadforge.models (pydantic classes) at import time — measured ~350ms of the ~1.2s cold
+# CLI import (docs/06 perf pass, Layer 1 item 5). Most commands never touch the database (doctor,
+# intake, plan, discover, watch, dashboard, render-check, version, config); `db` is imported lazily,
+# inside each command that actually needs it, rather than once for every invocation.
 from leadforge.config import Config, load_config
 from leadforge.util import LeadForgeError, emit_digest, setup_logging
 
@@ -169,6 +174,7 @@ def enrich(
     stage: str = typer.Option("all", "--stage", help="all|site|registry|validate"),
 ):
     """Crawl business sites, extract + validate contacts, build DM candidates."""
+    from leadforge import db
     from leadforge.enrich.runner import run_enrich
 
     cfg = _cfg(ctx)
@@ -222,6 +228,7 @@ def dm_export(
     out: str | None = typer.Option(None, "--out"),
 ):
     """Write a batch of DM candidate snippets for the agent to label."""
+    from leadforge import db
     from leadforge.enrich.dm import export_batch
     from leadforge.intake import load_icp
 
@@ -243,6 +250,7 @@ def dm_export(
 @dm_app.command("apply")
 def dm_apply(ctx: typer.Context, in_: str = typer.Option("dm_labels.ndjson", "--in")):
     """Ingest the agent's DM labels."""
+    from leadforge import db
     from leadforge.enrich.dm import apply_labels
 
     cfg = _cfg(ctx)
@@ -260,6 +268,7 @@ def dm_apply(ctx: typer.Context, in_: str = typer.Option("dm_labels.ndjson", "--
 @app.command()
 def score(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
     """Score every business against the ICP rubric."""
+    from leadforge import db
     from leadforge.intake import load_icp
     from leadforge.score import score_run
 
@@ -283,6 +292,7 @@ def score(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp")):
 def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out: str | None = typer.Option(None, "--out"),
            format_: str | None = typer.Option(None, "--format", help="comma list, e.g. xlsx,csv (default: config export.formats)")):
     """Write the styled XLSX + CSV + report.json."""
+    from leadforge import db
     from leadforge.export import export_run, summarize_for_digest, top_hooks
     from leadforge.intake import load_icp
 
@@ -301,7 +311,7 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
         emit_digest(False, "export", warnings=[str(e)[:120]])
         raise typer.Exit(e.exit_code) from e
     counts = summarize_for_digest(conn, run["id"])
-    db.set_stage(conn, run["id"], "exported", **counts)
+    db.mark_exported(conn, run["id"], **counts)
     if cfg.export.auto_open:
         from leadforge.util import open_artifact
         xlsx = [a for a in artifacts if a.endswith(".xlsx")]
@@ -310,6 +320,28 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
     _say(ctx, f"exported {counts['leads']} leads -> {artifacts[0]}")
     emit_digest(True, "export", run=run["id"], counts=counts, warnings=top_hooks(conn, run["id"]),
                 artifacts=artifacts, next_=None)
+
+
+def _spawn_detached(cmd: list[str], log_path: Path, cwd: Path) -> int:
+    """Start `cmd` as a background process this CLI can walk away from: stdout/stderr to `log_path`,
+    detached from this process's console/session so a Ctrl+C or terminal close here does not touch it.
+    Returns the child pid. Windows: DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP (no console window
+    inherited, not part of our process group). POSIX: start_new_session=True (its own session, immune
+    to our SIGHUP/terminal signals)."""
+    import os
+    import subprocess
+
+    log_fh = open(log_path, "ab")  # noqa: SIM115 — must outlive this function; the OS owns it after Popen
+    kwargs: dict = {}
+    if os.name == "nt":
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        kwargs["creationflags"] = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=log_fh, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, close_fds=True, **kwargs)
+    return proc.pid
 
 
 # ----------------------------------------------------------------------------- run (orchestrator)
@@ -323,17 +355,64 @@ def run(
     autopilot: bool | None = typer.Option(
         None, "--autopilot/--no-autopilot",
         help="continue past labeling into score -> draft -> export without pausing (default: config pipeline.autopilot)"),
+    from_stage: str | None = typer.Option(
+        None, "--from-stage",
+        help="force the resumed run's stage before continuing (replaces manual DB surgery); requires --resume"),
+    detach: bool = typer.Option(
+        False, "--detach",
+        help="start the run in a background process and return immediately with its run id/pid/log"),
 ):
     """Orchestrated, resumable pipeline: discover -> enrich -> (autopilot: label -> score -> draft, or
     pause for DM) -> export."""
     from leadforge.intake import load_icp
-    from leadforge.pipeline import run_pipeline
+    from leadforge.pipeline import STAGES
 
     cfg = _cfg(ctx)
+    if from_stage is not None:
+        if from_stage not in STAGES:
+            emit_digest(False, "run", warnings=[f"unknown --from-stage '{from_stage}' ({'|'.join(STAGES)})"])
+            raise typer.Exit(2)
+        resume = True  # --from-stage only makes sense against an existing run
+
     try:
         icp_obj = load_icp(Path(icp))
+    except LeadForgeError as e:
+        emit_digest(False, "run", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
+        raise typer.Exit(e.exit_code) from e
+
+    if detach:
+        import sys as _sys
+
+        from leadforge import db
+        from leadforge.pipeline import ensure_run
+
+        try:
+            run_id = ensure_run(cfg, icp_obj, Path(icp))
+        except LeadForgeError as e:
+            emit_digest(False, "run", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
+            raise typer.Exit(e.exit_code) from e
+        log_path = cfg.logs_dir / f"{run_id}.detach.log"
+        cmd = [_sys.executable, "-m", "leadforge", "--json", "run", "--icp", icp, "--resume"]
+        if limit:
+            cmd += ["--limit", str(limit)]
+        if skip_dm:
+            cmd.append("--skip-dm")
+        if autopilot is not None:
+            cmd.append("--autopilot" if autopilot else "--no-autopilot")
+        pid = _spawn_detached(cmd, log_path, Path(cfg.workspace))
+        conn = db.connect(cfg.db_path)
+        db.set_run_meta(conn, run_id, pid=pid, log_path=str(log_path.resolve()), detached=True)
+        _say(ctx, f"detached: run={run_id} pid={pid} log={log_path}")
+        emit_digest(True, "run", run=run_id, counts={"pid": pid, "detached": True},
+                    artifacts=[str(log_path.resolve())],
+                    next_=f"leadforge status --run {run_id} --json")
+        raise typer.Exit(0)
+
+    from leadforge.pipeline import run_pipeline
+
+    try:
         result = run_pipeline(cfg, icp_obj, Path(icp), resume=resume, limit=limit or None, skip_dm=skip_dm,
-                              autopilot=autopilot)
+                              autopilot=autopilot, from_stage=from_stage)
     except LeadForgeError as e:
         emit_digest(False, "run", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
         raise typer.Exit(e.exit_code) from e
@@ -343,9 +422,47 @@ def run(
 
 
 # ----------------------------------------------------------------------------- status / suppress
+def _status_progress(cfg: Config) -> dict:
+    """The current stage's live pace, from the same progress.jsonl feed `leadforge watch` tails and the
+    enrich stage writes (util.emit_progress). Bounded: reads at most the tail of the feed, one history
+    point per (ts, done) change of the run's current stage. Returns {} when there is no feed yet."""
+    from leadforge.util import progress_estimate
+
+    feed = cfg.data_path / "progress.jsonl"
+    if not feed.is_file():
+        return {}
+    try:
+        lines = feed.read_text(encoding="utf-8").splitlines()[-2000:]
+    except OSError:
+        return {}
+    stage = None
+    hist: list[tuple[float, int, int | None]] = []
+    for ln in lines:
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if rec.get("stage") != stage:
+            stage, hist = rec.get("stage"), []
+        hist.append((rec.get("ts") or 0.0, rec.get("done", 0), rec.get("total")))
+    if not hist:
+        return {}
+    import time as _time
+
+    est = progress_estimate(hist, _time.time())
+    out = {"progress_stage": stage, "progress_done": est["done"], "progress_total": est["total"]}
+    if est["eta_s"] is not None:
+        out["eta_seconds"] = round(est["eta_s"], 1)
+    return out
+
+
 @app.command()
 def status(ctx: typer.Context, run_id: str | None = typer.Option(None, "--run")):
-    """Show the current/last run snapshot."""
+    """Show the current/last run snapshot: stage, counts, whether a --detach'd process is still alive,
+    live progress and an ETA when the current stage's pace is known."""
+    from leadforge import db
+    from leadforge.util import pid_alive
+
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone() if run_id else db.latest_run(conn)
@@ -354,14 +471,22 @@ def status(ctx: typer.Context, run_id: str | None = typer.Option(None, "--run"))
         return
     stats = json.loads(row["stats_json"])
     nb = conn.execute("SELECT COUNT(*) c FROM businesses").fetchone()["c"]
-    _say(ctx, f"run={row['id']} stage={row['stage']} businesses={nb}")
-    emit_digest(True, "status", run=row["id"], counts={"stage": row["stage"], "businesses": nb, **stats})
+    counts = {"stage": row["stage"], "businesses": nb, **stats}
+    pid = stats.get("pid")
+    if pid is not None:
+        counts["alive"] = pid_alive(pid)
+    counts.update(_status_progress(cfg))
+    _say(ctx, f"run={row['id']} stage={row['stage']} businesses={nb}"
+              + (f" pid={pid} alive={counts.get('alive')}" if pid is not None else ""))
+    emit_digest(True, "status", run=row["id"], counts=counts)
 
 
 @app.command()
 def suppress(ctx: typer.Context, action: str = typer.Argument(..., help="add|list"), value: str = typer.Argument(""),
              kind: str | None = typer.Option(None, "--kind", help="domain|email|place_id (default: guessed from the value)")):
     """Manage the opt-out suppression list (domain/email/place_id)."""
+    from leadforge import db
+
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     if action not in ("add", "list"):
@@ -558,6 +683,8 @@ def prune_tiles(ctx: typer.Context,
     were all already known spawns children that come back saturated-and-known too (measured live
     2026-09-03: ~0.6 new businesses per 15 s child). Marks them 'skipped'; `run --resume` then treats
     discovery as complete. Safe to re-run; never touches done, degraded or depth-0 tiles."""
+    from leadforge import db
+
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     run = db.latest_run(conn)
@@ -575,6 +702,8 @@ def prune_tiles(ctx: typer.Context,
 def dedupe(ctx: typer.Context, dry_run: bool = typer.Option(False, "--dry-run", help="count only, change nothing")):
     """Fold register rows (DVSA, Companies House) into the Maps row that carries the same phone and looks
     like the same business. Chains sharing a switchboard are never merged. Safe to re-run."""
+    from leadforge import db
+
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     counts = db.merge_phone_duplicates(conn, dry_run=dry_run)
