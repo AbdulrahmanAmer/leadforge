@@ -240,6 +240,24 @@ def set_stage(conn: sqlite3.Connection, run_id: str, stage: str, **stats) -> Non
     conn.commit()
 
 
+def set_run_meta(conn: sqlite3.Connection, run_id: str, **meta) -> None:
+    """Merge free-form bookkeeping (pid, log_path, detached, ...) into runs.stats_json WITHOUT touching
+    `stage` — unlike set_stage, this never marks a run finished. Used by `run --detach` to record where
+    the background process lives so `status --run <id>` can report it (Layer 1, docs/06)."""
+    row = conn.execute("SELECT stats_json FROM runs WHERE id=?", (run_id,)).fetchone()
+    merged = json.loads(row["stats_json"]) if row else {}
+    merged.update(meta)
+    conn.execute("UPDATE runs SET stats_json=? WHERE id=?", (json.dumps(merged), run_id))
+    conn.commit()
+
+
+def mark_exported(conn: sqlite3.Connection, run_id: str, **counts) -> None:
+    """The ONE place a run is marked 'exported' — both the `run` orchestrator (pipeline.py) and the
+    standalone `export` command (cli.py) call this instead of `set_stage(..., "exported", ...)`
+    directly, so the two paths cannot drift on what finishing a run means."""
+    set_stage(conn, run_id, "exported", **counts)
+
+
 def add_queries(conn: sqlite3.Connection, run_id: str, queries: list[tuple[str, dict | None]]) -> None:
     conn.executemany(
         "INSERT INTO queries(run_id,query_text,tile_json) VALUES(?,?,?)",

@@ -108,6 +108,40 @@ def sha1_hex(text: str, n: int = 12) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:n]
 
 
+def pid_alive(pid: int | None) -> bool:
+    """Best-effort liveness check for `status --run <id>` reporting a detached run's process (Layer 1).
+    POSIX: signal 0 raises only if the pid is gone or not ours. Windows has no os.kill(pid, 0), so we
+    ask the kernel directly via OpenProcess + GetExitCodeProcess (no psutil dependency)."""
+    if not pid:
+        return False
+    import os as _os
+
+    if _os.name == "nt":
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    try:
+        _os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # exists, owned by someone else
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def slugify(text: str) -> str:
     text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
     text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
