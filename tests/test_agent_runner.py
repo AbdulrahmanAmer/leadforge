@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -94,12 +96,31 @@ def test_resolve_command_returns_a_copy_of_the_configured_list(cfg):
 
 
 def test_resolve_command_auto_detects_claude_on_path(cfg, monkeypatch):
+    # isolate defaults to True (Layer 2): the auto-detected command carries the isolation flags.
+    monkeypatch.setattr(agent_runner.shutil, "which",
+                        lambda name: r"C:\bin\claude.exe" if name == "claude" else None)
+    cmd = agent_runner.resolve_command(cfg)
+    assert cmd == [r"C:\bin\claude.exe", "-p", "--model", "sonnet", "--output-format", "text",
+                   "--no-session-persistence", "--strict-mcp-config", "--settings",
+                   json.dumps({"disableAllHooks": True})]
+    assert agent_runner.is_available(cfg) is True
+
+
+def test_resolve_command_isolate_false_omits_isolation_flags(cfg, monkeypatch):
+    cfg.agent.isolate = False
     monkeypatch.setattr(agent_runner.shutil, "which",
                         lambda name: r"C:\bin\claude.exe" if name == "claude" else None)
     cmd = agent_runner.resolve_command(cfg)
     assert cmd == [r"C:\bin\claude.exe", "-p", "--model", "sonnet", "--output-format", "text",
                    "--no-session-persistence"]
-    assert agent_runner.is_available(cfg) is True
+    assert "--strict-mcp-config" not in cmd
+
+
+def test_resolve_command_explicit_override_never_gets_isolation_flags(cfg):
+    # Respect the operator's own command verbatim, even with isolate=True (the default).
+    assert cfg.agent.isolate is True
+    cfg.agent.command = ["/opt/bin/my-claude", "-p", "--flag"]
+    assert agent_runner.resolve_command(cfg) == ["/opt/bin/my-claude", "-p", "--flag"]
 
 
 def test_resolve_command_none_when_claude_not_on_path(cfg, monkeypatch):
@@ -174,6 +195,79 @@ def test_run_agent_raises_agent_failed_on_timeout(cfg, tmp_path):
     cfg.agent.command = [sys.executable, str(script)]
     with pytest.raises(agent_runner.AgentFailed):
         agent_runner.run_agent(cfg, "prompt", timeout_s=1)
+
+
+TREE_SCRIPT = """\
+import subprocess, sys, time
+
+# spawn a grandchild that would, if left running, sleep then write a marker file — proves the whole
+# process tree was killed on timeout, not just this immediate process.
+subprocess.Popen([sys.executable, "-c",
+                   "import time; time.sleep(3); open('child_finished.txt', 'w').write('done')"])
+time.sleep(5)
+print("parent too late")
+"""
+
+
+def test_run_agent_on_timeout_kills_the_whole_process_tree(cfg, tmp_path):
+    script = _write_script(tmp_path, "fake_tree.py", TREE_SCRIPT)
+    cfg.agent.command = [sys.executable, str(script)]
+    with pytest.raises(agent_runner.AgentFailed):
+        agent_runner.run_agent(cfg, "prompt", timeout_s=1)
+    # give a leaked (not-killed) grandchild time to finish its 3s sleep and write the marker
+    time.sleep(3.5)
+    assert not (tmp_path / "child_finished.txt").exists(), (
+        "grandchild process survived the timeout kill — process tree was not fully terminated"
+    )
+
+
+# ------------------------------------------------------------------- run_agent: concurrency cap
+CONCURRENCY_SCRIPT = """\
+import os, sys, time
+
+marker = sys.argv[1]
+open(marker, "w").write("running")
+time.sleep(0.6)
+os.remove(marker)
+print("ok")
+"""
+
+
+def test_run_agent_caps_simultaneous_invocations(cfg, tmp_path):
+    cfg.agent.max_concurrent = 2
+    script = _write_script(tmp_path, "fake_concurrency.py", CONCURRENCY_SCRIPT)
+
+    peak = 0
+    peak_lock = threading.Lock()
+    stop = threading.Event()
+
+    def _poll_peak():
+        nonlocal peak
+        while not stop.is_set():
+            running = len(list(tmp_path.glob("marker_*.txt")))
+            with peak_lock:
+                peak = max(peak, running)
+            time.sleep(0.02)
+
+    poller = threading.Thread(target=_poll_peak)
+    poller.start()
+
+    def _call(i: int) -> None:
+        marker = tmp_path / f"marker_{i}.txt"
+        cfg_call = cfg.model_copy(deep=True)  # each thread gets its own command list, no data race
+        cfg_call.agent.command = [sys.executable, str(script), str(marker)]
+        agent_runner.run_agent(cfg_call, "prompt")
+
+    threads = [threading.Thread(target=_call, args=(i,)) for i in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    stop.set()
+    poller.join(timeout=5)
+
+    assert peak <= 2, f"observed {peak} simultaneous invocations, expected <= agent.max_concurrent=2"
+    assert peak >= 1  # sanity: the poller actually observed something running
 
 
 # ------------------------------------------------------------------- run_agent: logging

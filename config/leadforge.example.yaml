@@ -47,6 +47,15 @@ social:                           # social/video presence signals (unit U4.8)
   timeout_s: 30
   max_calls_per_min: 20
 
+agent:                             # v0.4 headless agent runner (ADR-015): your own Claude Code, no API key
+  command: null                    # null = auto-detect `claude` on PATH; [] = disabled (deterministic fallbacks only)
+  model: sonnet                    # used only for the auto-detected command
+  timeout_s: 900                   # per invocation; process tree is killed on timeout
+  batch: 40                        # items per invocation
+  max_batches: 50                  # hard stop per stage per run
+  isolate: true                    # auto-detected command only: add --strict-mcp-config + disable hooks (~3x faster, no operator MCP/hook noise); ignored when `command` is set explicitly
+  max_concurrent: 2                # process-level cap on simultaneous `claude` invocations
+
 export:
   formats: [xlsx, csv]
   auto_open: true                 # open the finished XLSX automatically (skipped in CI / LEADFORGE_NO_UI)

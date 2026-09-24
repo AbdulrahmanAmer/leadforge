@@ -190,6 +190,11 @@ class AgentCfg(BaseModel):
     timeout_s: int = 900               # per invocation
     batch: int = 40                    # items per invocation
     max_batches: int = 50              # hard stop per stage per run
+    # v0.4 Layer 2 (ADR-015 follow-up): isolation + timeout + concurrency for the auto-detected
+    # `claude` invocation. Only apply to the auto-detected command — an explicit `agent.command`
+    # override is used verbatim (the operator's own flags), never mutated.
+    isolate: bool = True               # append --strict-mcp-config + --settings '{"disableAllHooks":true}'
+    max_concurrent: int = 2            # process-level cap on simultaneous `claude` invocations
 
 
 class PipelineCfg(BaseModel):
