@@ -86,11 +86,11 @@ headless Claude Code where available, deterministic fallbacks otherwise) — a n
 ### Resuming a run found by `status`
 
 If Step 0's `status --json` shows a run that is not `exported` and not `alive` (the detached process died or the
-previous session ended), resume it instead of starting a new one:
+previous session ended), resume it (detached, then poll as in Step 3) instead of starting a new one:
 
 ```bash
-leadforge run --icp icp.yaml --resume --json                       # continue from wherever it stopped
-leadforge run --icp icp.yaml --resume --from-stage <stage> --json  # force a specific stage first, if status says why
+leadforge run --icp icp.yaml --resume --detach --json                       # continue from wherever it stopped
+leadforge run --icp icp.yaml --resume --from-stage <stage> --detach --json  # force a stage first, if status says why
 ```
 
 Never re-run `leadforge intake` or start a fresh `run` for a workspace with a live or resumable run — check `status` first.
@@ -107,7 +107,7 @@ Label **from the snippets only** — never browse websites. Protocol + examples:
 
 ```bash
 leadforge dm apply --in dm_labels.ndjson --json
-leadforge run --icp icp.yaml --resume --json      # continues (autopilot: draft + export; --no-autopilot: score + export)
+leadforge run --icp icp.yaml --resume --detach --json   # then poll status as in Step 3
 ```
 
 Repeat `dm export` if the digest says more batches remain.
