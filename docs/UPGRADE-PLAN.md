@@ -24,6 +24,18 @@ quality is not known yet (Layer 4 measures it first).
 is about politeness limits and network, not only code. We commit to measured before/after numbers per
 layer, not a multiplier in advance.
 
+## GPU benchmark (2026-09-24, Quadro M1200 sm_50 4 GB, torch 2.10.0+cu126, one device at a time)
+
+| Model | CPU | GPU | GPU memory |
+|---|---|---|---|
+| GLiNER `gliner_small-v2.1` (LeadForge NER), 6,000-char page | 821 ms/page | 193 ms/page (4.3x) | 0.7 GB |
+| Laya `convaiinnovations/laya`, 5 questions | 2,678 ms/call | 741 ms/call (3.6x) | 2.3 GB |
+
+Both fit on the card together (~3.0 of 4 GB) only inside ONE process (each CUDA process adds its own
+context). Laya has no batch API (`predict = system_one`, one input per call). Laya's README claims 33 ms
+GPU / 193-464 ms CPU on newer hardware; this card has no fast fp16, so the local numbers are what count.
+Scripts: `scripts/bench/` (added with Layer 3).
+
 ## Layer 0 — Dev loop and repo hygiene
 
 - One canonical checkout: `E:/LeadForge/leadforge` (editable install re-pointed 2026-09-24). Retire the
@@ -69,7 +81,13 @@ layer, not a multiplier in advance.
 
 - Move NER out of the crawl pool. Today GLiNER runs inside `_process_one` in the 12-thread I/O pool
   (`enrich/runner.py:118,305`), so CPU work stalls network workers. Target shape: crawl threads (I/O
-  only) → queue → one NER worker process with batched inference → DB writer thread (already single-writer).
+  only) → queue → ONE model worker process (GPU when present, CPU otherwise) → DB writer thread
+  (already single-writer). On GPU, 193 ms/page ≈ 300 pages/min of NER capacity, so NER stops being a
+  bottleneck and the CPU is left to crawling. The same process later hosts Laya (Layer 5) — one CUDA
+  context, one model memory budget.
+- Prerequisite: main environment on the CUDA build of torch (`torch==2.10.0+cu126`; it also runs on CPU).
+  `leadforge doctor` reports the device; config `enrich.ner_device: auto|cpu|cuda`. Machines without a
+  GPU keep today's bounded CPU path.
 - Registry: overlap lookups with crawling within the API's rate limit; cache by company number.
 - Discovery: keep the novelty-gated tile subdivision (v0.4.1); measure queries per new business.
 - **Gate:** sites/min over a fixed 30-min window of real crawling, before vs after, same campaign and
@@ -88,9 +106,14 @@ layer, not a multiplier in advance.
 - Run Laya's typed-decision classifier beside the `claude -p` DM labeler on the parked run's 393 labeled
   businesses; compare agreement, latency, cost. Replace nothing until the numbers justify it. Weights come
   from the Hugging Face Hub at runtime — pin a revision and cache locally.
+- Measured budget: 0.74 s per decision on GPU → one or two decisions per business is affordable (393
+  businesses ≈ 5 min); per-link decisions during crawling are not (a site has dozens of links). At
+  2.7 s on CPU, Laya is GPU-only: without a GPU the pipeline skips it and keeps today's labeler.
+- Runs inside the Layer 3 model worker, not its own process (GPU memory: 2.3 + 0.7 of 4 GB).
 - **Gate:** an agreement report; decision recorded as an ADR.
 
 ## Layer 6 — Skill v2 (last)
 
 - Per `docs/specs/skill-v2.md`: split lead-gen and outreach skills, launch-and-monitor, plugin-root
-  bootstrap, neutral defaults. **Gate:** that spec's acceptance list.
+  bootstrap, neutral defaults, and GPU detection (doctor says whether NER/Laya will use the GPU; never
+  required). **Gate:** that spec's acceptance list.
