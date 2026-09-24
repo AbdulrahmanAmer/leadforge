@@ -17,7 +17,6 @@ import typer
 from leadforge import db
 from leadforge.config import Config
 from leadforge.outreach import approve as approve_mod
-from leadforge.outreach import doctor as doctor_mod
 from leadforge.outreach import identity as identity_mod
 from leadforge.outreach import plan as plan_mod
 from leadforge.outreach import send as send_mod
@@ -277,6 +276,10 @@ def status(ctx: typer.Context, campaign: str | None = typer.Option(None, "--camp
 @outreach_app.command("doctor")
 def doctor(ctx: typer.Context, identity: str = typer.Option(..., "--identity")):
     """SPF / DKIM / DMARC / MX / identity-completeness / warm-up checks. Fails closed."""
+    # imported here, not at module top: doctor pulls in dnspython (~1-2 s), which every other
+    # `leadforge` command would otherwise pay at startup
+    from leadforge.outreach import doctor as doctor_mod
+
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     try:
