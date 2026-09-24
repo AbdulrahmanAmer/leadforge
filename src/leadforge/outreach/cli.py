@@ -10,19 +10,43 @@ digest line, never a stack trace.
 
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
+from typing import Any
 
 import typer
 
 from leadforge import db
 from leadforge.config import Config
-from leadforge.outreach import approve as approve_mod
-from leadforge.outreach import identity as identity_mod
-from leadforge.outreach import plan as plan_mod
-from leadforge.outreach import send as send_mod
-from leadforge.outreach import status as status_mod
-from leadforge.outreach import sync as sync_mod
 from leadforge.util import LeadForgeError, emit_digest
+
+
+class _LazyModule:
+    """Defers `import leadforge.outreach.<name>` to first attribute access. `outreach.doctor` alone
+    pulls in `dns.resolver` (~380ms cold) and `outreach.plan` pulls in `httpx`/`enrich.validate` — real
+    cost for commands that never touch outreach at all, since this sub-app is registered on every CLI
+    invocation (perf pass, Layer 1 item 5). Swapping the plain `import ... as x_mod` lines for this is
+    the only change in this file; every call site below is untouched (`x_mod.fn(...)` still works)."""
+
+    __slots__ = ("_modname", "_mod")
+
+    def __init__(self, modname: str) -> None:
+        self._modname = modname
+        self._mod = None
+
+    def __getattr__(self, name: str) -> Any:
+        if self._mod is None:
+            object.__setattr__(self, "_mod", importlib.import_module(self._modname))
+        return getattr(self._mod, name)
+
+
+approve_mod = _LazyModule("leadforge.outreach.approve")
+doctor_mod = _LazyModule("leadforge.outreach.doctor")
+identity_mod = _LazyModule("leadforge.outreach.identity")
+plan_mod = _LazyModule("leadforge.outreach.plan")
+send_mod = _LazyModule("leadforge.outreach.send")
+status_mod = _LazyModule("leadforge.outreach.status")
+sync_mod = _LazyModule("leadforge.outreach.sync")
 
 outreach_app = typer.Typer(help="Outreach lifecycle: plan -> draft -> approve -> send (dry-run default) -> sync -> status.")
 identity_app = typer.Typer(help="Sending identities (from name/email, postal address, opt-out).")
@@ -276,10 +300,6 @@ def status(ctx: typer.Context, campaign: str | None = typer.Option(None, "--camp
 @outreach_app.command("doctor")
 def doctor(ctx: typer.Context, identity: str = typer.Option(..., "--identity")):
     """SPF / DKIM / DMARC / MX / identity-completeness / warm-up checks. Fails closed."""
-    # imported here, not at module top: doctor pulls in dnspython (~1-2 s), which every other
-    # `leadforge` command would otherwise pay at startup
-    from leadforge.outreach import doctor as doctor_mod
-
     cfg = _cfg(ctx)
     conn = db.connect(cfg.db_path)
     try:
