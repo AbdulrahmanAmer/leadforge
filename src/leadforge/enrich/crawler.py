@@ -12,7 +12,7 @@ import time
 import urllib.robotparser
 from dataclasses import dataclass, field
 from datetime import date
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
 from selectolax.parser import HTMLParser
@@ -21,9 +21,28 @@ from leadforge.config import Config
 from leadforge.util import LOG, HostThrottle
 
 PAGE_KEYWORDS = re.compile(
-    r"(about|team|staff|people|leadership|founders?|management|meet|contact|impress|imprint|legal|careers?|jobs?)",
+    r"(about|team|staff|people|leadership|founders?|management|meet|contact|reach[\s-]?us|"
+    r"get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|impress|imprint|"
+    r"legal|careers?|jobs?)",
     re.IGNORECASE,
 )
+
+# v0.4 (Layer 4 fix, 2026-09-25): high-priority keywords are the ones a human calls "contact-ish" —
+# these are worth keeping even when a site has many other keyword-matching links (legal/imprint/careers
+# routinely outnumber a single "Contact" link in nav+footer and were pushing it past pages_per_site-1
+# under pure document-order selection). Anything not matching this gets sorted after.
+_HIGH_PRIORITY_KEYWORDS = re.compile(
+    r"(contact|reach[\s-]?us|get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|"
+    r"about|team|staff|people|leadership|founders?|management|meet)",
+    re.IGNORECASE,
+)
+
+# Tracking/analytics query params that don't change page identity — stripped before the dedup key is
+# computed (but NOT from the URL actually fetched, so redirects/analytics still see the original link).
+_TRACKING_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "msclkid", "ref", "source",
+}
 _CURRENT_YEAR = date.today().year  # staleness threshold = current - crawl.stale_after_years
 
 # v0.3 unit C1: broadened booking_hint — "book" + a booking-shaped word within 4 words either side
@@ -297,9 +316,24 @@ class SiteCrawler:
         return None
 
     # --- page selection ----------------------------------------------------------
+    @staticmethod
+    def _dedup_key(url: str) -> str:
+        """Normalize a URL for same-page dedup: scheme+www-insensitive host, trailing-slash-insensitive
+        path, tracking params stripped. Two URLs with the same key are the same page for selection
+        purposes even though the actual fetch still uses the original (untouched) URL."""
+        parts = urlsplit(url)
+        host = parts.netloc.casefold().removeprefix("www.")
+        path = parts.path.rstrip("/") or "/"
+        kept = [(k, v) for k, v in parse_qsl(parts.query) if k.casefold() not in _TRACKING_PARAMS]
+        query = "&".join(f"{k}={v}" for k, v in sorted(kept))
+        return f"{host}{path}?{query}" if query else f"{host}{path}"
+
     def _candidate_links(self, base_url: str, home_html: str) -> list[str]:
         tree = HTMLParser(home_html)
-        seen: dict[str, None] = {}
+        # tree.css("a[href]") walks the whole parsed document, so <nav> and <footer> anchors are
+        # already included alongside body links — no separate footer/nav pass needed here.
+        seen: dict[str, str] = {}  # dedup key -> first URL seen for it
+        priority: dict[str, bool] = {}  # dedup key -> is high-priority (contact/about/team/...)
         base_host = urlsplit(base_url).netloc.removeprefix("www.")
         for a in tree.css("a[href]"):
             href = (a.attributes.get("href") or "").strip()
@@ -307,19 +341,30 @@ class SiteCrawler:
                 continue
             full = urljoin(base_url, href)
             parts = urlsplit(full)
-            if parts.netloc.removeprefix("www.") != base_host:
+            if parts.netloc.casefold().removeprefix("www.") != base_host.casefold():
                 continue
             label = f"{parts.path} {a.text() or ''}"
             if PAGE_KEYWORDS.search(label):
-                seen.setdefault(full.split("#")[0], None)
-        links = list(seen)
-        if len(links) < 2:  # sitemap probe
+                key = self._dedup_key(full)
+                if key not in seen:
+                    seen[key] = full.split("#")[0]
+                    priority[key] = bool(_HIGH_PRIORITY_KEYWORDS.search(label))
+                elif _HIGH_PRIORITY_KEYWORDS.search(label) and not priority[key]:
+                    priority[key] = True  # a later anchor to the same page had better keyword evidence
+        if len(seen) < 2:  # sitemap probe
             resp = self._get(urljoin(base_url, "/sitemap.xml"), timeout=self.cfg.crawl.page_timeout_s)
             if resp is not None:
                 for loc in re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", resp.text)[:200]:
-                    if PAGE_KEYWORDS.search(urlsplit(loc).path) and urlsplit(loc).netloc.removeprefix("www.") == base_host:
-                        seen.setdefault(loc, None)
-                links = list(seen)
+                    loc_path = urlsplit(loc).path
+                    if PAGE_KEYWORDS.search(loc_path) and urlsplit(loc).netloc.casefold().removeprefix("www.") == base_host.casefold():
+                        key = self._dedup_key(loc)
+                        if key not in seen:
+                            seen[key] = loc
+                            priority[key] = bool(_HIGH_PRIORITY_KEYWORDS.search(loc_path))
+        # Contact/about/team links sort first (stable within each group -> document order preserved),
+        # so they survive the pages_per_site cap even on sites with many careers/legal/imprint links.
+        ordered = sorted(seen.keys(), key=lambda k: 0 if priority.get(k) else 1)
+        links = [seen[k] for k in ordered]
         return links[: max(0, self.cfg.crawl.pages_per_site - 1)]
 
     # --- main --------------------------------------------------------------------
