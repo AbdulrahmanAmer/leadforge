@@ -634,7 +634,14 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
                                            url=p["url"], snippet=f"{net}: last post {p['last_post_at'] or 'unknown'}",
                                            observed_at=now_iso()))
     enrich: dict = {}
-    if res["ok"]:
+    # Layer 4 (2026-09-24): a zero-page "ok" result used to write crawled_at with no error at all — a
+    # silent failure indistinguishable from "we looked and there was nothing". Belt-and-suspenders: even
+    # if a future crawler change re-opens a path that returns ok=True with zero pages, this business is
+    # recorded as a named failure ("empty_crawl"), never as a silent success.
+    if res["ok"] and res["pages"] == 0:
+        enrich["attempted_at"] = now_iso()
+        enrich["error"] = "empty_crawl"
+    elif res["ok"]:
         enrich["crawled_at"] = now_iso()
     else:
         enrich["attempted_at"] = now_iso()

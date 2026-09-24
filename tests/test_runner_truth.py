@@ -45,6 +45,22 @@ def test_crawl_success_sets_crawled_at_not_attempted_at(cfg, conn, monkeypatch):
     assert "attempted_at" not in enrich
 
 
+def test_zero_page_ok_result_never_silently_marks_crawled(cfg, conn, monkeypatch):
+    """Layer 4 (2026-09-24): the 115-site leak — a crawl that reports ok=True but zero pages used to
+    write crawled_at with no error at all, indistinguishable from 'we looked and found nothing'.
+    Belt-and-suspenders in _persist: ok=True + pages==0 must record a named error ("empty_crawl") and
+    attempted_at, never crawled_at with no error."""
+    monkeypatch.setattr(runner, "validate_email", lambda email, label, c: ("valid", {}))
+    b = _biz_row(conn, "b1", "Empty Site", domain="empty.test", website="http://empty.test")
+    res = _res(True)
+    res["pages"] = 0  # ok=True but zero pages — the exact silent-failure shape
+    runner._persist(conn, cfg, b, res, _counts())
+    enrich = json.loads(conn.execute("SELECT enrich_json FROM businesses WHERE id='b1'").fetchone()["enrich_json"])
+    assert "crawled_at" not in enrich
+    assert enrich["attempted_at"]
+    assert enrich["error"] == "empty_crawl"
+
+
 def test_crawl_stage_exception_sets_attempted_at_not_crawled_at(cfg, conn, monkeypatch):
     """The except-branch in _crawl_stage (a future that raised) must be as honest as _persist."""
     _biz_row(conn, "b1", "Boom Site", domain="boom.test", website="http://boom.test")
