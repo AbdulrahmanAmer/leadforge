@@ -96,9 +96,19 @@ Scripts: `scripts/bench/` (added with Layer 3).
 
 ## Layer 4 — Data quality
 
-- First measure per-crawled-site yield (email, phone, DM, tier) on the crawled 1,099 — then fix the
-  largest leak (e.g. contact pages not reached, JS-only sites, NER misses, registry-only directors not
-  merged).
+- Baseline MEASURED 2026-09-24 (copy of the parked campaign DB, run_20260902_22032_7eca):
+
+  | Group | n | email | decision maker | tier A |
+  |---|---|---|---|---|
+  | crawled | 1,099 | 39.9% | 64.2% | 23% (255) |
+  | website, not crawled | 8,970 | 0% | 0.4% | 0% |
+  | no website | 5,758 | 0% | 8.7% | 3.7% (212) |
+
+  The 2.7%-email headline was a coverage problem: 89% of sites were never crawled. **Finishing the crawl
+  (Layer 3) is the biggest quality lever.** Leaks inside crawled sites: 252/1,099 (23%) returned zero
+  pages, 122 flagged needs_browser, 137 errors, median 2 pages per site; DM rows come mostly from the
+  registry (1,865) and heuristics (830), GLiNER/agent labels 244. Fix order: zero-page sites → contact-page
+  discovery depth → browser fallback coverage.
 - **Gate:** yield per crawled site before/after on a fixed sample; no fabricated contacts (existing
   no-fabrication gate stays green).
 
