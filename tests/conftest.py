@@ -38,6 +38,17 @@ def _no_ui(monkeypatch):
     monkeypatch.setenv("LEADFORGE_NO_UI", "1")
 
 @pytest.fixture(autouse=True)
+def _no_real_ner_model(monkeypatch, request):
+    """Layer 3: enrichment starts a NER worker process that loads real GLiNER (~25 s) when gliner is
+    installed. Plumbing tests must not pay that (it tripled suite time); the env var also reaches the
+    `python -m leadforge` subprocesses. NER-worker tests inject a fake model, and gpu-marked tests load the
+    real one, so both opt out."""
+    if request.node.get_closest_marker("gpu") or request.node.fspath.basename == "test_ner_worker.py":
+        return
+    monkeypatch.setenv("LEADFORGE_NO_NER_MODEL", "1")
+
+
+@pytest.fixture(autouse=True)
 def _never_autodetect_claude(monkeypatch):
     """v0.4: `agent_runner.resolve_command` auto-detects `claude` on PATH. A test that reaches the
     autopilot labeling/drafting stages without patching the runner would otherwise shell out to the

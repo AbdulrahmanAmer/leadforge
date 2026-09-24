@@ -240,7 +240,7 @@ def _people_fn(cfg: Config):
     worker = _ner_worker_state.get("worker")
     if worker is None or not worker.available:
         return extract_people
-    timeout_s = getattr(cfg.enrich, "ner_timeout_s", 5.0)
+    timeout_s = getattr(cfg.enrich, "ner_timeout_s", 30.0)
 
     def _worker_people(text: str, source_url: str, max_candidates: int = 8):
         try:

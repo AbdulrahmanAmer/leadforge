@@ -31,7 +31,7 @@ enrich:                            # crawl-time enrichment throughput/quality kn
   ner_device: auto                 # auto | cpu | cuda — auto picks cuda when torch.cuda.is_available()
   ner_batch: 8                     # requests the model worker groups into one GLiNER call
   ner_batch_wait_ms: 25.0          # max wait to fill a batch before running it short
-  ner_timeout_s: 5.0               # per-request timeout; on expiry a crawl thread falls back to heuristics
+  ner_timeout_s: 30.0              # per-request timeout incl. queue wait; on expiry a crawl thread falls back to heuristics
   ner_parallel: 2                  # legacy in-thread NER fallback only (worker unavailable): inferences in flight
   ner_threads: 2                   # legacy in-thread NER fallback only: torch intra-op threads per inference
 

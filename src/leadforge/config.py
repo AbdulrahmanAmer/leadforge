@@ -146,7 +146,7 @@ class EnrichCfg(BaseModel):
     ner_device: Literal["auto", "cpu", "cuda"] = "auto"  # auto = cuda when torch.cuda.is_available()
     ner_batch: int = 8                # max requests the worker groups into one GLiNER call
     ner_batch_wait_ms: float = 25.0   # max time the worker waits to fill a batch before running it short
-    ner_timeout_s: float = 5.0        # per-request timeout; on expiry the caller falls back to heuristics
+    ner_timeout_s: float = 30.0       # per-request timeout incl. queue wait (CPU: ~0.8 s/page x 12 crawl threads); on expiry -> heuristics
 
     @field_validator("ner_device", mode="before")
     @classmethod

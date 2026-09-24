@@ -13,6 +13,7 @@ classify_email_affinity give the evidence and provenance behind an address inste
 from __future__ import annotations
 
 import html as html_mod
+import os
 import re
 import threading
 from dataclasses import dataclass
@@ -385,10 +386,15 @@ _GLINER_MODEL = None
 
 
 def ner_available() -> bool:
+    # LEADFORGE_NO_NER_MODEL=1 (set by the test suite, like LEADFORGE_NO_UI) keeps a real GLiNER load out
+    # of processes that only exercise plumbing. find_spec checks installation without importing gliner,
+    # which would pull in torch (seconds) just to answer yes/no.
+    if os.environ.get("LEADFORGE_NO_NER_MODEL") == "1":
+        return False
+    import importlib.util
     try:
-        import gliner  # noqa: F401
-        return True
-    except Exception:  # noqa: BLE001
+        return importlib.util.find_spec("gliner") is not None
+    except (ImportError, ValueError):
         return False
 
 
