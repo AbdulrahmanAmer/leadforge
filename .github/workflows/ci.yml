@@ -32,7 +32,7 @@ jobs:
 
       # The suite is deliberately offline: no test may hit the live web or need the scraper binary.
       - name: Test
-        run: python -m pytest -q
+        run: python -m pytest -n auto
 
       - name: CLI smoke (digest contract)
         shell: bash

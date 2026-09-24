@@ -22,7 +22,8 @@ The same instructions are pasteable from `icm/PROMPT.txt`.
 
 ```bash
 pip install -e .[dev]      # install (never needs a compiler; pure-python wheels)
-pytest -q                  # test suite — must stay green
+pytest -n 6                # test suite — must stay green (718 tests, ~90 s; serial ~220 s)
+                           # addopts already has -q: do NOT add another -q, it hides the pass/fail summary
 ruff check src tests       # lint
 leadforge doctor --fix --full  # bootstrap EVERYTHING: runtime deps, pinned scraper binary, quality extras (NER + browser)
 ```

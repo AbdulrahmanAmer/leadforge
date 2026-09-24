@@ -28,17 +28,21 @@ layer, not a multiplier in advance.
 
 - One canonical checkout: `E:/LeadForge/leadforge` (editable install re-pointed 2026-09-24). Retire the
   D: clone's worktrees once nothing depends on them; the D: campaign folder stays as data.
-- Fast test tier: the full suite takes ~9 min because some tests load real torch/GLiNER/crawl4ai
-  (`tests/test_browser.py`, and `test_run_no_autopilot_pauses_at_dm_pending` triggers a Hugging Face
-  snapshot download). Mark them `@pytest.mark.slow`; default run excludes them; CI runs both.
-- `pyproject.toml:70` sets `addopts = "-q"`; passing `-q` again hides the pass/fail summary. Document it
-  in AGENTS.md or drop the addopt.
+- Test speed (done): measured 718 passed in 221 s serial — not ~9 min as first reported; no single test
+  dominates (slowest 12 s). `pytest -n 6` (pytest-xdist, now in the dev extra and CI `-n auto`) → 718
+  passed in 86 s. A slow/fast marker split would save less than parallelism, so it was not added.
+- CLI startup (done, 7ee4f27): every `leadforge` command paid ~1.5 s of imports; dnspython via the outreach
+  doctor was the largest single piece → now lazy, warm import 1.45-1.55 s → 1.15-1.26 s. Remaining cost is
+  typer/click, httpx, pydantic, yaml — worth another pass in Layer 1 (the skill calls the CLI a lot).
+- `addopts = "-q"` + another `-q` hides the pass/fail summary — documented in AGENTS.md.
 - Code discovery (done 2026-09-24): code graph (codebase-memory, project `E-LeadForge-leadforge`) for exact
   symbols/callers; `scripts/code_index.py query "<question>" [--kind code]` for plain-English questions
   (eval hit@5 19/22; on 5 unseen questions 3 found the right code first, 2 found the right ADR/doc first
-  — use `--kind code` when you want the implementation). Remaining L0 work: keep both fresh — a git
-  post-commit hook running `code_index.py build` (~4 s when nothing changed) and the graph re-index (~3 s).
-- **Gate:** `pytest` (fast tier) < 60 s and green; `ruff check src tests` clean; slow tier green.
+  — use `--kind code` when you want the implementation). Kept fresh by `.githooks/post-commit` (done,
+  detached: `code_index.py build` ~4-8 s + graph re-index ~3 s; enable per clone with
+  `git config core.hooksPath .githooks`).
+- **Gate:** `pytest -n 6` green in ≤ 90 s; `ruff check src tests` clean; post-commit hook refreshes both
+  indexes.
 
 ## Layer 1 — Run control (the pipeline's state machine)
 
