@@ -32,8 +32,13 @@ safety rules. What breaks for someone who is not the author:
    A run that outlives the session is picked up by `leadforge status --json` in the next session.
 3. **Plan is mandatory** and its digest carries time + volume estimates; the agent states them and gets a
    yes before `run` when the estimate is over a threshold (e.g. > 30 min or > 80 queries).
-4. **Bootstrap from the plugin.** Resolve the package from `${CLAUDE_PLUGIN_ROOT}` (or `pipx`/`uv tool`
-   install) — no repo-root assumption. `doctor --json` (light) by default; `--full` extras only after the
+4. **Bootstrap from the plugin.** Per the Claude Code docs (skills.md "String Substitutions";
+   plugins.md "bin/"): `${CLAUDE_PLUGIN_ROOT}` and `${CLAUDE_PLUGIN_DATA}` are substituted in SKILL.md text,
+   and a plugin's `bin/` directory is on the Bash tool's PATH while the plugin is enabled. Design: ship
+   `bin/leadforge` (a small shim) that on first use creates a venv in `${CLAUDE_PLUGIN_DATA}`, installs the
+   package from `${CLAUDE_PLUGIN_ROOT}`, then execs `python -m leadforge "$@"` — no repo-root assumption,
+   survives plugin updates by re-installing when the plugin version changes. (Install path stability across
+   updates is not documented — the shim must key on the version, not the path.) `doctor --json` (light) by default; `--full` extras only after the
    user agrees, with the download size stated.
 5. **Isolated autopilot.** The agent runner calls `claude -p` with `--strict-mcp-config` (no MCP servers) and
    no hooks (verify the mechanism, e.g. `--settings` with `disableAllHooks`), bounded concurrency, and a
@@ -45,9 +50,9 @@ safety rules. What breaks for someone who is not the author:
 
 ## Depends on (build these first)
 
-- [ ] `run --detach` + `status --run <id>` (pipeline layer)
-- [ ] `plan` digest with time estimates from measured stage rates (perf layer)
-- [ ] isolated, bounded agent runner (agent-runner layer)
+- [x] `run --detach` + `status --run <id>` (Layer 1, done 2026-09-24)
+- [ ] `plan` digest: discovery estimate exists (`est_runtime_min`); add an enrichment estimate from measured rates (~23 sites/min on GPU)
+- [x] isolated, bounded agent runner (Layer 2, done 2026-09-24)
 - [ ] plugin-root bootstrap path (packaging layer)
 
 ## Acceptance (the skill is done when)
