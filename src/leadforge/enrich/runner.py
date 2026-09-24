@@ -19,14 +19,17 @@ from leadforge.config import Config
 from leadforge.enrich import browser
 from leadforge.enrich.crawler import Page, SiteCrawler
 from leadforge.enrich.extract import (
+    NER_LABELS,
+    NER_TEXT_CHARS,
+    NER_THRESHOLD,
     classify_email_affinity,
     email_context,
     extract_emails,
     extract_people,
-    extract_people_ner,
     extract_phones,
     extract_socials,
     ner_available,
+    people_from_ner_entities,
 )
 from leadforge.enrich.validate import validate_email, validate_emails_parallel
 from leadforge.models import Contact, Evidence, Person
@@ -178,12 +181,76 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
         crawler.close()
 
 
+# Layer 3 (throughput, 2026-09-24): module-level so ThreadPoolExecutor's crawl threads (which all call
+# _people_fn(cfg) once per business) share ONE model-worker process for the whole run, started by
+# _start_ner_worker at the top of run_enrich and torn down by _stop_ner_worker in its finally — matches
+# the existing configure_ner()/_NER_SEM pattern in extract.py for the same reason: this module drives
+# one run at a time, so a module global scoped to that lifetime is simpler than threading a worker
+# object through every _process_one call site.
+_ner_worker_state: dict = {"worker": None, "fallback_logged": False, "fallback_count": 0}
+
+
+def _start_ner_worker(cfg: Config) -> None:
+    """Fresh state per run_enrich() call. Failure to import/start is never fatal — it just means
+    _people_fn falls back to the heuristic extractor for this run (logged once, counted)."""
+    _ner_worker_state["worker"] = None
+    _ner_worker_state["fallback_logged"] = False
+    _ner_worker_state["fallback_count"] = 0
+    if not getattr(cfg.enrich, "ner", True) or not ner_available():
+        return
+    from leadforge.enrich.ner_worker import NerWorker
+    try:
+        worker = NerWorker(device=getattr(cfg.enrich, "ner_device", "auto"),
+                           batch_size=getattr(cfg.enrich, "ner_batch", 8),
+                           batch_wait_ms=getattr(cfg.enrich, "ner_batch_wait_ms", 25.0))
+    except Exception as e:  # noqa: BLE001 — worker startup must never abort the run
+        LOG.warning("ner worker failed to start: %s: %s", type(e).__name__, e)
+        return
+    if not worker.available:
+        LOG.warning("ner worker unavailable after start attempt: %s", worker.start_error)
+        worker.shutdown()
+        return
+    _ner_worker_state["worker"] = worker
+
+
+def _stop_ner_worker() -> None:
+    """MUST be called when a run ends (run_enrich's finally) — no orphan process may outlive the run."""
+    worker = _ner_worker_state.get("worker")
+    if worker is not None:
+        worker.shutdown()
+    _ner_worker_state["worker"] = None
+
+
+def _log_ner_fallback(reason: str) -> None:
+    if not _ner_worker_state["fallback_logged"]:
+        LOG.warning("ner worker fallback to heuristic extractor: %s", reason)
+        _ner_worker_state["fallback_logged"] = True
+    _ner_worker_state["fallback_count"] += 1
+
+
 def _people_fn(cfg: Config):
-    """GLiNER when the [ner] extra is installed AND enrich.ner is on (bounded by enrich.ner_parallel /
-    ner_threads), else the heuristic extractor — the same return type either way."""
-    if getattr(cfg.enrich, "ner", True) and ner_available():
-        return extract_people_ner
-    return extract_people
+    """Layer 3: crawl threads never run torch. When the worker started successfully this returns a
+    closure that sends text to it and waits (bounded by enrich.ner_timeout_s) for entities, applying
+    the SAME post-processing as the old in-thread path (people_from_ner_entities, shared with
+    extract.extract_people_ner so results cannot drift). enrich.ner=false, a missing [ner] extra, a
+    worker that failed to start, or a per-request timeout all fall back to the heuristic extract_people
+    — never to in-thread GLiNER (that would defeat the point: crawl threads must not run torch)."""
+    if not getattr(cfg.enrich, "ner", True) or not ner_available():
+        return extract_people
+    worker = _ner_worker_state.get("worker")
+    if worker is None or not worker.available:
+        return extract_people
+    timeout_s = getattr(cfg.enrich, "ner_timeout_s", 5.0)
+
+    def _worker_people(text: str, source_url: str, max_candidates: int = 8):
+        try:
+            ents = worker.predict(text[:NER_TEXT_CHARS], NER_LABELS, NER_THRESHOLD, timeout_s=timeout_s)
+        except Exception as e:  # noqa: BLE001 — timeout, worker crash, queue error: all fall back
+            _log_ner_fallback(f"{type(e).__name__}: {e}")
+            return extract_people(text, source_url, max_candidates)
+        return people_from_ner_entities(ents, text, source_url, max_candidates)
+
+    return _worker_people
 
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
@@ -199,23 +266,28 @@ def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "
     _run_overlapped. A SINGLE named stage (`enrich --stage site|registry|gbp|infer|validate`) ALWAYS
     uses the original serial per-stage function below, unaffected by this flag."""
     counts = {"sites_crawled": 0, "contacts": 0, "dm_candidates": 0, "needs_browser": 0, "emails_valid": 0}
-    if stage == "all" and cfg.enrich.overlap_stages:
-        _run_overlapped(conn, cfg, limit, counts)
-        _gbp_stage(conn, cfg, counts)
-        _infer_stage(conn, cfg, counts)
-        _validate_stage(conn, cfg, counts)  # final sweep: anything still 'unknown' (e.g. DNS timeouts)
+    _start_ner_worker(cfg)
+    try:
+        if stage == "all" and cfg.enrich.overlap_stages:
+            _run_overlapped(conn, cfg, limit, counts)
+            _gbp_stage(conn, cfg, counts)
+            _infer_stage(conn, cfg, counts)
+            _validate_stage(conn, cfg, counts)  # final sweep: anything still 'unknown' (e.g. DNS timeouts)
+            return counts
+        if stage in ("all", "site"):
+            _crawl_stage(conn, cfg, limit, counts)
+        if stage in ("all", "registry"):
+            _registry_stage(conn, cfg, counts)
+        if stage in ("all", "gbp"):
+            _gbp_stage(conn, cfg, counts)
+        if stage in ("all", "infer"):
+            _infer_stage(conn, cfg, counts)
+        if stage in ("all", "validate"):
+            _validate_stage(conn, cfg, counts)
         return counts
-    if stage in ("all", "site"):
-        _crawl_stage(conn, cfg, limit, counts)
-    if stage in ("all", "registry"):
-        _registry_stage(conn, cfg, counts)
-    if stage in ("all", "gbp"):
-        _gbp_stage(conn, cfg, counts)
-    if stage in ("all", "infer"):
-        _infer_stage(conn, cfg, counts)
-    if stage in ("all", "validate"):
-        _validate_stage(conn, cfg, counts)
-    return counts
+    finally:
+        counts["ner_fallback"] = _ner_worker_state.get("fallback_count", 0)
+        _stop_ner_worker()
 
 
 # ======================================================================== overlapped 'all' (build item 4)
