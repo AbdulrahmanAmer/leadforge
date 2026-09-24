@@ -18,7 +18,7 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-25 ~00:30, LAYERS 0-3 + 4a DONE; L5 NO-GO (ADR-017); NEXT = L4b depth, L6 skill
+## POSITION — 2026-09-25 ~01:00, L0-3 + 4a DONE, workers 24 (crawl 16.4->26.3/min); L4b + L6 IN FLIGHT
 
 - L1: run --detach / status --run / --from-stage (E2E proven on a DB copy; fix 2a4b2ca). CLI import ~0.45 s.
 - L2: isolated claude -p 15 s -> 5.2 s warm. L3: GPU NER worker, crawl 16.4 -> 22.9 sites/min, same yield.
@@ -31,4 +31,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
   problem sites: yield flat (77->78 zero-page, emails 3->3) — most are real bot-walls/robots; no evasion added.
   Suite 759 passed, 1 skipped, ~64 s.
 - NEXT after L4a: contact-page depth (L4b), then L6 skill v2 per docs/specs/skill-v2.md.
+- IN FLIGHT (parallel worktrees): L4b contact-page depth (crawler.py); L6 skill v2 + bin/leadforge shim +
+  plan enrichment estimate + neutral defaults + release 0.5.0 (per docs/specs/skill-v2.md).
+- AFTER L6: final acceptance = tiny real campaign end to end via the new skill flow (detach/status).
 - UNPROVEN: war-room crash cause.
