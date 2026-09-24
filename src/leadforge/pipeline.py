@@ -34,6 +34,15 @@ from leadforge.util import (
     set_progress_file,
 )
 
+# Layer 1 (run control): the run state machine's stage sequence, in order. `run --from-stage <stage>`
+# validates against this list and replaces the manual `sqlite3 ... update runs set stage=...` recovery
+# recipe; `status` and `--detach` also read it for reporting. Keep in sync with the literal stage
+# strings `run_pipeline` transitions through below.
+STAGES = (
+    "planned", "discovering", "discovered", "enriching", "enriched",
+    "dm_pending", "labeling", "scoring", "scored", "drafting", "exported",
+)
+
 
 # --------------------------------------------------------------------------- discover
 def _progress_ui(cfg: Config) -> None:
@@ -344,6 +353,19 @@ def _fetch_with_chain(chain, pq, limit, warns) -> tuple[list, str, bool]:
     return [], "degraded" if last_degraded else "failed", False
 
 
+def ensure_run(cfg: Config, icp: ICP, icp_path: Path) -> str:
+    """Return the run id that `run --resume` would continue (the latest run for this ICP hash),
+    creating a fresh 'planned' run with its query plan if none exists yet. Used by `run --detach` so the
+    caller knows the run id at return time, before the background process is even spawned."""
+    conn = db.connect(cfg.db_path)
+    existing = _latest_run(conn, icp)
+    if existing is not None:
+        return existing["id"]
+    run_id = db.create_run(conn, str(icp_path), icp.icp_hash())
+    _plan_into_db(conn, cfg, icp, run_id)
+    return run_id
+
+
 def _plan_into_db(conn: sqlite3.Connection, cfg: Config, icp: ICP, run_id: str) -> None:
 
     queries = build_plan(icp, cfg)
@@ -388,11 +410,22 @@ def _agent_runner_for(cfg: Config, instructions: str):
 # --------------------------------------------------------------------------- run (state machine)
 def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
                  limit: int | None = None, skip_dm: bool = False,
-                 autopilot: bool | None = None) -> dict:
-    ensure_ready(cfg)
+                 autopilot: bool | None = None, from_stage: str | None = None) -> dict:
     conn = db.connect(cfg.db_path)
-    _progress_ui(cfg)
     run = _latest_run(conn, icp) if resume else None
+    if from_stage is not None:
+        # `run --resume --from-stage <stage>` replaces the manual recovery recipe (docs/06): find the
+        # run, force its stage, continue exactly as a normal resume would from there. Validated in the
+        # CLI layer against pipeline.STAGES before we get here. Checked BEFORE ensure_ready() so "no
+        # run to resume" fails fast without a network-touching doctor pass.
+        if run is None:
+            from leadforge.util import InputError
+            raise InputError(f"no resumable run found for this ICP (icp_hash={icp.icp_hash()}) "
+                             f"— cannot --from-stage {from_stage}")
+        db.set_stage(conn, run["id"], from_stage)
+        run = conn.execute("SELECT * FROM runs WHERE id=?", (run["id"],)).fetchone()
+    ensure_ready(cfg)
+    _progress_ui(cfg)
     stage = run["stage"] if run else "planned"
     run_id = run["id"] if run else None
     warns: list[str] = []
@@ -541,7 +574,7 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
             "draft_abstained": run_stats.get("draft_abstained", 0), "runner": runner_used,
             **ecounts,  # export.py's own live counts (e.g. its own `drafted`) win on overlap
         }
-        db.set_stage(conn, run_id, "exported", **ecounts)
+        db.mark_exported(conn, run_id, **ecounts)
         warns += top_hooks(conn, run_id)
         return {"ok": True, "run": run_id, "stage": "exported", "counts": ecounts,
                 "warnings": warns[:5], "artifacts": artifacts, "next": None}
