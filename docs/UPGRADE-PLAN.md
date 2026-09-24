@@ -66,7 +66,12 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - **Gate:** tests for detach/status/resume-from-stage; a detached tiny run (mock provider) reaches
   `exported` while `status` reports progress.
 
-## Layer 2 — Agent runner isolation and error visibility
+## Layer 2 — Agent runner isolation and error visibility — DONE 2026-09-24 (b406252, 6c3809e)
+
+- Result: real calls through `agent_runner.run_agent` return in 10.8 s cold / 5.2 s warm (was 14.5-15.4 s);
+  config `agent.isolate: true`, `agent.max_concurrent: 2`, existing `agent.timeout_s` now kills the process
+  tree; runner failures are logged and counted (`agent_failures`). Suite 723 passed; isolation test goes red
+  when the default is flipped (watched-fail).
 
 - `agent_runner.py:64` spawns a full `claude -p` per batch — it loads every MCP server, hook and plugin
   the user has. MEASURED 2026-09-24 (3 runs each, trivial prompt, agent_runner's exact flags):
