@@ -18,14 +18,12 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-24 ~20:00, LAYER 0 DONE; GPU BENCHMARK PENDING; NEXT = LAYER 1
+## POSITION — 2026-09-24 ~20:45, OWNER GRANTED FULL CONTROL; BUILDING LAYERS 1-6
 
-- L0 gate met: `pytest -n 6` 718 passed 86 s (serial 221 s); ruff clean; .githooks/post-commit refreshes
-  code_index + graph (enable: git config core.hooksPath .githooks). CLI import 1.5 s -> 1.2 s (7ee4f27).
-- L0 open (owner decision): retire D:/GainLev/LeadForge/leadforge worktrees (campaign data stays).
-- GPU: Quadro M1200 (sm_50, 4 GB). Main env torch 2.10.0+cpu (untouched). Test venv E:/LeadForge/.venv-gpu
-  installing torch 2.10.0+cu126. Laya needs no code change (fp16 <sm80, sdpa, OOM->CPU fallback).
-  Bench script: scratchpad laya_bench.py (cpu|cuda). Owner wants CPU vs GPU numbers BEFORE Laya work;
-  pause heavy CPU work while benchmarking.
-- NEXT: L1 run control (--detach, status --run, resume --from-stage, one exported path, CLI import pass).
-- UNPROVEN: war-room crash cause; ~15 node procs per `claude -p` (L2 counts it).
+- Owner: "all permissions ... full control related to this project" — act without per-step asks; report
+  measured outcomes. Never destroy D:/GainLev/LeadForge/campaign-uk-autorepair; never send live outreach.
+- Done: L0 (pytest -n 6 718/86 s, hooks, CLI import); D: worktrees removed (all 4 merged, clean);
+  GPU bench (GLiNER 821->193 ms/page, Laya 2678->741 ms); claude -p isolation measured (15 s->5.5 s).
+- IN FLIGHT: main env torch -> 2.10.0+cu126; then L1 + L2 builders in parallel worktrees.
+- ORDER: L1 || L2 -> L3 (GPU model worker) -> L4 (quality, parked-DB copy) -> L5 (Laya shadow) -> L6 skill.
+- UNPROVEN: war-room crash cause; GLiNER+Laya in one process on 4 GB.

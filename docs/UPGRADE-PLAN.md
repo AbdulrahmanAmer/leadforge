@@ -69,10 +69,11 @@ Scripts: `scripts/bench/` (added with Layer 3).
 ## Layer 2 — Agent runner isolation and error visibility
 
 - `agent_runner.py:64` spawns a full `claude -p` per batch — it loads every MCP server, hook and plugin
-  the user has (estimated ~15 node processes per call on this machine from the 7 configured Hostinger MCP
-  servers, each an npx + node pair — UNPROVEN until Layer 2 counts them). Add `--strict-mcp-config` (verified to exist;
-  `--bare` is not usable — it refuses OAuth/subscription auth) and a no-hooks settings override (verify
-  the mechanism), a concurrency cap, and a per-call timeout.
+  the user has. MEASURED 2026-09-24 (3 runs each, trivial prompt, agent_runner's exact flags):
+  default → 7-15 extra node/claude processes, 14.5-15.4 s per call; with
+  `--strict-mcp-config --settings '{"disableAllHooks":true}'` → 1-3 processes, 5.4-6.1 s, same answer.
+  (`--bare` is not usable — it refuses OAuth/subscription auth.) Add those two flags, a concurrency cap,
+  and a per-call timeout. Probe: scripts/bench/claude_proc_probe.ps1.
 - Log every runner failure: `draft/service.py:364,390` swallow exceptions silently.
 - **Gate:** measure per-call latency and process count before/after on one real DM batch; tests for the
   timeout and the logged-failure path.
