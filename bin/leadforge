@@ -1,0 +1,75 @@
+#!/bin/sh
+# LeadForge plugin launcher (Layer 6, skill v2 packaging). POSIX sh — must also work under Git Bash
+# on Windows. On first use (or when the plugin version changed) creates a venv under
+# ${CLAUDE_PLUGIN_DATA:-$HOME/.leadforge}/venv, installs the package from ${CLAUDE_PLUGIN_ROOT} into
+# it, stamps the installed version, then execs the venv's `python -m leadforge "$@"`. No repo-root
+# assumption — this is what makes a marketplace install (plugin cache, not a checkout) work.
+set -eu
+
+# Resolve where THIS script lives, so a plugin cache install (no CLAUDE_PLUGIN_ROOT set, e.g. when
+# invoked directly for local testing) still finds its own package root at "<dir of this script>/..".
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+plugin_root="${CLAUDE_PLUGIN_ROOT:-${script_dir}/..}"
+data_dir="${CLAUDE_PLUGIN_DATA:-${HOME:-$USERPROFILE}/.leadforge}"
+venv_dir="${data_dir}/venv"
+stamp_file="${data_dir}/.installed-version"
+
+mkdir -p "${data_dir}"
+
+# The plugin's own version is the install key (per docs/specs/skill-v2.md #4: "key on the version,
+# not the path" — a marketplace update can change CLAUDE_PLUGIN_ROOT's contents without changing its
+# path). Read it from the manifest so the shim never drifts from the shipped plugin.json.
+manifest="${plugin_root}/.claude-plugin/plugin.json"
+if [ -f "${manifest}" ]; then
+    plugin_version=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "${manifest}" 2>/dev/null \
+        || python -c "import json,sys; print(json.load(open(sys.argv[1]))['version'])" "${manifest}" 2>/dev/null \
+        || echo "unknown")
+else
+    plugin_version="unknown"
+fi
+
+# Windows venvs (including Git-Bash-created ones via the system python.exe) lay out Scripts/python.exe;
+# POSIX venvs lay out bin/python. Probe both — whichever exists is this venv's interpreter.
+venv_python="${venv_dir}/bin/python"
+if [ ! -x "${venv_python}" ]; then
+    venv_python="${venv_dir}/Scripts/python.exe"
+fi
+
+need_install=1
+if [ -x "${venv_python}" ] && [ -f "${stamp_file}" ]; then
+    stamped_version=$(cat "${stamp_file}" 2>/dev/null || echo "")
+    if [ "${stamped_version}" = "${plugin_version}" ]; then
+        need_install=0
+    fi
+fi
+
+if [ "${need_install}" -eq 1 ]; then
+    # Find a base python to create the venv with (prefer python3, fall back to python — Windows
+    # Git Bash usually only has `python` on PATH).
+    base_python=""
+    for cand in python3 python; do
+        if command -v "${cand}" >/dev/null 2>&1; then
+            base_python="${cand}"
+            break
+        fi
+    done
+    if [ -z "${base_python}" ]; then
+        echo "leadforge launcher: no python3/python found on PATH" >&2
+        exit 1
+    fi
+
+    if [ ! -x "${venv_python}" ]; then
+        "${base_python}" -m venv "${venv_dir}"
+        # re-probe after creation (POSIX vs Windows layout)
+        venv_python="${venv_dir}/bin/python"
+        if [ ! -x "${venv_python}" ]; then
+            venv_python="${venv_dir}/Scripts/python.exe"
+        fi
+    fi
+
+    "${venv_python}" -m pip install --quiet --upgrade pip
+    "${venv_python}" -m pip install --quiet "${plugin_root}"
+    printf '%s' "${plugin_version}" > "${stamp_file}"
+fi
+
+exec "${venv_python}" -m leadforge "$@"
