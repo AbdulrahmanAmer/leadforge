@@ -18,12 +18,14 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-24, AUDITS DONE; PLAN WRITTEN; NEXT = LAYER 0
+## POSITION — 2026-09-24 ~20:00, LAYER 0 DONE; GPU BENCHMARK PENDING; NEXT = LAYER 1
 
-- Plan: docs/UPGRADE-PLAN.md (L0 dev loop -> L6 skill v2; skill spec docs/specs/skill-v2.md = LAST).
-- Done: war-room removed end to end (repo files + 10 opencode 'Debate R1' sessions; opencode parent sessions kept for investigation); Laya spec kept as 0%-built proposal; autopilot test ruff-clean (14 passed);
-  semantic index scripts/code_index.py (b05a5f1, hit@5 19/22); graph MCP registered; install -> E:.
-- Parked campaign data: D:/GainLev/LeadForge/campaign-uk-autorepair (read-only).
-- Gotcha: pytest addopts "-q" + extra -q hides the pass count; run without -q.
-- NEXT (L0): slow-test marker + fast tier < 60 s; post-commit index refresh; CI both tiers.
-- UNPROVEN: war-room crash cause; ~15 node procs per `claude -p` (count in L2).
+- L0 gate met: `pytest -n 6` 718 passed 86 s (serial 221 s); ruff clean; .githooks/post-commit refreshes
+  code_index + graph (enable: git config core.hooksPath .githooks). CLI import 1.5 s -> 1.2 s (7ee4f27).
+- L0 open (owner decision): retire D:/GainLev/LeadForge/leadforge worktrees (campaign data stays).
+- GPU: Quadro M1200 (sm_50, 4 GB). Main env torch 2.10.0+cpu (untouched). Test venv E:/LeadForge/.venv-gpu
+  installing torch 2.10.0+cu126. Laya needs no code change (fp16 <sm80, sdpa, OOM->CPU fallback).
+  Bench script: scratchpad laya_bench.py (cpu|cuda). Owner wants CPU vs GPU numbers BEFORE Laya work;
+  pause heavy CPU work while benchmarking.
+- NEXT: L1 run control (--detach, status --run, resume --from-stage, one exported path, CLI import pass).
+- UNPROVEN: war-room crash cause; ~15 node procs per `claude -p` (L2 counts it).
