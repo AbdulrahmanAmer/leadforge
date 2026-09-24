@@ -159,6 +159,7 @@ def auto_label(conn: sqlite3.Connection, icp: ICP, cfg: Config, *,
     max_batches = getattr(getattr(cfg, "agent", None), "max_batches", 50)
     labeled = rejected = 0
     batches = 0
+    agent_failures = 0
     used_runner = False
     if runner is not None:
         while batches < max_batches:
@@ -172,7 +173,10 @@ def auto_label(conn: sqlite3.Connection, icp: ICP, cfg: Config, *,
             try:
                 records = runner(lines)
             except Exception as e:  # noqa: BLE001 — a broken/unavailable runner must not crash the run
-                LOG.warning("auto_label: runner failed on batch %d, falling back to heuristics: %s", batches, e)
+                LOG.warning("auto_label: runner failed on batch %d (%s), falling back to heuristics: %s",
+                            batches, type(e).__name__, e)
+                LOG.debug("auto_label: runner failure detail", exc_info=True)
+                agent_failures += 1
                 break
             batches += 1
             used_runner = True
@@ -185,7 +189,7 @@ def auto_label(conn: sqlite3.Connection, icp: ICP, cfg: Config, *,
     hcounts = heuristic_labels(conn, icp)
     unlabeled = len(db.dm_pending(conn, 10_000))
     return {"labeled": labeled + hcounts["labeled"], "rejected": rejected, "unlabeled": unlabeled,
-            "batches": batches, "runner": "agent" if used_runner else "none"}
+            "batches": batches, "runner": "agent" if used_runner else "none", "agent_failures": agent_failures}
 
 
 def _parse_tsv_label(raw: str) -> dict | None:

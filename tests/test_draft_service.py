@@ -197,7 +197,7 @@ def test_auto_draft_returns_zeroed_result_when_no_targets_match(cfg, conn):
     acfg = _autopilot_cfg(cfg)
     result = service.auto_draft(conn, acfg, icp, rid, runner=None)
     assert result == {"targets": 0, "drafted": 0, "rejected": 0, "abstained": 0,
-                      "skipped": 0, "author": "none", "batches": 0}
+                      "skipped": 0, "author": "none", "batches": 0, "agent_failures": 0}
 
 
 def test_auto_draft_with_a_working_runner_marks_author_agent(cfg, conn):
@@ -244,6 +244,26 @@ def test_auto_draft_falls_back_to_template_when_the_runner_raises(cfg, conn):
     assert json.loads(m["gate_json"])["ok"] is True
 
 
+def test_auto_draft_logs_and_counts_runner_failure(cfg, conn, caplog):
+    """Layer 2 error visibility: a runner exception must not be swallowed silently — it is logged
+    (WARNING, with the exception type) and counted in the returned result."""
+    rid = db.create_run(conn, "icp.yaml", "h")
+    _seed_business(conn, "b1", tier="A", run_id=rid, enrich=_HIRING_ENRICH)
+    icp = _icp()
+    acfg = _autopilot_cfg(cfg)
+
+    def broken_runner(lines: list[str]) -> list[dict]:
+        raise RuntimeError("subprocess exploded")
+
+    with caplog.at_level("WARNING", logger="leadforge.draft.service"):
+        result = service.auto_draft(conn, acfg, icp, rid, runner=broken_runner)
+
+    assert result["agent_failures"] == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("RuntimeError" in r.getMessage() for r in warnings)
+    assert any("subprocess exploded" in r.getMessage() for r in warnings)
+
+
 def test_auto_draft_produces_no_drafts_when_runner_fails_and_template_fallback_disabled(cfg, conn):
     rid = db.create_run(conn, "icp.yaml", "h")
     _seed_business(conn, "b1", tier="A", run_id=rid, enrich=_HIRING_ENRICH)
@@ -278,7 +298,7 @@ def test_auto_draft_no_runner_and_template_fallback_disabled_drafts_nothing(cfg,
     acfg = _autopilot_cfg(cfg, template_fallback=False)
     result = service.auto_draft(conn, acfg, icp, rid, runner=None)
     assert result == {"targets": 1, "drafted": 0, "rejected": 0, "abstained": 0,
-                      "skipped": 0, "author": "none", "batches": 0}
+                      "skipped": 0, "author": "none", "batches": 0, "agent_failures": 0}
 
 
 def test_auto_draft_is_idempotent_on_resume(cfg, conn):
@@ -291,7 +311,7 @@ def test_auto_draft_is_idempotent_on_resume(cfg, conn):
     assert result1["drafted"] == 1
     result2 = service.auto_draft(conn, acfg, icp, rid, runner=None)
     assert result2 == {"targets": 0, "drafted": 0, "rejected": 0, "abstained": 0,
-                       "skipped": 0, "author": "none", "batches": 0}
+                       "skipped": 0, "author": "none", "batches": 0, "agent_failures": 0}
     assert conn.execute("SELECT COUNT(*) c FROM messages").fetchone()["c"] == 1
 
 

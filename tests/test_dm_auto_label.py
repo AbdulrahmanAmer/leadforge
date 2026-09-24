@@ -128,18 +128,24 @@ def test_auto_label_runner_none_falls_back_to_heuristics(cfg, sample_icp):
     assert out["unlabeled"] == 1
 
 
-def test_auto_label_runner_exception_stops_loop_and_falls_back_to_heuristics(cfg, sample_icp):
+def test_auto_label_runner_exception_stops_loop_and_falls_back_to_heuristics(cfg, sample_icp, caplog):
     conn = db.connect(cfg.db_path)
     _seed_business(conn, "biz_a", [("Jane Smith", "Owner", "...")])
 
     def boom(lines):
         raise RuntimeError("agent unavailable")
 
-    out = dm.auto_label(conn, sample_icp, cfg, runner=boom)
+    with caplog.at_level("WARNING", logger="leadforge"):
+        out = dm.auto_label(conn, sample_icp, cfg, runner=boom)
     assert out["runner"] == "none"      # the exception fired before any batch was counted as used
     assert out["batches"] == 0
     assert out["labeled"] == 1          # heuristic still ran and caught the "Owner" title
     assert out["unlabeled"] == 0
+    # Layer 2 error visibility: the runner failure must not be swallowed silently.
+    assert out["agent_failures"] == 1
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("RuntimeError" in r.getMessage() for r in warnings)
+    assert any("agent unavailable" in r.getMessage() for r in warnings)
 
 
 def test_auto_label_stops_on_no_progress_rather_than_looping_forever(cfg, sample_icp):

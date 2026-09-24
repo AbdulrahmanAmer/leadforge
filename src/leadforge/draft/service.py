@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ from leadforge.draft.skeletons import deterministic_slots, load_skeleton, render
 from leadforge.draft.template import template_drafts
 from leadforge.models import ICP
 from leadforge.util import now_iso
+
+LOG = logging.getLogger(__name__)
 
 
 def identity_for(conn, identity_id: int | None, default_name: str) -> dict:
@@ -332,7 +335,7 @@ def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[li
     target_ids = target_ids[: cfg.draft.auto_max]
 
     result = {"targets": len(target_ids), "drafted": 0, "rejected": 0, "abstained": 0,
-              "skipped": 0, "author": "none", "batches": 0}
+              "skipped": 0, "author": "none", "batches": 0, "agent_failures": 0}
     if not target_ids:
         return result
 
@@ -361,11 +364,16 @@ def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[li
             ]
             try:
                 drafts: list[dict] | None = runner(call_lines)
-            except Exception:
+            except Exception as e:  # noqa: BLE001
                 # any failure from the injected runner (AgentFailed, a timeout, a bad subprocess,
                 # or -- since leadforge.agent_runner may not even be importable in every worktree
                 # this module ships from -- any other exception) is a failed batch, not a crashed
-                # run: fall back to the deterministic drafter for just this batch.
+                # run: fall back to the deterministic drafter for just this batch. Logged (not
+                # silently swallowed) and counted so the digest can report agent failures.
+                LOG.warning("auto_draft: runner failed on batch %d (%s): %s",
+                            result["batches"], type(e).__name__, e)
+                LOG.debug("auto_draft: runner failure detail", exc_info=True)
+                result["agent_failures"] += 1
                 drafts = None
             if drafts is None:
                 if cfg.draft.template_fallback:
@@ -386,7 +394,10 @@ def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[li
                 ]
                 try:
                     retry_drafts = runner(retry_lines)
-                except Exception:
+                except Exception as e:  # noqa: BLE001
+                    LOG.warning("auto_draft: retry runner call failed (%s): %s", type(e).__name__, e)
+                    LOG.debug("auto_draft: retry runner failure detail", exc_info=True)
+                    result["agent_failures"] += 1
                     break
                 _apply(remaining, retry_drafts or [], "agent")
             still = _rejected_lines(conn, remaining) if remaining else []
