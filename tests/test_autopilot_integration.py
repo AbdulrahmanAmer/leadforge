@@ -6,9 +6,6 @@ autopilot state machine — all under controlled conditions via monkeypatching."
 from __future__ import annotations
 
 import json
-import subprocess
-import time
-from pathlib import Path
 
 import pytest
 import yaml
@@ -22,9 +19,8 @@ from leadforge.agent_runner import (
     resolve_command,
     run_agent,
 )
-from leadforge.config import load_config
 from leadforge.enrich import dm
-from leadforge.models import ICP, RawListing
+from leadforge.models import RawListing
 from leadforge.pipeline import run_pipeline
 from leadforge.util import now_iso
 
@@ -204,12 +200,12 @@ def test_draft_retry_includes_rejected_attempt_context(cfg, sample_icp, tmp_path
     conn.commit()
 
     # Create outreach target
-    from leadforge.draft.service import ensure_targets, build_packets, _rejected_lines
+    from leadforge.draft.service import _rejected_lines, build_packets, ensure_targets
     target_ids = ensure_targets(conn, run_id, {"A", "B", "C", "D"}, "retry_campaign")
     assert len(target_ids) == 1
 
     lines, _ = build_packets(conn, cfg, sample_icp, target_ids, "gainlev_leadgen")
-    header, packet_lines = lines[0], lines[1:]
+    packet_lines = lines[1:]
 
     # First, create a rejected message to simulate a prior failure
     tid = target_ids[0]
@@ -293,7 +289,6 @@ def test_auto_draft_fallback_to_templates_on_runner_failure(cfg, sample_icp, mon
         (bid, run_id, 85.0, "A", "{}", "[]", now_iso()),
     )
     # Add a scored contact
-    from leadforge.score import fill_email_affinity
     from leadforge.models import Contact
     contacts = db.contacts_for(conn, bid)
     if not contacts:
