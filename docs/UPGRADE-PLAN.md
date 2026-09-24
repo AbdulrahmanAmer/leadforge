@@ -33,7 +33,11 @@ layer, not a multiplier in advance.
   snapshot download). Mark them `@pytest.mark.slow`; default run excludes them; CI runs both.
 - `pyproject.toml:70` sets `addopts = "-q"`; passing `-q` again hides the pass/fail summary. Document it
   in AGENTS.md or drop the addopt.
-- Semantic code index `scripts/code_index.py` (in progress) + code graph (codebase-memory, registered).
+- Code discovery (done 2026-09-24): code graph (codebase-memory, project `E-LeadForge-leadforge`) for exact
+  symbols/callers; `scripts/code_index.py query "<question>" [--kind code]` for plain-English questions
+  (eval hit@5 19/22; on 5 unseen questions 3 found the right code first, 2 found the right ADR/doc first
+  — use `--kind code` when you want the implementation). Remaining L0 work: keep both fresh — a git
+  post-commit hook running `code_index.py build` (~4 s when nothing changed) and the graph re-index (~3 s).
 - **Gate:** `pytest` (fast tier) < 60 s and green; `ruff check src tests` clean; slow tier green.
 
 ## Layer 1 — Run control (the pipeline's state machine)

@@ -18,11 +18,12 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-24, CLEANUP + AUDIT SESSION (Opus 5.5)
+## POSITION — 2026-09-24, AUDITS DONE; PLAN WRITTEN; NEXT = LAYER 0
 
-- Done+committed: war-room files deleted (2e9aa03 area); POSITION split; docs/specs/skill-v2.md (skill rewrite = LAST layer); Laya spec -> docs/specs/laya-integration.md marked 0% built; tests/test_autopilot_integration.py (14 passed on E:).
-- Env: editable install re-pointed D:/GainLev/LeadForge/leadforge -> E:/LeadForge/leadforge (same commit 4b1b3a2). Parked campaign lives at D:/GainLev/LeadForge/campaign-uk-autorepair (DB + logs; do not modify).
-- Measured (parked run): enrich 17-24 sites/min, registry 3.2-3.7 s/item, maps 15.7 s/query. Quality: email on 2.7% of businesses, DM rows 7.6%, tier A 3.0%.
-- agent_runner.py:64 spawns full `claude -p` (all MCP servers + hooks per call). Fix: --strict-mcp-config + no hooks; UNPROVEN until measured.
-- IN FLIGHT: pipeline-gaps audit; scripts/code_index.py semantic index builder (Sonnet). Graph MCP registered (local scope).
-- NEXT: docs/UPGRADE-PLAN.md (layers), verify code_index eval myself, then build layer by layer.
+- Plan: docs/UPGRADE-PLAN.md (L0 dev loop -> L6 skill v2; skill spec docs/specs/skill-v2.md = LAST).
+- Done: war-room removed; Laya spec kept as 0%-built proposal; autopilot test ruff-clean (14 passed);
+  semantic index scripts/code_index.py (b05a5f1, hit@5 19/22); graph MCP registered; install -> E:.
+- Parked campaign data: D:/GainLev/LeadForge/campaign-uk-autorepair (read-only).
+- Gotcha: pytest addopts "-q" + extra -q hides the pass count; run without -q.
+- NEXT (L0): slow-test marker + fast tier < 60 s; post-commit index refresh; CI both tiers.
+- UNPROVEN: war-room crash cause; ~15 node procs per `claude -p` (count in L2).
