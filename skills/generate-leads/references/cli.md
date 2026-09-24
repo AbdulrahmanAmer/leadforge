@@ -7,9 +7,9 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 
 | Command | Purpose | Key flags | Digest counts to watch |
 |---|---|---|---|
-| `doctor` | verify/install environment (pip deps, pinned gosom binary, optional extras, network, disk) | `--fix`, `--strict` | `checks`, `fixed`, `failed` |
+| `doctor` | verify environment (pip deps, pinned gosom binary, optional extras, network, disk); light/read-only by default | `--fix` (installs missing core deps/binary), `--full` (with `--fix`: also NER + browser extras — several hundred MB, get consent first), `--strict` | `checks`, `fixed`, `failed` |
 | `intake` | compile + validate `answers.yaml` → `icp.yaml` | `--answers F`, `--out F` | `errors` (0 required) |
-| `plan` | show run plan without scraping | `--icp F` | `tiles`, `queries`, `est_max_results` |
+| `plan` | show run plan without scraping | `--icp F` | `tiles`, `queries`, `est_max_results`, `est_runtime_min` (discovery), `est_enrich_sites`, `est_enrich_min` (crawl/enrich), `est_total_min` |
 | `discover` | scrape listings → normalize → upsert | `--icp F`, `--limit N`, `--provider NAME` | `businesses`, `new`, `tiles_degraded` |
 | `enrich` | crawl sites, extract + validate contacts, build DM candidates | `--limit N`, `--stage site\|validate` | `sites_crawled`, `contacts`, `dm_candidates`, `needs_browser` |
 | `dm export` | write NDJSON batch of DM candidates for labeling | `--max N` (default 60), `--tsv`, `--out F` | `businesses`, `remaining`; artifact = batch path |
@@ -17,10 +17,9 @@ Digest line (always last): `LF_DIGEST {"ok":bool,"cmd":str,"run":str|null,"count
 | `score` | rubric scoring + hooks | `--icp F` | `scored`, `tier_a/b/c`, `dq` |
 | `export` | write XLSX + CSV + report.json | `--out DIR`, `--format xlsx,csv` | artifacts = file paths |
 | `config set\|get KEY [VALUE]` | read/write one `leadforge.yaml` value (e.g. `registry.companies_house_key`) | — | counts.set |
-| `doctor --fix --full` | first-time bootstrap: deps, scraper binary, quality extras (NER, browser, yt-dlp) | `--json` | counts.checks/fixed/failed |
 | `version` | print version | — | digest only |
-| `run` | orchestrated: discover→enrich→**label→score→draft→export (autopilot, v0.4 default)**, resumable | `--icp F`, `--resume`, `--limit N`, `--skip-dm`, `--autopilot`/`--no-autopilot` | `stage`, `dm_labeled`, `dm_unlabeled`, `drafted`, `draft_rejected`, `draft_abstained`, `runner` (`agent`\|`none`), everything above |
-| `status` | current run snapshot | `--run ID` | `stage`, counts |
+| `run` | orchestrated: discover→enrich→**label→score→draft→export (autopilot, v0.4 default)**, resumable | `--icp F`, `--resume`, `--from-stage STAGE` (forces resume to start from STAGE; requires `--resume`), `--detach` (returns run id/pid/log immediately instead of blocking), `--limit N`, `--skip-dm`, `--autopilot`/`--no-autopilot` | `stage`, `dm_labeled`, `dm_unlabeled`, `drafted`, `draft_rejected`, `draft_abstained`, `runner` (`agent`\|`none`); `--detach` returns `pid`, `detached:true` and the log path as an artifact; use `status --run <run_id>` to follow it |
+| `status` | current/last run snapshot: stage, whether a `--detach`'d process is alive, live progress | `--run ID` | `stage`, `businesses`, `pid`, `alive` (when detached), `progress_stage`, `progress_done`, `progress_total`, `eta_seconds` |
 | `suppress add\|list` | opt-out list (domain/email/place_id) | value | `suppressed` |
 | `dashboard` | local read-only status page: machine stages (discover/enrich/registry/validate) with measured pace + ETA, human/agent stages with item counts, every count behind them; `--open` opens the browser | `--port` (8765), `--open` | JSON at `/api/status` |
 | `watch` | live bar for this workspace's run; pace and ETA from the feed's own clock (identical in every window) | — | prints a one-line summary on attach |
@@ -55,8 +54,8 @@ Notes
   (merged into Maps rows by phone); `discovery.grid_mode: auto` tiles areas and splits any tile that returns ≥ `subdivide_at`
   results; `discovery.area_bbox` bypasses the geocoder for a named area; `plan` reports `registry_queries`, `tiled_queries`,
   `est_runtime_min` and a worst-case subdivided estimate.
-- v0.3 company mode (GainLev's own pipeline): `target.mode: company` + `sic_codes` in the ICP and `discovery.providers:
-  [companies_house]` discover companies from Companies House by SIC × location; see `icp-guide.md`.
+- v0.3 company mode (a named provider mode, not a default): `target.mode: company` + `sic_codes` in the ICP and
+  `discovery.providers: [companies_house]` discover companies from Companies House by SIC × location; see `icp-guide.md`.
 - speed unit (ADR-014): `discovery.providers: [maps_list]` uses the native list-first Maps engine (plain Playwright, one
   persistent browser, no place-page visits by default) instead of gosom's per-place subprocess crawl — measured 5-10x
   faster for the same list coverage; a maps_list row has no `place_id` (dedupe keys on CID instead, merged with any

@@ -1,95 +1,109 @@
 ---
 name: generate-leads
-description: Generate scored B2B lead lists from open-source scraping. Use when the user wants to find leads, prospects, potential clients or customers, build a lead list, find businesses to pitch (e.g. "find auto repair shops in Houston for my web agency", "B2B leads for my SaaS", "who should my real-estate services target"), or asks to run LeadForge. Interviews the user about their ideal customer profile, runs the self-bootstrapping leadforge CLI pipeline (Google Maps scraping, website deep-crawl, decision-maker discovery, ICP scoring), and delivers a scored XLSX/CSV lead sheet.
+description: Generate scored B2B lead lists from open-source scraping. Use when the user wants to find leads, prospects, potential clients or customers, build a lead list, find businesses to pitch (e.g. "find auto repair shops in Houston for my web agency", "B2B leads for my SaaS", "who should my real-estate services target"), or asks to run LeadForge. Interviews the user about their ideal customer profile, launches the self-bootstrapping leadforge CLI pipeline in the background (Google Maps scraping, website deep-crawl, decision-maker discovery, ICP scoring), polls it to completion, and delivers a scored XLSX/CSV lead sheet.
 license: MIT
 compatibility: Requires shell access, Python 3.11+, and network. Windows, macOS, Linux.
 metadata:
-  version: "0.4.1"
+  version: "0.5.0"
   author: leadforge
 ---
 
 # Generate B2B Leads
 
-You orchestrate a Python CLI that does ALL scraping, crawling, parsing, storage, scoring and exporting. Your job is judgment, not labor:
-interview → launch → adjudicate decision makers → deliver.
+You orchestrate a Python CLI that does ALL scraping, crawling, parsing, storage, scoring and exporting. Your job is
+judgment, not labor: interview → plan → launch (detached) → poll → adjudicate decision makers → deliver. Runs take
+minutes to hours — **never wait on `run` in the foreground**; it outlives a single tool call. For email outreach
+after the sheet exists, hand off to the separate `send-outreach` skill — it is not part of this one.
 
 ## Iron rules (token contract — full version: `references/cli.md`)
 
-1. Every `leadforge` command ends with one `LF_DIGEST {json}` line. **That line is the result.** Long stages also stream bounded `LF_PROGRESS {json}` lines — use them to report progress to the user ("12/30 queries done") or ignore them; never treat them as the result. Prefer `--json` flags.
-2. **Never** read files under `leadforge_data/` (db/cache/exports/logs) — unbounded. The ONE exception: the small NDJSON batch produced by
-   `leadforge dm export`.
+1. Every `leadforge` command ends with one `LF_DIGEST {json}` line. **That line is the result.** Long stages also
+   stream bounded `LF_PROGRESS {json}` lines — read them for progress, never as the result. Always pass `--json`.
+2. **Never** read files under `leadforge_data/` (db/cache/exports/logs) — unbounded. The ONE exception: the small
+   NDJSON batch produced by `leadforge dm export`.
 3. Never scrape/crawl/search the web yourself for lead data. If the pipeline can't get something, it says so in the digest.
-4. On `ok:false`: follow the digest `warnings` + `next`, check `references/troubleshooting.md`, retry once, then report to the user.
+4. On `ok:false`: follow the digest `warnings` + `next`, check `references/troubleshooting.md`, retry once, then report.
 
-## Step 0 — Locate & bootstrap
+## Step 0 — Locate, bootstrap, resume-check
 
-Run from the repo/workspace directory the user chose (any folder works; state lives in `./leadforge_data/`).
+Run from the workspace directory the user chose (any folder works; state lives in `./leadforge_data/`). The `leadforge`
+command is `${CLAUDE_PLUGIN_ROOT}/bin/leadforge` when installed as a plugin (it self-installs into an isolated venv on
+first use — no repo checkout needed); a plain pip/editable install just has `leadforge` on PATH.
 
 ```bash
-leadforge doctor --fix --full --json  # first-time setup: deps, scraper binary, quality extras (NER, browser, yt-dlp); safe to re-run
+leadforge status --json          # is there already a run for this workspace? (see "Resuming a run" below)
+leadforge doctor --json          # light check: python/deps/scraper binary presence — no downloads
 ```
 
-If `leadforge` isn't on PATH: `pip install -e <repo-root>` first (repo-root = directory containing `pyproject.toml`; on install failure
-see troubleshooting).
+`doctor` is **light by default**. Only run `doctor --fix --json` (installs missing core deps + the scraper binary) when
+`doctor` reports a problem, and only run `doctor --fix --full --json` (adds NER + browser extras, several hundred MB,
+slow on a fresh machine) **after telling the user the approximate download size and getting a yes** — see
+`references/troubleshooting.md` for what each extra buys and costs.
 
 ## Step 1 — Interview the user (before any scraping)
 
-Ask conversationally (batch related questions; skip what the user already stated). Full question bank + field semantics:
-`references/icp-guide.md`. You MUST end up knowing:
+Ask conversationally (batch related questions; skip what the user already stated). Full question bank + field
+semantics: `references/icp-guide.md`. You MUST end up knowing:
 
-1. **Offer** — what they sell + the one-line value prop (drives "likely need" hooks).
-2. **Target category(ies)** — business types to find (e.g. auto repair shops, boutique realtors, dental clinics).
-3. **Geography — city AND country (never skip the country).** Ask for the country explicitly (ISO2: US, GB,
-   EG, AE…) and push for a specific area. A bare city name is ambiguous worldwide — there is a Houston in the
-   US and in the UK, dozens of Springfields — and guessing wrong silently fills the whole sheet with garbage.
-   In federal countries (US/CA/AU/BR/IN/MX) also get the state/region: "Houston, TX", not "Houston". If the
-   user says something vague ("the Gulf area", "downtown"), ask which city/cities before proceeding.
-4. **Size band** — e.g. min reviews, solo vs multi-location, employees if known.
-5. **Hard disqualifiers** — franchises? no-phone? competitors to exclude?
-6. **Soft qualifications** — what makes a lead GOOD for them (these become scoring signals; e.g. "no website yet" is GOLD for a web
-   agency).
-7. **Decision-maker titles** — who they want to reach (Owner, GM, Marketing Manager, …).
-8. **Volume cap** — how many leads they want (default 200).
-9. **Profile** — ordinary lead-gen uses the default scoring; a prospecting-engine brief (account rubric,
-   grades, manual-review statuses) uses `scoring: { profile: account_fit }` — see `references/icp-guide.md`.
+1. **Offer** — what they sell + the one-line value prop.
+2. **Target category(ies)** — business types to find.
+3. **Geography — city AND country (never skip the country).** ISO2 country (US, GB, EG, AE…); a bare city name is
+   ambiguous worldwide. In federal countries (US/CA/AU/BR/IN/MX) also get the state/region.
+4. **Size band**, **hard disqualifiers**, **soft qualifications** (these become scoring signals).
+5. **Decision-maker titles** they want to reach. **Volume cap** (default 200).
+6. **Profile** — default scoring, or `scoring: { profile: account_fit }` for a prospecting-engine brief.
 
-**UK campaigns only — one optional extra question.** If the country is GB and `leadforge config get
-registry.companies_house_key` is empty, ask ONCE: "Want registry-verified company directors on the sheet?
-It needs a free Companies House API key (2-minute signup at
-https://developer.company-information.service.gov.uk — create an application, copy the key)." If they paste
-one: `leadforge config set registry.companies_house_key <KEY>`. If they decline or hesitate, proceed
-without it — never block the campaign on this.
+**UK campaigns only.** If country is GB and `leadforge config get registry.companies_house_key` is empty, ask ONCE
+about a free Companies House API key (`references/icp-guide.md`); proceed without it if declined.
 
-Write the answers to `answers.yaml` (schema in `references/icp-guide.md`), then:
+Write `answers.yaml`, then: `leadforge intake --answers answers.yaml --json` (fix field errors by asking the user).
+
+## Step 2 — Plan, state the estimate, get consent above the threshold
 
 ```bash
-leadforge intake --answers answers.yaml --json     # → writes icp.yaml, validates hard
+leadforge plan --icp icp.yaml --json   # mandatory — never skip straight to run
 ```
 
-Fix any field errors it reports by asking the user, not by guessing.
+The digest's `counts` carry both estimates: `est_runtime_min` (discovery) and `est_enrich_min` (crawl/enrich), summed
+in `est_total_min`, plus `est_max_results` / `est_enrich_sites`. State the total to the user in plain terms ("roughly
+N businesses, about H hours end to end"). **Get an explicit yes before `run` when `est_total_min > 30` or the plan has
+more than 80 queries** — otherwise proceed straight to Step 3.
 
-## Step 2 — Run the pipeline
+## Step 3 — Launch detached, then poll — never block
 
 ```bash
-leadforge plan --icp icp.yaml --json    # optional sanity: tiles/queries/estimates — confirm with user if queries > 80
-leadforge run  --icp icp.yaml --json    # discover → enrich → label → score → draft → export (autopilot, v0.4 default)
+leadforge run --icp icp.yaml --detach --json   # returns immediately: run id, pid, log path
 ```
 
-Long runs are normal (minutes to an hour). The command streams nothing noisy; wait for the digest. **Autopilot handles
-decision-maker labeling and drafting itself** (ADR-015) — through your own headless Claude Code where available, deterministic
-fallbacks otherwise — so a normal run ends `stage=exported` in one call; go straight to Step 4. Only continue to Step 3 when the
-digest shows `dm_unlabeled > 0` (some businesses were left genuinely ambiguous — top them up) or when the workspace has
-`--no-autopilot` set (it will end `stage=dm_pending` instead, exactly like pre-v0.4).
+Poll, spacing calls out (the digest gives an ETA once the current stage has a measured pace):
+`leadforge status --run <run_id> --json`. Report progress between polls using `progress_stage` /
+`progress_done` / `progress_total` / `eta_seconds` when present.
+**Autopilot handles decision-maker labeling and drafting itself** (through your own
+headless Claude Code where available, deterministic fallbacks otherwise) — a normal run ends `stage=exported` in
+`status`; go straight to Step 5. Only do Step 4 when `status` shows `dm_unlabeled > 0`, or the workspace has
+`--no-autopilot` set (`status` shows `stage=dm_pending`).
 
-## Step 3 — Decision-maker labeling (only if `dm_unlabeled > 0`, or autopilot is off)
+### Resuming a run found by `status`
+
+If Step 0's `status --json` shows a run that is not `exported` and not `alive` (the detached process died or the
+previous session ended), resume it instead of starting a new one:
+
+```bash
+leadforge run --icp icp.yaml --resume --json                       # continue from wherever it stopped
+leadforge run --icp icp.yaml --resume --from-stage <stage> --json  # force a specific stage first, if status says why
+```
+
+Never re-run `leadforge intake` or start a fresh `run` for a workspace with a live or resumable run — check `status` first.
+
+## Step 4 — Decision-maker labeling (only if `dm_unlabeled > 0`, or autopilot is off)
 
 ```bash
 leadforge dm export --max 60 --json     # digest contains the batch file path
 ```
 
-Read the batch file. Each line: one business, its ICP-priority titles, and candidate `{name,title,snippet}` entries. Label **from the
-snippets only** — do not browse websites. Protocol + examples: `references/dm-labeling.md`. Write `dm_labels.ndjson` with one line per
-business: `{"biz":"<id>","pick":<candidate index or -1>,"confidence":0.0-1.0,"title_override":null|"..."}`.
+Read the batch file. Each line: one business, its ICP-priority titles, and candidate `{name,title,snippet}` entries.
+Label **from the snippets only** — never browse websites. Protocol + examples: `references/dm-labeling.md`. Write
+`dm_labels.ndjson`: `{"biz":"<id>","pick":<candidate index or -1>,"confidence":0.0-1.0,"title_override":null|"..."}`.
 
 ```bash
 leadforge dm apply --in dm_labels.ndjson --json
@@ -98,54 +112,18 @@ leadforge run --icp icp.yaml --resume --json      # continues (autopilot: draft 
 
 Repeat `dm export` if the digest says more batches remain.
 
-## Step 4 — Deliver
+## Step 5 — Deliver
 
 The final digest lists artifact paths (XLSX, CSV, report.json). Report to the user, briefly:
 
-- counts + tier split (A/B/C), e.g. "142 leads — 38 A, 71 B, 33 C";
-- top 2–3 "likely need" hooks with counts (from the digest, e.g. "61 have no online booking");
-- the sheet path, and that Summary/About tabs explain scores + compliance reminders;
-- any degradations worth knowing (e.g. "9 sites need a browser pass — install extras to cover them: `pip install -e .[browser]`").
+- counts + tier split (A/B/C), e.g. "142 leads — 38 A, 71 B, 33 C"; top 2-3 "likely need" hooks with counts;
+- the sheet path (Summary/About tabs explain scores + compliance reminders);
+- any degradations worth knowing (e.g. "9 sites need a browser pass — see troubleshooting").
 
-Do NOT paste sheet contents (≤ 5 rows only if the user explicitly asks for a preview).
-
-## Step 5 — Outreach (optional, v0.3; only when the user asks to contact leads)
-
-The sheet's **Next Action** column is phone-first by owner decision: call rows with a validated phone,
-email is the second touch. **v0.4: the sheet's Draft columns / Drafts tab already carry an autopilot-drafted
-message for most rows** (agent-drafted or template-drafted — see the Draft Author column) — you usually only
-need `outreach plan` / `approve` / `send` below, not `draft export`/`draft apply` again, unless you want to
-redraft a specific target or the row shows "no draft" (grade C / insufficient evidence). Email goes out only
-through `leadforge outreach`, which is **dry-run by default and cannot send until the workspace owner arms
-it**. Protocol + digest fields: `references/outreach.md` (sending) and `references/drafting.md` (how you
-write the two model slots of each message).
-
-```bash
-leadforge outreach identity add --label gainlev --from-email you@sending-domain --from-name "Name" \
-    --postal-address "..." --privacy-url https://... --unsubscribe-mailto stop@sending-domain --json
-leadforge outreach mailbox add --identity gainlev --address you@sending-domain --transport smtp \
-    --config host_env=LF_SMTP_HOST --config port_env=LF_SMTP_PORT --config user_env=LF_SMTP_USER \
-    --config password_env=LF_SMTP_PASS --json            # values are env var NAMES, never secrets
-leadforge outreach plan --campaign <campaign> --tier A,B --identity gainlev --json   # enrol eligible leads
-leadforge draft export --campaign <campaign> --purpose client_campaign --max 40 --json
-#   only for targets with no draft yet, or to redraft one: read the packet file; write drafts.ndjson:
-#   {"target", "subject", "observation", "used_fact"} or {"target","abstain":true}
-leadforge draft apply --in drafts.ndjson --json          # mechanical no-fabrication gate; rejected drafts are counted
-leadforge draft render --campaign <campaign> --out drafts/ --json   # files for the human to read
-leadforge outreach approve --campaign <campaign> --all-drafted --approver "<human name>" --json
-leadforge outreach send --campaign <campaign> --json     # DRY RUN: writes .eml files to the outbox, sends nothing
-leadforge outreach doctor --identity gainlev --json      # SPF / DKIM / DMARC / MX / warm-up must all be ok
-```
-
-Rules you must not bend: never run `--live` yourself — the owner sets `outreach.armed: true` and passes
-`--i-am <approver>`; never edit a message after approval (it reverts to drafted); never invent a fact in a
-draft (the gate rejects it, and the packet is the only source of truth); abstain on grade-C packets when the
-purpose needs personalisation. After a calling or mailing sprint, record results with
-`leadforge outreach outcome add --business <id> --channel phone|email --result <..>` so the next scoring pass
-learns from real outcomes.
+Do NOT paste sheet contents (≤ 5 rows only if the user explicitly asks for a preview). If the user wants to email
+these leads, hand off explicitly to the `send-outreach` skill — do not improvise outreach steps here.
 
 ## Repeat campaigns
 
-Same workspace = same SQLite: re-runs dedupe automatically and re-verify stale rows. For a new campaign, just run Step 1 with a new
-`answers.yaml` (new icp/campaign name). `leadforge status --json` shows the latest run any time. To honor an opt-out immediately:
-`leadforge suppress add <email-or-domain>`.
+Same workspace = same SQLite: re-runs dedupe automatically. New campaign = Step 1 with a new `answers.yaml`.
+`leadforge status --json` shows the latest run any time. Opt-out: `leadforge suppress add <email-or-domain>`.
