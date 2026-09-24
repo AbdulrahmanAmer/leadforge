@@ -107,7 +107,7 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - **Gate:** sites/min over a fixed 30-min window of real crawling, before vs after, same campaign and
   machine; CPU per core logged. No regression in people-per-crawled-site.
 
-## Layer 4 — Data quality
+## Layer 4 — Data quality — 4a DONE 2026-09-24 (aggregators, silent-crawl guard; sample yield flat)
 
 - Baseline MEASURED 2026-09-24 (copy of the parked campaign DB, run_20260902_22032_7eca):
 
@@ -128,6 +128,23 @@ Scripts: `scripts/bench/` (added with Layer 3).
   follow them to the real site. Then: contact-page discovery depth (median 2 pages per site).
 - **Gate:** yield per crawled site before/after on a fixed sample; no fabricated contacts (existing
   no-fabrication gate stays green).
+- MEASURED 2026-09-24 (worktree agent-a942ed283b7da7429, f6c631b base): the 115-silent-zero-page bug is
+  structurally closed by prior work already on this branch — `SiteCrawler.crawl()` sets a named `error`
+  on every home-unreachable/robots-disallowed path (14/15 of the original silent sample now get one on a
+  fresh real crawl); added a belt-and-suspenders guard in `runner.py::_persist` so ok=True+pages==0 can
+  never again write `crawled_at` with no `error` ("empty_crawl"). 403→browser routing was already wired
+  (`_BLOCK_STATUSES` includes 403); crawl4ai+playwright ARE installed and browser fallback was proven live
+  (rendered a real 403 site, 7059 bytes). Real gap found and fixed: link aggregators (linktr.ee, w3w.co,
+  beacons.ai, linkin.bio, lnk.bio) were crawled directly as the "business site" — `_crawl_aggregator`
+  now follows the first non-social/non-aggregator outbound link, else records `error="aggregator"`.
+  Before/after on the fixed sample (60 silent + 40 403 + 2 aggregator, business-id order, real HTTP via
+  `_process_one`, browser extra active both sides): zero-page 77→78 (net flat: the +1 is a QUALITY fix,
+  not a regression — main silently "succeeded" crawling w3w.co's own bio page as `ok=True, 1 page, no
+  error, no contacts`; after the fix that business now correctly gets `error="aggregator"` instead of a
+  junk crawled_at row); pages median 0→0 (403 sites are largely genuine bot-walls that block headless
+  Chrome too — out of scope per AGENTS.md's no-anti-bot-evasion red line); emails 3→3, persons 3→3 on
+  this specific sample (too small/hard a sample to move — most of the 40 403 sites are real WAFs).
+  Gates: `pytest -n 6` 759 passed, 1 skipped (751 baseline + 8 new); `ruff check src tests scripts` clean.
 
 ## Layer 5 — Laya, shadow mode (optional) — MEASURED NO-GO for DM labeling (ADR-017)
 
