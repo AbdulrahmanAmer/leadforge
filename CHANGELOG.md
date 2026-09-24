@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.5.0] — 2026-09-25
+
+The upgrade-plan release (`docs/UPGRADE-PLAN.md`, Layers 0-6), summarised from that plan's own measured
+numbers — no new benchmarks were run for this entry.
+
+### Added
+- **Run control (Layer 1).** `leadforge run --detach` returns a run id/pid/log path immediately instead of
+  blocking; `leadforge status --run <id> --json` reports stage, counts, whether a detached process is
+  still alive, and live progress/ETA once a stage has a measured pace. `run --resume --from-stage <stage>`
+  replaces manual `sqlite3 UPDATE runs SET stage=…` recovery.
+- **`plan` digest gains an enrichment estimate** (Layer 6): `est_enrich_sites` (est. businesses x measured
+  website share, default 64%) and `est_enrich_min` (sites / measured crawl rate, default 25/min,
+  configurable via `enrich.est_website_share` / `enrich.est_crawl_rate_per_min`), summed with the existing
+  discovery estimate into `est_total_min`.
+- **Plugin launcher `bin/leadforge`** (Layer 6): POSIX-sh shim that on first use creates a venv under
+  `${CLAUDE_PLUGIN_DATA:-~/.leadforge}/venv`, installs the package from `${CLAUDE_PLUGIN_ROOT}`, stamps the
+  installed plugin version, then execs the venv's `python -m leadforge`. Handles both POSIX (`bin/python`)
+  and Windows (`Scripts/python.exe`) venv layouts; re-installs only when the plugin version changes.
+- **Split skills (Layer 6).** `skills/generate-leads` (interview -> plan with a stated time estimate and a
+  consent gate above threshold -> `run --detach` -> poll `status` -> deliver; resumes a run `status` finds)
+  and the new `skills/send-outreach` (identity, mailbox, draft review, approval, dry-run send, doctor —
+  never `--live` on its own). Each SKILL.md body is ≤ 120 lines; detail moved into `references/`.
+  `references/troubleshooting.md` expanded to cover the scraper binary download, torch/GPU, the browser
+  extra, blocked sites/403 and link aggregators, locked SQLite, resuming a parked run, and outreach DNS.
+
+### Changed
+- **Neutral defaults.** `outreach identity add --owner-entity` default changed from `"gainlev"` to `""`
+  (and the `owner_entity` DB column default), and `draft.auto_purpose`'s default changed from
+  `"gainlev_leadgen"` (GainLev-branded skeleton text) to the neutral `"client_campaign"` skeleton. Explicit
+  values are unaffected; GainLev-specific features that are named modes rather than silent defaults
+  (company mode's `GAINLEV_ICP_SIC`, the `gainlev_leadgen` drafting skeleton itself) are unchanged — they
+  are opt-in, not what a new user gets by default.
+
+### Measured earlier in this upgrade (Layers 0-5, `docs/UPGRADE-PLAN.md`)
+- **Layer 0:** `pytest -n 6` 718 passed in 86 s (was ~220 s serial); CLI warm-import cost 1.45-1.55 s ->
+  1.15-1.26 s.
+- **Layer 2 (agent runner isolation):** isolated/no-hooks headless calls 14.5-15.4 s -> 5.4-6.1 s per call,
+  7-15 stray processes -> 1-3.
+- **Layer 3 (throughput):** crawl 16.4 -> 26.3 sites/min cumulative (GPU NER worker + 24 crawl workers, this
+  laptop); GLiNER 821 ms/page CPU -> 193 ms/page GPU (4.3x).
+- **Layer 4 (data quality):** the 2.7%-email headline was a coverage problem (89% of sites never crawled,
+  not a labeling problem); silent zero-page crawl failures and un-routed 403s fixed; link aggregators
+  (linktr.ee, w3w.co, beacons.ai, linkin.bio, lnk.bio) now followed to the real site instead of crawled as
+  the business's own page.
+- **Layer 5 (Laya, shadow mode):** MEASURED NO-GO for DM labeling (ADR-017) — 50.0% agreement with Claude's
+  picks (no "none" option), below the 58.0% bar; nothing integrated.
+
 ## [0.4.1] — 2026-09-03
 
 ### Changed
