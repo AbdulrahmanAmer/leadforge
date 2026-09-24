@@ -37,7 +37,7 @@ enrich:                            # crawl-time enrichment throughput/quality kn
 
 politeness:
   delay_s: 2.0                    # per-host, +/-30% jitter; 1 request in flight per host
-  workers: 4                      # hosts crawled in parallel
+  workers: 24                     # different hosts crawled in parallel (per-host pacing unchanged)
   user_agent: "LeadForgeBot/0.1 (internal lead research)"
 
 validation:

@@ -92,6 +92,8 @@ Scripts: `scripts/bench/` (added with Layer 3).
 - Why only 1.4x: crawling is network- and politeness-bound; NER was the CPU part that got removed.
   Remaining levers below (registry overlap, more crawl workers now that CPU is free).
 - Side finding: `--limit` caps the crawl only — registry lookups ran over the whole 13,528 backlog.
+- Crawl workers 12 → 24 (default and example config): same 200 sites, 22.9 → 26.3 sites/min (one run each).
+  Cumulative on this laptop: 16.4 → 26.3 sites/min (1.6x) versus the pre-upgrade code.
 
 - Move NER out of the crawl pool. Today GLiNER runs inside `_process_one` in the 12-thread I/O pool
   (`enrich/runner.py:118,305`), so CPU work stalls network workers. Target shape: crawl threads (I/O
