@@ -322,6 +322,22 @@ def export(ctx: typer.Context, icp: str = typer.Option("icp.yaml", "--icp"), out
                 artifacts=artifacts, next_=None)
 
 
+def _detached_run_cmd(python: str, icp: str, *, limit: int | None, skip_dm: bool,
+                      autopilot: bool | None, from_stage: str | None) -> list[str]:
+    """The foreground `run --resume` the detached child executes — every run option must be carried
+    over (a dropped --from-stage once made the child silently resume the wrong stage)."""
+    cmd = [python, "-m", "leadforge", "--json", "run", "--icp", icp, "--resume"]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    if skip_dm:
+        cmd.append("--skip-dm")
+    if autopilot is not None:
+        cmd.append("--autopilot" if autopilot else "--no-autopilot")
+    if from_stage is not None:
+        cmd += ["--from-stage", from_stage]
+    return cmd
+
+
 def _spawn_detached(cmd: list[str], log_path: Path, cwd: Path) -> int:
     """Start `cmd` as a background process this CLI can walk away from: stdout/stderr to `log_path`,
     detached from this process's console/session so a Ctrl+C or terminal close here does not touch it.
@@ -392,13 +408,8 @@ def run(
             emit_digest(False, "run", warnings=[str(e)[:120]], next_="leadforge doctor --fix")
             raise typer.Exit(e.exit_code) from e
         log_path = cfg.logs_dir / f"{run_id}.detach.log"
-        cmd = [_sys.executable, "-m", "leadforge", "--json", "run", "--icp", icp, "--resume"]
-        if limit:
-            cmd += ["--limit", str(limit)]
-        if skip_dm:
-            cmd.append("--skip-dm")
-        if autopilot is not None:
-            cmd.append("--autopilot" if autopilot else "--no-autopilot")
+        cmd = _detached_run_cmd(_sys.executable, icp, limit=limit, skip_dm=skip_dm,
+                                autopilot=autopilot, from_stage=from_stage)
         pid = _spawn_detached(cmd, log_path, Path(cfg.workspace))
         conn = db.connect(cfg.db_path)
         db.set_run_meta(conn, run_id, pid=pid, log_path=str(log_path.resolve()), detached=True)

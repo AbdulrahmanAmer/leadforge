@@ -258,3 +258,17 @@ def test_run_from_stage_forces_stage_then_resumes(tmp_path, monkeypatch):
     # forced into 'enriching' then carried forward by the normal state machine (no businesses to
     # discover — the pipeline moves straight through to whatever's next, never staying 'enriching')
     assert d["counts"]["stage"] != "enriching"
+
+
+def test_detached_child_command_carries_every_run_option():
+    """Regression: the detached child used to be spawned without --from-stage, so
+    `run --resume --from-stage scored --detach` resumed the run at its old stage (found in an E2E run)."""
+    from leadforge.cli import _detached_run_cmd
+
+    cmd = _detached_run_cmd("py", "icp.yaml", limit=5, skip_dm=True, autopilot=False, from_stage="scored")
+    assert cmd[:8] == ["py", "-m", "leadforge", "--json", "run", "--icp", "icp.yaml", "--resume"]
+    assert cmd[cmd.index("--from-stage") + 1] == "scored"
+    assert cmd[cmd.index("--limit") + 1] == "5"
+    assert "--skip-dm" in cmd and "--no-autopilot" in cmd
+    bare = _detached_run_cmd("py", "icp.yaml", limit=None, skip_dm=False, autopilot=None, from_stage=None)
+    assert "--from-stage" not in bare and "--limit" not in bare
