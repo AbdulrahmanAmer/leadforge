@@ -107,8 +107,12 @@ Scripts: `scripts/bench/` (added with Layer 3).
   The 2.7%-email headline was a coverage problem: 89% of sites were never crawled. **Finishing the crawl
   (Layer 3) is the biggest quality lever.** Leaks inside crawled sites: 252/1,099 (23%) returned zero
   pages, 122 flagged needs_browser, 137 errors, median 2 pages per site; DM rows come mostly from the
-  registry (1,865) and heuristics (830), GLiNER/agent labels 244. Fix order: zero-page sites → contact-page
-  discovery depth → browser fallback coverage.
+  registry (1,865) and heuristics (830), GLiNER/agent labels 244.
+- Zero-page causes (252): 115 finished (`crawled_at` set) with zero pages and NO recorded reason — a
+  silent failure, first fix is to record why; 83 home pages returned HTTP 403 (bot blocking) and were not
+  sent to the browser fallback — route 403 to it; 36 robots-disallowed (correct, keep); 9 × 404, 2 × 410,
+  5 timeouts, 1 connect error, 1 non-HTML. 2 "websites" were link aggregators (linktr.ee, w3w.co) —
+  follow them to the real site. Then: contact-page discovery depth (median 2 pages per site).
 - **Gate:** yield per crawled site before/after on a fixed sample; no fabricated contacts (existing
   no-fabrication gate stays green).
 
