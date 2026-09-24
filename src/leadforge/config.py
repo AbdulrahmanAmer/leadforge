@@ -149,6 +149,12 @@ class EnrichCfg(BaseModel):
     ner_device: Literal["auto", "cpu", "cuda"] = "auto"  # auto = cuda when torch.cuda.is_available()
     ner_batch: int = 8                # max requests the worker groups into one GLiNER call
     ner_batch_wait_ms: float = 25.0   # max time the worker waits to fill a batch before running it short
+    # Layer 6 (skill v2, `plan` digest): enrichment time estimate alongside the existing discovery
+    # estimate. Measured this machine, 24 crawl workers + GPU NER (docs/UPGRADE-PLAN.md Layer 3):
+    # ~26 sites/min; ~64% of discovered businesses have a website (docs/UPGRADE-PLAN.md "Where we are").
+    # Both are configurable per-machine/per-campaign, not hardcoded into the estimate math.
+    est_website_share: float = 0.64        # measured 2026-09-24: 64% of discovered businesses have a website
+    est_crawl_rate_per_min: float = 25.0   # measured ~26 sites/min (24 workers, GPU NER); default rounds down
     ner_timeout_s: float = 30.0       # per-request timeout incl. queue wait (CPU: ~0.8 s/page x 12 crawl threads); on expiry -> heuristics
 
     @field_validator("ner_device", mode="before")
@@ -195,7 +201,9 @@ class DraftCfg(BaseModel):
     max_subject_chars: int = 60
     # v0.4 autopilot (ADR-015): draft during `run` itself, no separate export/apply round-trip.
     auto: bool = True                       # draft during `run` (autopilot)
-    auto_purpose: str = "gainlev_leadgen"   # one of draft.skeletons.PURPOSES
+    auto_purpose: str = "client_campaign"   # one of draft.skeletons.PURPOSES; neutral default (Layer 6) —
+                                             # "gainlev_leadgen" is GainLev's own branded skeleton, not
+                                             # a sensible default for other users; set explicitly to use it
     auto_tiers: list[str] = Field(default_factory=lambda: ["A", "B"])
     auto_max: int = 500                     # targets drafted per run
     template_fallback: bool = True

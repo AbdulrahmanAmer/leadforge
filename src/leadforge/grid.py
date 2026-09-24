@@ -394,6 +394,16 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
             untiled * cfg.discovery.est_min_per_query
             + worst_case_tiled * cfg.discovery.est_min_per_tiled_query
         )
+    # Layer 6 (skill v2): enrichment estimate alongside discovery's, so the skill can state one
+    # total before asking the user to launch. est sites = est businesses (== est_max_results, the
+    # discovery ceiling) x configured website share; minutes = sites / configured crawl rate.
+    website_share = getattr(cfg.enrich, "est_website_share", 0.64)
+    crawl_rate = getattr(cfg.enrich, "est_crawl_rate_per_min", 25.0)
+    est_enrich_sites = round(out["est_max_results"] * website_share)
+    est_enrich_min = round(est_enrich_sites / crawl_rate) if crawl_rate > 0 else 0
+    out["est_enrich_sites"] = est_enrich_sites
+    out["est_enrich_min"] = est_enrich_min
+    out["est_total_min"] = out["est_runtime_min"] + est_enrich_min
     return out
 
 

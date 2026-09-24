@@ -35,6 +35,28 @@ def test_plan_counts():
     assert c["queries"] == 2 and c["tiles"] == 0 and c["est_max_results"] == 240
 
 
+def test_plan_counts_adds_enrichment_estimate_from_website_share_and_crawl_rate(cfg):
+    """Layer 6 (skill v2): plan's digest gains an enrichment estimate alongside discovery's —
+    est sites = est businesses (est_max_results) x configured website share; minutes = sites /
+    configured crawl rate; total = discovery + enrichment."""
+    cfg.enrich.est_website_share = 0.5
+    cfg.enrich.est_crawl_rate_per_min = 10.0
+    qs = [PlannedQuery(text="a in X", category="a", area="X"),
+          PlannedQuery(text="b in X", category="b", area="X")]
+    c = plan_counts(qs, cfg)
+    assert c["est_max_results"] == 240
+    assert c["est_enrich_sites"] == round(240 * 0.5)  # 120
+    assert c["est_enrich_min"] == round(120 / 10.0)   # 12
+    assert c["est_total_min"] == c["est_runtime_min"] + c["est_enrich_min"]
+
+
+def test_plan_counts_enrichment_estimate_uses_defaults_when_cfg_omitted():
+    qs = [PlannedQuery(text="a in X", category="a", area="X")]
+    c = plan_counts(qs)  # no cfg passed — defaults from Config()
+    assert c["est_enrich_sites"] == round(120 * 0.64)
+    assert c["est_total_min"] == c["est_runtime_min"] + c["est_enrich_min"]
+
+
 def test_plan_counts_uses_configured_per_query_estimates(cfg):
     """A4 (docs/09): untiled and tiled queries are estimated with their own configured averages —
     a mixed plan's runtime is the sum of each, not one blended constant."""
