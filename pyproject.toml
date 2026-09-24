@@ -69,3 +69,6 @@ ignore = ["E501"]
 testpaths = ["tests"]
 addopts = "-q"
 timeout = 60
+markers = [
+    "gpu: real-GPU smoke test (loads real GLiNER on cuda); skipped unless LF_GPU_TESTS=1 (see tests/test_ner_worker.py)",
+]

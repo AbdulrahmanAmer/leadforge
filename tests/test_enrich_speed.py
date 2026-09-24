@@ -207,6 +207,7 @@ def _run_once(tmp_path, subdir: str, overlap: bool, monkeypatch) -> tuple:
     monkeypatch.chdir(d)
     cfg = load_config(d)
     cfg.registry.companies_house_key = "k"
+    cfg.enrich.ner = False  # these tests cover overlap/DB-state plumbing, not NER — offline (no gliner/torch)
     cfg.enrich.overlap_stages = overlap
     conn = db.connect(cfg.db_path)
     _seed_fixture(conn)
@@ -248,6 +249,7 @@ def test_overlap_single_writer_no_database_locked(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = load_config(tmp_path)
     cfg.registry.companies_house_key = "k"
+    cfg.enrich.ner = False  # these tests cover overlap/DB-state plumbing, not NER — offline (no gliner/torch)
     cfg.enrich.overlap_stages = True
     cfg.politeness.workers = 8
     conn = db.connect(cfg.db_path)
@@ -305,6 +307,7 @@ def test_single_stage_runs_unaffected_by_overlap_flag(tmp_path, monkeypatch):
         monkeypatch.chdir(d)
         cfg = load_config(d)
         cfg.registry.companies_house_key = "k"
+        cfg.enrich.ner = False  # these tests cover overlap/DB-state plumbing, not NER — offline (no gliner/torch)
         cfg.enrich.overlap_stages = overlap
         conn = db.connect(cfg.db_path)
         db.upsert_business(conn, Business(id="b1", name="Alpha Auto", name_norm="alpha auto",
@@ -333,13 +336,19 @@ def test_single_stage_runs_unaffected_by_overlap_flag(tmp_path, monkeypatch):
 
 
 def test_ner_is_bounded_and_switchable(cfg, monkeypatch):
-    """v0.4.1: enrich.ner=false selects the heuristic extractor; when on, inferences share a semaphore
-    sized by enrich.ner_parallel (12 crawl workers must not run 12 concurrent torch inferences)."""
+    """v0.4.1: enrich.ner=false selects the heuristic extractor. Layer 3 (2026-09-24) moved GLiNER out
+    of the crawl threads into a separate model-worker process (enrich/ner_worker.py) — _people_fn now
+    falls back to the heuristic extractor whenever no worker is running (started/stopped by
+    run_enrich, not by _people_fn itself; see tests/test_ner_worker.py for worker-path coverage), so a
+    crawl thread never runs torch in-thread even with enrich.ner=true and gliner installed.
+    ner_parallel/ner_threads below still bound the legacy in-thread path (extract_people_ner), kept as
+    the worker's own fallback target and covered directly here."""
     from leadforge.enrich import extract, runner
 
     monkeypatch.setattr(extract, "ner_available", lambda: True)
     monkeypatch.setattr(runner, "ner_available", lambda: True)
-    assert runner._people_fn(cfg) is extract.extract_people_ner
+    runner._ner_worker_state["worker"] = None  # no worker running -> heuristic, never in-thread NER
+    assert runner._people_fn(cfg) is extract.extract_people
     cfg.enrich.ner = False
     assert runner._people_fn(cfg) is extract.extract_people
 
