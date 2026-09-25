@@ -18,21 +18,15 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-25 ~01:20, UPGRADE COMPLETE (0.5.0, local); NOT PUSHED
+## POSITION — 2026-09-25 ~20:50, PHASE 2: MAP THE PIPELINE, THEN THIN IT
 
-- All layers done or decided: L0 dev loop, L1 run control, L2 isolated agent (15 s -> 5.2 s/call), L3 GPU NER +
-  24 workers (crawl 16.4 -> 26.3 sites/min, same yield), L4a/4b quality fixes (small measured gains; coverage is
-  the lever), L5 Laya = measured no-go (ADR-017), L6 skill v2 + bin/leadforge + release 0.5.0.
-- Acceptance: real Bath GB campaign via skill flow exported 20 leads in 4.4 min (plan said 5).
-- Suite 765 passed, 1 skipped (~70-95 s, `pytest -n 6`); ruff clean; `claude plugin validate .` passes.
-- master is 53 commits ahead of origin (incl. this one) — NOT pushed (owner decides; push publishes to GitHub).
-- Open: resume the parked UK campaign (E:/LeadForge/campaigns/uk-autorepair) on 0.5.0 when the owner
-  wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
-- Laya DM fine-tune DONE (E:/LeadForge/laya-dm, head-only, 460 train ex): held-out 133, shuffled order —
-  finetuned 43.6%, random 37.6%, first-cand 29.3%, zero-shot 21.8%. NOT integrated (disagrees with Claude 56%).
-- KEY FINDING: Claude's pick is always in the best title tier (98/98). Title rule + tie-break "web-found before
-  registry-only" = 72.9% test / 75.0% train, zero cost. Path to 80%: rule does ranking; Laya (or rule) only for
-  top-tier ties + "none"; fix same-person name duplicates (35/658 examples); more labels; measure Claude's own
-  consistency as the ceiling. trained `temperature` was not saved (confidence uncalibrated).
-- Open follow-ups: lcmautomotive-style post-redirect link miss; Laya fine-tune idea (ADR-017); war-room crash
-  cause UNPROVEN.
+- OWNER DECISIONS (binding): (1) old DBs/workspaces are NOT supported by the finished code — old campaign data
+  is for statistics only, read directly; compat shims, legacy fallbacks and old-schema migrations are removal
+  candidates (incl. the v5 name migration 78908f5). (2) Map the whole tool end to end first, then remove stages
+  and steps that exist only to repair another step's output; fix at the source instead.
+- D: archived: campaign moved to E:/LeadForge/campaigns/uk-autorepair (128 files, SHA-256 verified);
+  everything else in E:/LeadForge/_archive/gainlev-leadforge-2026-09-25.tar.gz (2135/2135 files) +
+  LeadForge-older-snapshot.zip. D:/GainLev/LeadForge deleted.
+- IN FLIGHT (read-only): docs/PIPELINE-MAP.md (stage map, writer/reader matrix, repair steps, target pipeline);
+  compat/fix-up audit; dead-code audit (vulture: 0 at 80%, 77 at 60%; 50 compat markers; src 15,149 lines/60 files).
+- Upgrade 0.5.0 done (see CHANGELOG); 55+ commits unpushed. Suite 765 passed, 1 skipped.
