@@ -370,3 +370,22 @@ def test_ner_is_bounded_and_switchable(cfg, monkeypatch):
     assert people and people[0].name == "Sam Alpha" and people[0].title == "Owner"
     assert sem.acquire(blocking=False) is True      # slot released after the call
     sem.release()
+
+
+# ============================================================================ cleanup step 3 (R7)
+def test_no_idle_loop_revalidation_sweep_remains():
+    """PIPELINE-MAP R7 (cleanup step 3): the overlapped 'all' stage's idle loop used to call
+    _validate_stage repeatedly because _mx_cached poisoned a timeout as a permanent None. Now
+    that _mx_cached retries and never caches None, inline validation in _persist is enough --
+    the idle loop and the post-run 'final sweep' must both be gone from _run_overlapped/run_enrich."""
+    import inspect
+
+    overlapped_src = inspect.getsource(runner._run_overlapped)
+    assert "_validate_stage" not in overlapped_src, (
+        "the idle-loop re-validation call must be deleted, not just moved"
+    )
+
+    run_enrich_src = inspect.getsource(runner.run_enrich)
+    overlapped_branch = run_enrich_src.split('if stage == "all" and cfg.enrich.overlap_stages:')[1]
+    overlapped_branch = overlapped_branch.split('if stage in ("all", "site"):')[0]
+    assert "_validate_stage" not in overlapped_branch, "the final validate sweep must be deleted"

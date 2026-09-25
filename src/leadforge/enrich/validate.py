@@ -6,6 +6,8 @@ No SMTP RCPT probing (ADR: catch-alls lie + IP-reputation risk). Phone validity 
 
 from __future__ import annotations
 
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
@@ -56,9 +58,28 @@ def _mx_exists(domain: str, timeout: float) -> bool | None:
         return None
 
 
-@lru_cache(maxsize=4096)
+_MX_CACHE: dict[tuple[str, float], bool] = {}
+_MX_CACHE_LOCK = threading.Lock()
+
+
 def _mx_cached(domain: str, timeout: float) -> bool | None:
-    return _mx_exists(domain, timeout)
+    """Cache only a resolved True/False. A DNS timeout/error (None) is retried once, with a
+    short backoff, inside this call -- and never cached, since a cached None could never be
+    turned back into a real answer without leaving the process (R7: the old idle-loop sweep
+    only existed because a same-process retry against an lru_cache-poisoned None could not
+    succeed)."""
+    key = (domain, timeout)
+    with _MX_CACHE_LOCK:
+        if key in _MX_CACHE:
+            return _MX_CACHE[key]
+    result = _mx_exists(domain, timeout)
+    if result is None:
+        time.sleep(0.25)  # short backoff before the one retry
+        result = _mx_exists(domain, timeout)
+    if result is not None:
+        with _MX_CACHE_LOCK:
+            _MX_CACHE[key] = result
+    return result
 
 
 def validate_email(email: str, label: str, cfg: Config) -> tuple[str, dict]:

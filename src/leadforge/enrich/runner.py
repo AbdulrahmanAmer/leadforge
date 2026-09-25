@@ -272,7 +272,6 @@ def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "
             _run_overlapped(conn, cfg, limit, counts)
             _gbp_stage(conn, cfg, counts)
             _infer_stage(conn, cfg, counts)
-            _validate_stage(conn, cfg, counts)  # final sweep: anything still 'unknown' (e.g. DNS timeouts)
             return counts
         if stage in ("all", "site"):
             _crawl_stage(conn, cfg, limit, counts)
@@ -409,9 +408,9 @@ def _run_overlapped(conn: sqlite3.Connection, cfg: Config, limit: int, counts: d
 
     while t_crawl.is_alive() or t_registry.is_alive() or not wq.empty():
         if _drain_queue(wq) == 0:
-            # nothing to write right now but a driver is still working — resolve any contacts that
-            # already appeared with an unresolved tier instead of idling (DNS-pooled; see validate.py).
-            _validate_stage(conn, cfg, counts)
+            # nothing to write right now but a driver is still working. Validation already happens
+            # inline in _persist (with its own timeout retry, R7) so there is nothing left to sweep;
+            # just wait for more work.
             time.sleep(0.02)
     t_crawl.join()
     t_registry.join()
@@ -821,10 +820,10 @@ def _validate_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None
     """v0.3 speed unit (2026-09-02, build item 5): MX lookups run in a small thread pool
     (cfg.enrich.dns_workers) via validate_emails_parallel — DNS is I/O-bound and validate_email's own
     per-domain cache is unaffected (still one lookup per distinct domain, just concurrent ones now).
-    Only THIS thread ever touches `conn` (the pool workers do network I/O only) — safe to call both
-    standalone (`enrich --stage validate`) and repeatedly from the overlapped 'all' stage's idle loop,
-    where each call only ever sees whatever is unresolved AT THAT MOMENT (already-resolved rows don't
-    match the WHERE clause again, so repeat calls cost a cheap empty-ish SELECT, not re-work)."""
+    Only THIS thread ever touches `conn` (the pool workers do network I/O only). Used only for the
+    standalone `enrich --stage validate` path: inline validation in `_persist` (with its own timeout
+    retry, R7) already resolves every row as it is written, so the overlapped 'all' stage no longer
+    needs a sweep here."""
     rows = conn.execute("SELECT * FROM contacts WHERE kind='email' AND tier IN ('unknown','')").fetchall()
     if not rows:
         return

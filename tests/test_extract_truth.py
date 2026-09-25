@@ -542,6 +542,44 @@ def test_junk_localparts_constant_matches_extraction_use():
     assert "test" in JUNK_LOCALPARTS and "noreply" in JUNK_LOCALPARTS
 
 
+# --- MX cache never poisons on a timeout (cleanup step 3, PIPELINE-MAP R7) ------------------------
+def test_mx_timeout_then_success_validates_the_email(tmp_path, monkeypatch):
+    """A DNS timeout (_mx_exists -> None) must be retried once inside _mx_cached, and a
+    subsequent success must not be shadowed by a cached None from the first attempt."""
+    from leadforge.config import load_config
+    from leadforge.enrich import validate as validate_mod
+
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    validate_mod._MX_CACHE.clear()
+    monkeypatch.setattr(validate_mod, "time", type("T", (), {"sleep": staticmethod(lambda s: None)}))
+
+    calls = {"n": 0}
+
+    def flaky(domain, timeout):
+        calls["n"] += 1
+        return None if calls["n"] == 1 else True  # timeout first, then resolves
+
+    monkeypatch.setattr(validate_mod, "_mx_exists", flaky)
+    tier, meta = validate_mod.validate_email("person@flaky-domain.example", "personal", cfg)
+    assert tier == "valid", f"expected a timeout-then-success domain to validate, got {tier} {meta}"
+    assert calls["n"] == 2  # the one retry, not more
+
+
+def test_mx_cached_never_caches_a_timeout(monkeypatch, tmp_path):
+    """A None (timeout/error) result must never be stored in the cache -- storing it would make
+    every later lookup for that domain return the same poisoned None forever, which is exactly
+    the R7 bug: no same-process retry could then ever succeed."""
+    from leadforge.enrich import validate as validate_mod
+
+    validate_mod._MX_CACHE.clear()
+    monkeypatch.setattr(validate_mod, "time", type("T", (), {"sleep": staticmethod(lambda s: None)}))
+    monkeypatch.setattr(validate_mod, "_mx_exists", lambda domain, timeout: None)
+    result = validate_mod._mx_cached("always-times-out.example", 1.0)
+    assert result is None
+    assert ("always-times-out.example", 1.0) not in validate_mod._MX_CACHE
+
+
 # --- email_context ---------------------------------------------------------------------------------
 def test_email_context_returns_collapsed_window():
     text = "Reach   the   shop\nat   owner@shop.com   for   quotes any time"
