@@ -18,20 +18,14 @@ c.execute(\"update runs set stage='enriching' where id='run_20260902_22032_7eca'
 `leadforge run --icp icp.yaml --resume --json` (enrichment is idempotent: it crawls the ~9k remaining sites, ~20/min
 with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 1500 first for full drafting.
 
-## POSITION — 2026-09-25 ~20:50, PHASE 2: MAP THE PIPELINE, THEN THIN IT
+## POSITION — 2026-09-25 ~23:00, PARKED BY OWNER mid cleanup batch 2
 
-- OWNER DECISIONS (binding): (1) old DBs/workspaces are NOT supported by the finished code — old campaign data
-  is for statistics only, read directly; compat shims, legacy fallbacks and old-schema migrations are removal
-  candidates (incl. the v5 name migration 78908f5). (2) Map the whole tool end to end first, then remove stages
-  and steps that exist only to repair another step's output; fix at the source instead.
-- D: archived: campaign moved to E:/LeadForge/campaigns/uk-autorepair (128 files, SHA-256 verified);
-  everything else in E:/LeadForge/_archive/gainlev-leadforge-2026-09-25.tar.gz (2135/2135 files) +
-  LeadForge-older-snapshot.zip. D:/GainLev/LeadForge deleted.
-- MAP DONE: docs/PIPELINE-MAP.md (ab0e81e) — 11 stages -> 7, 22 one-commit cleanup steps (~610 src lines).
-  Confirmed bugs: MX timeout cached by lru_cache (validation retry can't succeed); bounce breaker reads
-  classification but sync writes kind (never trips); inferred emails inserted without affinity.
-- EXECUTION in 4 sequential batches (shared files): B1 = steps 1,2,9,21,3,4 + getattr shims + dead names
-  (MERGED 6e06d3f: src -342/+140; suite 760 passed x6; breaker watched-fail ok);
-  B2 = 5-13 (enrich/label, IN FLIGHT, opus builder); B3 = 14-18 (stage machine, score persists); B4 = 19,20,22.
-  Orchestrator verifies (suite + watched-fail) and merges each batch before the next.
-- Upgrade 0.5.0 done (see CHANGELOG); 55+ commits unpushed. Suite 765 passed, 1 skipped.
+- Owner: "park your session for the time being ... we will continue another time".
+- master = cleanup batch 1 merged (6e06d3f..2f46476): 4 bug fixes + legacy/compat removal, suite 760 passed.
+- Batch 2 (PIPELINE-MAP steps 5-13) builder STOPPED mid-work. Partial commits, if any, live on branch
+  worktree-agent-ad9c35eb459d7f3ed (worktree under .claude/worktrees/) — review them against the map before merging or reset and rerun.
+- Remaining: batch 2 (5-13), batch 3 (14-18), batch 4 (19,20,22). Spec: docs/PIPELINE-MAP.md section 6.
+- NOT done at park: two stale  watcher processes from the old Laya training runs (started 02:07/02:22,
+  ~1.7k CPU-s each) were left running — the owner declined the kill; ask before touching them.
+- Owner decisions still binding: old data = statistics only (no compat); fix at source, no repair layers.
+- 60+ commits unpushed to GitHub (owner decides).
