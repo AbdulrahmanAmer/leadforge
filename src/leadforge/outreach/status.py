@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, datetime
 
 from leadforge import db
+from leadforge.outreach.send import mailbox_bounce_complaint_rates
 from leadforge.util import LeadForgeError
 
 _OUTCOME_RESULTS = {"no_answer", "not_interested", "interested", "meeting", "won", "wrong_number", "opt_out"}
@@ -30,19 +31,7 @@ def status_report(conn: sqlite3.Connection, *, campaign: str | None = None) -> d
             "SELECT COUNT(*) c FROM messages WHERE mailbox_id=? AND state='sent' AND substr(sent_at,1,10)=?",
             (mb["id"], today),
         ).fetchone()["c"]
-        last100 = conn.execute(
-            "SELECT id FROM messages WHERE mailbox_id=? AND state='sent' ORDER BY sent_at DESC LIMIT 100",
-            (mb["id"],),
-        ).fetchall()
-        ids = [r["id"] for r in last100]
-        bounce_rate = complaint_rate = 0.0
-        if ids:
-            q = ",".join("?" * len(ids))
-            hb = conn.execute(f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND classification='bounce_hard'",
-                              ids).fetchone()["c"]
-            cp = conn.execute(f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND classification='complaint'",
-                              ids).fetchone()["c"]
-            bounce_rate, complaint_rate = hb / len(ids), cp / len(ids)
+        bounce_rate, complaint_rate, _n = mailbox_bounce_complaint_rates(conn, mb["id"])
         mailboxes.append({
             "address": mb["address"], "status": mb["status"], "paused_reason": mb["paused_reason"] or "",
             "sent_today": sent_today, "daily_cap": mb["daily_cap"],

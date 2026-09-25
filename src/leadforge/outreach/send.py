@@ -100,23 +100,36 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, *, campaign: str, max_n: int 
     }
 
 
-def _check_breaker(conn: sqlite3.Connection, cfg: Config, mailbox_id: int) -> bool:
+def mailbox_bounce_complaint_rates(conn: sqlite3.Connection, mailbox_id: int, window: int = 100) -> tuple[float, float, int]:
+    """-> (bounce_rate, complaint_rate, n) over the mailbox's last `window` sent messages.
+
+    D14: the single source of truth for these two metrics, used by both the send-time circuit
+    breaker (_check_breaker) and `outreach status`. Reads `events.kind` -- sync.py (sync_inbox /
+    sync_spool) stores an inbound bounce/complaint event with `kind` set to 'bounce_hard' or
+    'complaint' and `classification` left '' (classification is only ever populated for a reply).
+    Reading `classification` here (the pre-v0.3 shape) meant the breaker could never trip."""
     last = conn.execute(
-        "SELECT id FROM messages WHERE mailbox_id=? AND state='sent' ORDER BY sent_at DESC LIMIT 100",
-        (mailbox_id,),
+        "SELECT id FROM messages WHERE mailbox_id=? AND state='sent' ORDER BY sent_at DESC LIMIT ?",
+        (mailbox_id, window),
     ).fetchall()
     ids = [r["id"] for r in last]
     n = len(ids)
     if n == 0:
-        return False
+        return 0.0, 0.0, 0
     q = ",".join("?" * len(ids))
     hard_bounces = conn.execute(
-        f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND classification='bounce_hard'", ids
+        f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND kind='bounce_hard'", ids
     ).fetchone()["c"]
     complaints = conn.execute(
-        f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND classification='complaint'", ids
+        f"SELECT COUNT(*) c FROM events WHERE message_id IN ({q}) AND kind='complaint'", ids
     ).fetchone()["c"]
-    bounce_rate, complaint_rate = hard_bounces / n, complaints / n
+    return hard_bounces / n, complaints / n, n
+
+
+def _check_breaker(conn: sqlite3.Connection, cfg: Config, mailbox_id: int) -> bool:
+    bounce_rate, complaint_rate, n = mailbox_bounce_complaint_rates(conn, mailbox_id)
+    if n == 0:
+        return False
     if bounce_rate >= cfg.outreach.bounce_rate_pause or complaint_rate >= cfg.outreach.complaint_rate_pause:
         reason = f"circuit breaker: hard-bounce rate {bounce_rate:.3f} or complaint rate {complaint_rate:.3f} over last {n} sends"
         conn.execute("UPDATE mailboxes SET status='paused', paused_reason=? WHERE id=?", (reason, mailbox_id))

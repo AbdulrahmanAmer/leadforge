@@ -177,6 +177,45 @@ def test_circuit_breaker_pauses_mailbox_after_hard_bounces(cfg, conn):
     assert mb["status"] == "paused" and mb["paused_reason"]
 
 
+def test_circuit_breaker_trips_on_kind_not_classification(cfg, conn):
+    """PIPELINE-MAP D14/row 21: sync.py's real inbound-bounce write sets `kind='bounce_hard'` and
+    leaves `classification=''` (classification is only ever populated for a reply, see
+    outreach/sync.py:111-128) -- so a breaker that reads `classification` can never trip on a real
+    bounce event, no matter how many arrive. This reproduces that exact row shape (unlike the
+    sibling test above, which happens to set both columns to the same value and would pass even
+    under the old, broken breaker)."""
+    _armed_cfg(cfg)
+    cfg.outreach.bounce_rate_pause = 0.5
+    run_id = make_run(conn)
+    ident = make_identity(conn, label="ident_breaker2")
+    mb_id = make_mailbox(conn, identity_label="ident_breaker2", address="breaker2@acme-agency.com")
+
+    for i in range(2):
+        bid = make_scored_business(conn, run_id, id_=f"breaker2_biz{i}", tier="A", domain=f"breaker2{i}.co.uk",
+                                   email=f"a@breaker2{i}.co.uk")
+        tid = make_target(conn, business_id=bid, campaign="breaker2", identity_id=ident, state="drafted",
+                          eligibility={"_tier": "A", "_region_profile": "us"})
+        make_message(conn, target_id=tid, draft_hash=f"h{i}")
+    approve_messages(conn, campaign="breaker2", approver="alice", all_drafted=True)
+    result = send_mod.live_send(conn, cfg, campaign="breaker2", i_am="alice",
+                                mailbox_addr="breaker2@acme-agency.com")
+    assert result["counts"]["sent"] == 2
+
+    real_mid = conn.execute("SELECT id FROM messages WHERE target_id IN "
+                            "(SELECT id FROM outreach_targets WHERE campaign='breaker2') LIMIT 1").fetchone()["id"]
+    # exactly what sync.py writes for an inbound bounce: kind set, classification left ''
+    conn.execute("INSERT INTO events(message_id,kind,classification,dedupe_key,occurred_at,ingested_at) "
+                "VALUES(?,?,?,?,?,?)", (real_mid, "bounce_hard", "", "dedupe2", "2026-09-02T00:00:00Z",
+                                        "2026-09-02T00:00:00Z"))
+    conn.commit()
+
+    assert send_mod._check_breaker(conn, cfg, mb_id), (
+        "breaker must trip on events.kind='bounce_hard' even with classification=''"
+    )
+    mb = conn.execute("SELECT status, paused_reason FROM mailboxes WHERE id=?", (mb_id,)).fetchone()
+    assert mb["status"] == "paused" and mb["paused_reason"]
+
+
 # ---------------------------------------------------------------------------------------- watched-fail
 #   test_suppressed_address_never_sent_even_if_approved: the `db.is_suppressed(...)` re-check
 #     temporarily removed from live_send() -> the message was sent (sent==1) where 0 was expected ->
