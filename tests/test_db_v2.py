@@ -2,51 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from leadforge import db
 from leadforge.models import Business, Contact, Person
-
-
-def _v1_db(path) -> None:
-    """A database exactly as v0.2 wrote it: no v2 columns, schema_version 1."""
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
-        INSERT INTO meta VALUES ('schema_version', '1');
-        CREATE TABLE suppression (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, value TEXT NOT NULL UNIQUE,
-          reason TEXT DEFAULT '', added_at TEXT);
-        CREATE TABLE people (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id TEXT NOT NULL, name TEXT NOT NULL,
-          title TEXT DEFAULT '', source_url TEXT DEFAULT '', snippet TEXT DEFAULT '', dm_confidence REAL DEFAULT 0,
-          is_dm INTEGER DEFAULT 0, labeled_by TEXT DEFAULT 'heuristic', labeled_at TEXT DEFAULT '',
-          UNIQUE(business_id, name, title));
-        INSERT INTO people(business_id,name,labeled_by) VALUES('biz_1','Jane Smith','registry');
-        CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id TEXT NOT NULL, kind TEXT NOT NULL,
-          value TEXT NOT NULL, label TEXT DEFAULT 'unknown', tier TEXT DEFAULT 'unknown', verified_at TEXT DEFAULT '',
-          meta_json TEXT NOT NULL DEFAULT '{}', UNIQUE(business_id, kind, value));
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-def test_v1_database_migrates_additively(tmp_path):
-    path = tmp_path / "old.sqlite3"
-    _v1_db(path)
-    conn = db.connect(path)
-    # v0.4 (schema v3, test_db_v3.py) added messages.author after this test was written: migrate()
-    # always converges a database to the current SCHEMA_VERSION in one connect(), so a v1 database
-    # now lands on "3", not "2" -- the v2-specific columns/tables below are unaffected either way.
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
-    for table, col in (("suppression", "source"), ("suppression", "client_id"), ("people", "origin"), ("contacts", "affinity")):
-        assert col in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-    # origin back-filled from labeled_by so old registry candidates keep their provenance
-    assert conn.execute("SELECT origin FROM people WHERE name='Jane Smith'").fetchone()[0] == "registry"
-    for table in ("sending_identities", "mailboxes", "outreach_targets", "messages", "events", "outcomes"):
-        assert conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
-    # idempotent: a second connect is a no-op
-    db.connect(path)
 
 
 def _biz(**kw) -> Business:

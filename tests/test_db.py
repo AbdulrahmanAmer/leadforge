@@ -1,3 +1,5 @@
+import pytest
+
 from leadforge import db
 from leadforge.models import Business, Contact, Person
 
@@ -68,23 +70,16 @@ def test_needs_browser_sites_requeue_only_when_browser_available(conn):
     assert [r["id"] for r in retry] == ["biz_1"]
 
 
-def test_v5_migration_normalizes_old_rows_and_merges_twins(tmp_path):
-    import sqlite3
+def test_old_schema_version_is_refused(tmp_path):
+    """cleanup step 5 (R4/R13/R14): a DB stamped with an older schema_version is refused with a
+    clear digest, not silently migrated -- old workspaces are read-only statistics, not upgraded."""
+    from leadforge.util import InputError
 
     path = tmp_path / "old.sqlite3"
     conn = db.connect(path)
-    db.upsert_business(conn, Business(id="b1", name="Acme Garage"))
-    # rows as a v4 database held them: written before add_person normalised names
-    conn.execute("INSERT INTO people(business_id,name,title,is_dm,labeled_by,origin) VALUES('b1','Jabbar, Sajid','Director',1,'agent','registry')")
-    conn.execute("INSERT INTO people(business_id,name,title,is_dm,labeled_by,origin) VALUES('b1','Sajid Jabbar','Director',0,'heuristic','heuristic')")
-    conn.execute("INSERT INTO people(business_id,name,title,is_dm,labeled_by,origin) VALUES('b1','Riaz, Falak','Secretary',0,'registry','registry')")
     conn.execute("UPDATE meta SET value='4' WHERE key='schema_version'")
     conn.commit()
     conn.close()
 
-    conn = db.connect(path)  # connect() runs migrate()
-    rows = {r["name"]: r for r in conn.execute("SELECT * FROM people WHERE business_id='b1'")}
-    assert set(rows) == {"Sajid Jabbar", "Falak Riaz"}  # twin merged into one row, the other renamed
-    assert rows["Sajid Jabbar"]["is_dm"] == 1  # the DM pick from the reversed row survived the merge
-    assert conn.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
-    assert isinstance(conn, sqlite3.Connection)
+    with pytest.raises(InputError, match="older LeadForge"):
+        db.connect(path)

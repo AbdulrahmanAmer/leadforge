@@ -196,12 +196,6 @@ class ICP(BaseModel):
         blob = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha1(blob.encode()).hexdigest()[:12]
 
-    def icp_hash_legacy(self) -> str:
-        """The pre-2026-09-03 identity (caps and notes included). `pipeline._latest_run` falls back to it so
-        a run created by an older LeadForge is still found and re-stamped with the current hash."""
-        blob = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha1(blob.encode()).hexdigest()[:12]
-
 
 class Answers(ICP):
     """The interview file the agent writes — same shape as ICP; intake normalizes + re-validates."""

@@ -20,7 +20,7 @@ import sqlite3
 from pathlib import Path
 
 from leadforge.models import Business, Contact, Evidence, Person, Score
-from leadforge.util import natural_name, now_iso, sha1_hex
+from leadforge.util import InputError, now_iso, sha1_hex
 
 SCHEMA_VERSION = 5
 
@@ -131,24 +131,6 @@ CREATE TABLE IF NOT EXISTS outcomes (
 );
 """
 
-# columns added by v2 on tables that existed in v1 (CREATE IF NOT EXISTS cannot add them)
-_V2_COLUMNS = {
-    "suppression": [("source", "TEXT DEFAULT 'manual'"), ("client_id", "TEXT DEFAULT ''"), ("business_id", "TEXT")],
-    "people": [("origin", "TEXT DEFAULT ''")],
-    "contacts": [("affinity", "TEXT DEFAULT ''")],
-}
-
-# columns added by v3 (v0.4 unit B) on tables that existed pre-v3 (CREATE IF NOT EXISTS cannot add them)
-_V3_COLUMNS = {
-    "messages": [("author", "TEXT DEFAULT 'agent'")],
-}
-# v4 (v0.4.1): how many NEW businesses a query added — the novelty signal that gates subdivision and
-# lets `prune-tiles` drop children of tiles that found nothing new. NULL = recorded by an older version.
-_V4_COLUMNS = {
-    "queries": [("new_count", "INTEGER")],
-}
-
-
 def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -158,31 +140,10 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-
-
-def _normalize_people_names(conn: sqlite3.Connection) -> None:
-    """v4 -> v5: registry officers written by pre-0.1.4 code were stored as "Jabbar, Sajid" (and agent
-    labels copied that form). Rewrite them once to the natural order the registry provider writes today. When the natural-order row already
-    exists for the same business+title, the two are merged: labels on either survive, one row remains."""
-    rows = conn.execute("SELECT * FROM people WHERE name LIKE '%,%'").fetchall()
-    for r in rows:
-        fixed = natural_name(r["name"])
-        if fixed == r["name"]:
-            continue  # not person-shaped (legal suffix, two commas): left as is
-        twin = conn.execute("SELECT * FROM people WHERE business_id=? AND name=? AND title=?",
-                            (r["business_id"], fixed, r["title"])).fetchone()
-        if twin is None:
-            conn.execute("UPDATE people SET name=? WHERE id=?", (fixed, r["id"]))
-            continue
-        keep = r if (r["is_dm"] or 0) > (twin["is_dm"] or 0) else twin  # a DM pick outranks an unlabeled row
-        conn.execute("UPDATE people SET is_dm=?, dm_confidence=?, labeled_by=?, labeled_at=? WHERE id=?",
-                     (keep["is_dm"], keep["dm_confidence"], keep["labeled_by"], keep["labeled_at"], twin["id"]))
-        conn.execute("DELETE FROM people WHERE id=?", (r["id"],))
-
-
 def migrate(conn: sqlite3.Connection) -> None:
+    """Fresh-DB creation only. Old workspaces are read-only statistics, not upgraded in place
+    (owner decision): a DB whose schema_version is not the current SCHEMA_VERSION is refused
+    with a clear error rather than silently migrated (R4, R13, R14)."""
     conn.executescript(_DDL)
     cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
     row = cur.fetchone()
@@ -192,39 +153,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         return
 
     version = int(row[0])
-    if version < 2:
-        # v1 -> v2: additive columns only (the new tables came from executescript above). A column that
-        # already exists (partial earlier migration) is skipped, so this is safe to re-run.
-        for table, cols in _V2_COLUMNS.items():
-            have = _columns(conn, table)
-            for name, decl in cols:
-                if name not in have:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-        conn.execute("UPDATE people SET origin=labeled_by WHERE origin='' OR origin IS NULL")
-        version = 2
-    if version < 3:
-        # v2 -> v3 (v0.4 unit B): messages.author, so a template-fallback draft is distinguishable
-        # from an agent-written one in the exported sheet. Additive + re-runnable, same pattern as
-        # v1->v2 above; a v1 DB runs this step too, right after the v2 step just above.
-        for table, cols in _V3_COLUMNS.items():
-            have = _columns(conn, table)
-            for name, decl in cols:
-                if name not in have:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-        version = 3
-    if version < 4:
-        for table, cols in _V4_COLUMNS.items():
-            have = _columns(conn, table)
-            for name, decl in cols:
-                if name not in have:
-                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
-        version = 4
-    if version < 5:
-        _normalize_people_names(conn)
-        version = 5
-    if version != int(row[0]):
-        conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(version),))
-    conn.commit()
+    if version != SCHEMA_VERSION:
+        raise InputError(
+            f"this database was created by an older LeadForge (schema_version={version}, "
+            f"current is {SCHEMA_VERSION}). Old workspaces are read-only statistics, not "
+            "auto-upgraded — start a new workspace for a live run, or query this one directly "
+            "for historical numbers."
+        )
 
 
 # ------------------------------------------------------------------ runs & queries

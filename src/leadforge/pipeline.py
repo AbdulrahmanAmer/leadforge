@@ -58,16 +58,9 @@ def _progress_ui(cfg: Config) -> None:
 
 
 def _latest_run(conn, icp: ICP):
-    """Latest run of this campaign. Falls back to the pre-2026-09-03 hash (caps included) and re-stamps the
-    row so a campaign started by an older version keeps resuming after an upgrade."""
-    run = db.latest_run(conn, icp.icp_hash())
-    if run is None:
-        legacy = db.latest_run(conn, icp.icp_hash_legacy())
-        if legacy is not None:
-            conn.execute("UPDATE runs SET icp_hash=? WHERE id=?", (icp.icp_hash(), legacy["id"]))
-            conn.commit()
-            run = db.latest_run(conn, icp.icp_hash())
-    return run
+    """Latest run of this campaign, by the current icp_hash. Old workspaces are not migrated
+    (owner decision) — a run created by an older LeadForge is out of scope, not re-stamped."""
+    return db.latest_run(conn, icp.icp_hash())
 
 
 def run_discover(cfg: Config, icp: ICP, icp_path: Path, limit: int | None = None,
