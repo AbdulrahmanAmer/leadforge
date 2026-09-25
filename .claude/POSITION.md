@@ -31,6 +31,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
   Confirmed bugs: MX timeout cached by lru_cache (validation retry can't succeed); bounce breaker reads
   classification but sync writes kind (never trips); inferred emails inserted without affinity.
 - EXECUTION in 4 sequential batches (shared files): B1 = steps 1,2,9,21,3,4 + getattr shims + dead names
-  (IN FLIGHT, worktree); B2 = 5-13 (enrich/label); B3 = 14-18 (stage machine, score persists); B4 = 19,20,22.
+  (MERGED 6e06d3f: src -342/+140; suite 760 passed x6; breaker watched-fail ok);
+  B2 = 5-13 (enrich/label, IN FLIGHT, opus builder); B3 = 14-18 (stage machine, score persists); B4 = 19,20,22.
   Orchestrator verifies (suite + watched-fail) and merges each batch before the next.
 - Upgrade 0.5.0 done (see CHANGELOG); 55+ commits unpushed. Suite 765 passed, 1 skipped.
