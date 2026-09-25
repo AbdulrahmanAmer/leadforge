@@ -27,6 +27,10 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 - D: archived: campaign moved to E:/LeadForge/campaigns/uk-autorepair (128 files, SHA-256 verified);
   everything else in E:/LeadForge/_archive/gainlev-leadforge-2026-09-25.tar.gz (2135/2135 files) +
   LeadForge-older-snapshot.zip. D:/GainLev/LeadForge deleted.
-- IN FLIGHT (read-only): docs/PIPELINE-MAP.md (stage map, writer/reader matrix, repair steps, target pipeline);
-  compat/fix-up audit; dead-code audit (vulture: 0 at 80%, 77 at 60%; 50 compat markers; src 15,149 lines/60 files).
+- MAP DONE: docs/PIPELINE-MAP.md (ab0e81e) — 11 stages -> 7, 22 one-commit cleanup steps (~610 src lines).
+  Confirmed bugs: MX timeout cached by lru_cache (validation retry can't succeed); bounce breaker reads
+  classification but sync writes kind (never trips); inferred emails inserted without affinity.
+- EXECUTION in 4 sequential batches (shared files): B1 = steps 1,2,9,21,3,4 + getattr shims + dead names
+  (IN FLIGHT, worktree); B2 = 5-13 (enrich/label); B3 = 14-18 (stage machine, score persists); B4 = 19,20,22.
+  Orchestrator verifies (suite + watched-fail) and merges each batch before the next.
 - Upgrade 0.5.0 done (see CHANGELOG); 55+ commits unpushed. Suite 765 passed, 1 skipped.
