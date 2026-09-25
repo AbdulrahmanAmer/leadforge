@@ -28,7 +28,11 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 - master is 53 commits ahead of origin (incl. this one) — NOT pushed (owner decides; push publishes to GitHub).
 - Open: resume the parked UK campaign (D:/GainLev/LeadForge/campaign-uk-autorepair) on 0.5.0 when the owner
   wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
-- IN FLIGHT: Laya head fine-tune (owner chose local, head-only) in E:/LeadForge/laya-dm; bar = +10 pts over
-  first-candidate rule in shuffled order on a 20% held-out split (ADR-017 update).
+- Laya DM fine-tune DONE (E:/LeadForge/laya-dm, head-only, 460 train ex): held-out 133, shuffled order —
+  finetuned 43.6%, random 37.6%, first-cand 29.3%, zero-shot 21.8%. NOT integrated (disagrees with Claude 56%).
+- KEY FINDING: Claude's pick is always in the best title tier (98/98). Title rule + tie-break "web-found before
+  registry-only" = 72.9% test / 75.0% train, zero cost. Path to 80%: rule does ranking; Laya (or rule) only for
+  top-tier ties + "none"; fix same-person name duplicates (35/658 examples); more labels; measure Claude's own
+  consistency as the ceiling. trained `temperature` was not saved (confidence uncalibrated).
 - Open follow-ups: lcmautomotive-style post-redirect link miss; Laya fine-tune idea (ADR-017); war-room crash
   cause UNPROVEN.
