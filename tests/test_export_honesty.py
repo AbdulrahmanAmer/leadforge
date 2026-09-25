@@ -28,7 +28,7 @@ def _seeded_run(tmp_path, monkeypatch):
                                       dedupe_key="dk-real"))
     db.upsert_business(conn, Business(id="bare", run_id=rid, name="Bare Garage", source="gosom",
                                       dedupe_key="dk-bare"))
-    db.add_person(conn, Person(business_id="real", name="Murphy, Sean Vincent", title="Director",
+    db.add_person(conn, Person(business_id="real", name="Sean Vincent Murphy", title="Director",  # as the registry provider stores it
                                labeled_by="registry", is_dm=1, dm_confidence=0.9))
     db.add_contact(conn, Contact(business_id="real", kind="email", value="sean@real.example",
                                  label="direct", tier="valid"))
@@ -153,7 +153,15 @@ def test_natural_name_rules():
     assert natural_name("MURPHY, Sean") == "Sean MURPHY"              # casing is the caller's job
     assert natural_name("Jane Smith") == "Jane Smith"                 # already natural
     assert natural_name("Acme Widgets, Inc") == "Acme Widgets, Inc"   # corporate comma stays
-    assert natural_name("SMITH, John, Jr") == "SMITH, John, Jr"       # two commas: don't guess
+    assert natural_name("SMITH, John, Jr") == "John SMITH Jr"          # name suffixes follow the name
+    assert natural_name("Walsh, John, Deacon") == "Deacon John Walsh"
+    assert natural_name("Hegarty, Eamonn Patrick, Fr") == "Fr Eamonn Patrick Hegarty"
+    assert natural_name("Price, Martin, <R") == "Price, Martin, <R"     # not a registry name: untouched
+    assert natural_name("Acme, Widgets, Ltd") == "Acme, Widgets, Ltd"   # legal suffix: not a person
+    assert natural_name("Walker, David John, Reverend") == "Reverend David John Walker"
+    assert natural_name("Abdelrahman, Moataz, Dr") == "Dr Moataz Abdelrahman"
+    assert natural_name("Murphy, Michael Richard, Mr.") == "Michael Richard Murphy"  # plain honorific dropped
+    assert natural_name("Ashworth, Peter, Emeritus Professor") == "Professor Peter Ashworth"
     assert natural_name(" SMITH ,  Jane ") == "Jane SMITH"
     assert natural_name("") == ""
 

@@ -172,7 +172,7 @@ def test_auto_pick_never_adds_second_dm(tmp_path, monkeypatch):
     conn = _seed(tmp_path, monkeypatch, {})
     db.add_person(conn, P(business_id="b1", name="Agent Pick", title="Owner",
                           labeled_by="agent", is_dm=1))
-    reg_person = P(business_id="b1", name="Smith, Jane", title="Director", labeled_by="registry")
+    reg_person = P(business_id="b1", name="Jane Smith", title="Director", labeled_by="registry")
     db.add_person(conn, reg_person)
     _auto_pick_registry_dm(conn, {"id": "b1"}, [reg_person], {})
     dms = [r for r in db.people_for(conn, "b1") if r["is_dm"] == 1]

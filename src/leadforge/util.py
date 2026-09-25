@@ -151,16 +151,38 @@ def slugify(text: str) -> str:
 _LEGAL_SUFFIX_RE = re.compile(r"^(inc|llc|ltd|llp|plc|co|corp|corporation|gmbh|sa|bv)\.?$", re.IGNORECASE)
 
 
+# Companies House appends an honorific as a third part: "WALKER, David John, Reverend". People write it in
+# front of the name; the plain ones (Mr/Mrs/...) are dropped, as websites do. A third part that is not
+# plain words (e.g. "<R", a scrape artifact) means the string is not a registry name: left unchanged.
+_HONORIFIC_ALIASES = {"doctor": "Dr", "emeritus professor": "Professor"}
+_DROP_HONORIFIC = {"mr", "mrs", "ms", "miss", "mx"}
+_NAME_SUFFIX = {"jr", "sr", "ii", "iii", "iv"}  # these follow the name: "John Smith Jr"
+_HONORIFIC_RE = re.compile(r"^[A-Za-z][A-Za-z .]*$")
+
+
 def natural_name(raw: str) -> str:
-    """'SURNAME, Given Names' (how corporate registries list officers) -> 'Given Names Surname'.
-    Anything not person-shaped passes through unchanged: no comma, two commas, or a legal
-    suffix after the comma ('Acme Widgets, Inc'). Casing is left to the caller."""
+    """'SURNAME, Given Names[, Honorific]' (how corporate registries list officers) -> 'Given Names Surname'
+    ('Dr Given Names Surname' for a distinguishing honorific). Used where registry names enter the system
+    (providers/registry.py) and by the one-time v5 DB migration — stored names are already natural.
+    Anything not person-shaped passes through unchanged: no comma, a legal suffix after the comma
+    ('Acme Widgets, Inc'), or an unknown third part. Casing is left to the caller."""
     raw = (raw or "").strip()
-    if raw.count(",") == 1:
-        last, _, given = raw.partition(",")
-        last, given = last.strip(), given.strip()
+    parts = [p.strip() for p in raw.split(",")]
+    honorific = suffix = ""
+    if len(parts) == 3 and parts[2].lower().rstrip(".") in _NAME_SUFFIX:
+        suffix = " " + parts[2]
+        parts = parts[:2]
+    if len(parts) == 3:
+        key = parts[2].lower().rstrip(".")
+        if not _HONORIFIC_RE.match(parts[2]) or _LEGAL_SUFFIX_RE.match(parts[2]):
+            return raw
+        if key not in _DROP_HONORIFIC:
+            honorific = _HONORIFIC_ALIASES.get(key, parts[2].rstrip(".")) + " "
+        parts = parts[:2]
+    if len(parts) == 2:
+        last, given = parts
         if last and given and not _LEGAL_SUFFIX_RE.match(given):
-            return f"{given} {last}"
+            return f"{honorific}{given} {last}{suffix}"
     return raw
 
 

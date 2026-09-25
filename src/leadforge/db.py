@@ -20,9 +20,9 @@ import sqlite3
 from pathlib import Path
 
 from leadforge.models import Business, Contact, Evidence, Person, Score
-from leadforge.util import now_iso, sha1_hex
+from leadforge.util import natural_name, now_iso, sha1_hex
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -162,6 +162,26 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
+def _normalize_people_names(conn: sqlite3.Connection) -> None:
+    """v4 -> v5: registry officers written by pre-0.1.4 code were stored as "Jabbar, Sajid" (and agent
+    labels copied that form). Rewrite them once to the natural order the registry provider writes today. When the natural-order row already
+    exists for the same business+title, the two are merged: labels on either survive, one row remains."""
+    rows = conn.execute("SELECT * FROM people WHERE name LIKE '%,%'").fetchall()
+    for r in rows:
+        fixed = natural_name(r["name"])
+        if fixed == r["name"]:
+            continue  # not person-shaped (legal suffix, two commas): left as is
+        twin = conn.execute("SELECT * FROM people WHERE business_id=? AND name=? AND title=?",
+                            (r["business_id"], fixed, r["title"])).fetchone()
+        if twin is None:
+            conn.execute("UPDATE people SET name=? WHERE id=?", (fixed, r["id"]))
+            continue
+        keep = r if (r["is_dm"] or 0) > (twin["is_dm"] or 0) else twin  # a DM pick outranks an unlabeled row
+        conn.execute("UPDATE people SET is_dm=?, dm_confidence=?, labeled_by=?, labeled_at=? WHERE id=?",
+                     (keep["is_dm"], keep["dm_confidence"], keep["labeled_by"], keep["labeled_at"], twin["id"]))
+        conn.execute("DELETE FROM people WHERE id=?", (r["id"],))
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(_DDL)
     cur = conn.execute("SELECT value FROM meta WHERE key='schema_version'")
@@ -199,6 +219,9 @@ def migrate(conn: sqlite3.Connection) -> None:
                 if name not in have:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
         version = 4
+    if version < 5:
+        _normalize_people_names(conn)
+        version = 5
     if version != int(row[0]):
         conn.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(version),))
     conn.commit()

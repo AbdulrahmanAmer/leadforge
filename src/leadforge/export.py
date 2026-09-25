@@ -22,7 +22,7 @@ from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
 from leadforge.score import fill_email_affinity, phone_is_validated
-from leadforge.util import natural_name, now_iso
+from leadforge.util import now_iso
 
 # export_run's `cfg` parameter is optional (existing call sites in cli.py/pipeline.py pass none) — when
 # omitted, the freemail_policy/require_corporate that feed Lawful Basis/Next Action fall back to this
@@ -184,7 +184,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
         verified = max((e["observed_at"] for e in ev), default="")
     row = {
         "Score": round(s["total"]), "Tier": s["tier"], "Business": s["name"], "Category": s["category"] or "",
-        "DM Name": natural_name(dm["name"]) if dm else "", "DM Title": dm["title"] if dm else "",
+        "DM Name": dm["name"] if dm else "", "DM Title": dm["title"] if dm else "",
         "DM Conf": round(dm["dm_confidence"], 2) if dm else "",
         "Phone": _display_phone(s["phone_e164"]) or s["phone_raw"]
                  or _display_phone(next((c["value"] for c in contacts if c["kind"] == "phone"), None)),
@@ -453,7 +453,7 @@ def _drafts_sheet(wb: Workbook, conn: sqlite3.Connection, rows_raw: list, icp: I
             continue
         people = db.people_for(conn, bid)
         dm = next((p for p in people if p["is_dm"] == 1), None)
-        dm_name = natural_name(dm["name"]) if dm else "not identified - ask for owner/manager"
+        dm_name = dm["name"] if dm else "not identified - ask for owner/manager"
         for m in msgs:
             to_addr = _draft_to_address(conn, b, m["target_id"])
             author = (m["author"] if "author" in m.keys() else "agent") or "agent"

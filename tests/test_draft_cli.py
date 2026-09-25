@@ -325,7 +325,7 @@ def test_worked_example_registry_matched_ltd_with_own_domain_email(tmp_path):
     apply_res, render_res, target_id = _worked(
         tmp_path, "registry_ltd",
         business={"domain": "acmegarage.co.uk", "website": "https://acmegarage.co.uk", "enrich": enrich},
-        person={"business_id": "b1", "name": "Smith, Sarah", "title": "Director", "is_dm": 1,
+        person={"business_id": "b1", "name": "Sarah Smith", "title": "Director", "is_dm": 1,
                "dm_confidence": 0.9, "labeled_by": "registry", "origin": "registry"},
         contact={"business_id": "b1", "kind": "email", "value": "sarah@acmegarage.co.uk",
                 "tier": "valid", "affinity": "own_domain"},

@@ -17,7 +17,6 @@ from leadforge.enrich.infer_email import (
 @pytest.mark.parametrize(("raw", "expect"), [
     ("Jane Smith", ("jane", "smith")),
     ("Sean Vincent Murphy", ("sean", "murphy")),      # middle names ignored
-    ("MURPHY, Sean", ("sean", "murphy")),             # registry order, via natural_name
     ("jane  smith", ("jane", "smith")),
     ("Ana de la Cruz", ("ana", "delacruz")),          # particles join the surname
     ("O'Brien", (None, None)),                        # single token: not enough to infer

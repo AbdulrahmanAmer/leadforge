@@ -126,7 +126,7 @@ def test_registry_name_corroborated_by_email_local_part_unlocks_greeting(tmp_pat
     good_registry = {"registry_profile": {"legal_name": "Acme Garage Ltd", "incorporated": "2015-05-01",
                                           "company_status": "active", "match_similarity": 0.9}}
     b = _biz(conn, enrich=good_registry, domain="acmegarage.co.uk")
-    db.add_person(conn, Person(business_id="b1", name="Smith, Sarah", title="Director", is_dm=1,
+    db.add_person(conn, Person(business_id="b1", name="Sarah Smith", title="Director", is_dm=1,
                                dm_confidence=0.9, labeled_by="registry", origin="registry"))
     cid = db.add_contact(conn, Contact(business_id="b1", kind="email", value="sarah@acmegarage.co.uk",
                                        tier="valid", affinity="own_domain"))
@@ -215,7 +215,7 @@ def test_packet_stays_within_the_configured_token_budget(tmp_path, monkeypatch):
         "gbp": {"appointments": "recommended", "booking_links": [], "review_names": ["Dave"], "reply_signatures": []},
     }
     b = _biz(conn, enrich=enrich, rating=4.6, review_count=88, domain="acmegarage.co.uk")
-    db.add_person(conn, Person(business_id="b1", name="Smith, Sarah", title="Director", is_dm=1,
+    db.add_person(conn, Person(business_id="b1", name="Sarah Smith", title="Director", is_dm=1,
                                dm_confidence=0.9, labeled_by="registry", origin="registry"))
     cid = db.add_contact(conn, Contact(business_id="b1", kind="email", value="sarah@acmegarage.co.uk",
                                        tier="valid", affinity="own_domain"))

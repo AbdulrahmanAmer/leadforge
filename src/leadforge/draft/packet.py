@@ -21,7 +21,7 @@ from typing import Any
 from leadforge import compliance, db
 from leadforge.config import Config
 from leadforge.models import ICP
-from leadforge.util import natural_name, now_iso
+from leadforge.util import now_iso
 
 # Facts that carry real, business-specific personalisation value (drive grade A/B and are the last
 # ones dropped when a packet must be trimmed to fit cfg.draft.packet_max_tokens).
@@ -208,10 +208,10 @@ def build_packet(
             corrob = _corroborations(dm, people, contact_row, gbp)
             allowed = compliance.name_allowed(dm, enrich, corrob)
         if allowed:
-            first = natural_name(dm["name"]).split()[0] if dm["name"] else ""
+            first = dm["name"].split()[0] if dm["name"] else ""
             if first:
                 origin = (dm["origin"] if "origin" in dm.keys() else "") or dm["labeled_by"]
-                add("dm_name", natural_name(dm["name"]), origin, seen_at)
+                add("dm_name", dm["name"], origin, seen_at)
                 greeting = f"Hi {first},"
 
     packet = {

@@ -160,7 +160,7 @@ _ACTIVE_PROFILE = {"company_number": "1", "company_status": "active", "legal_nam
 def test_auto_pick_single_individual_director(tmp_path, monkeypatch):
     from leadforge import db
     from leadforge.enrich.runner import _auto_pick_registry_dm
-    people = [_mk_person("Smith, Jane")]
+    people = [_mk_person("Jane Smith")]
     conn = _seeded_conn(tmp_path, monkeypatch, [p.name for p in people])
     counts = {}
     _auto_pick_registry_dm(conn, {"id": "b1"}, people, counts, _ACTIVE_PROFILE)
@@ -173,7 +173,7 @@ def test_auto_pick_single_individual_director(tmp_path, monkeypatch):
 def test_no_auto_pick_with_two_directors(tmp_path, monkeypatch):
     from leadforge import db
     from leadforge.enrich.runner import _auto_pick_registry_dm
-    people = [_mk_person("Smith, Jane"), _mk_person("Doe, John")]
+    people = [_mk_person("Jane Smith"), _mk_person("John Doe")]
     conn = _seeded_conn(tmp_path, monkeypatch, [p.name for p in people])
     _auto_pick_registry_dm(conn, {"id": "b1"}, people, {}, _ACTIVE_PROFILE)
     assert all(r["is_dm"] == 0 for r in db.people_for(conn, "b1"))
@@ -196,7 +196,7 @@ def test_no_auto_pick_without_active_profile(tmp_path, monkeypatch):
     company is active. Belt-and-braces on top of the registry's own active_only gate."""
     from leadforge import db
     from leadforge.enrich.runner import _auto_pick_registry_dm
-    people = [_mk_person("Smith, Jane")]
+    people = [_mk_person("Jane Smith")]
     conn = _seeded_conn(tmp_path, monkeypatch, [p.name for p in people])
     _auto_pick_registry_dm(conn, {"id": "b1"}, people, {})  # no profile at all
     assert all(r["is_dm"] == 0 for r in db.people_for(conn, "b1"))
@@ -338,7 +338,7 @@ def test_registry_stage_covers_siteless_businesses(tmp_path, monkeypatch):
     from leadforge.providers import registry as regmod
 
     def fake_lwp(self, b):
-        person = Person(business_id=b["id"], name="Smith, Jane", title="Director", labeled_by="registry")
+        person = Person(business_id=b["id"], name="Jane Smith", title="Director", labeled_by="registry")
         ev = Evidence(business_id=b["id"], ref_table="people", fact="registry_officer", url="u", snippet="s")
         return [(person, ev)], {"company_number": "999", "incorporated": "2010-01-01",
                                 "company_status": "active", "legal_name": "NO SITE GARAGE LTD",

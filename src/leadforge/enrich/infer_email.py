@@ -22,7 +22,6 @@ import unicodedata
 
 from leadforge.config import Config
 from leadforge.enrich.extract import FREEMAIL_DOMAINS, ROLE_LOCALPARTS
-from leadforge.util import natural_name
 
 # name particles that belong to the surname ("de la Cruz" -> delacruz)
 _PARTICLES = {"de", "del", "della", "der", "van", "von", "da", "di", "du", "la", "le", "el", "bin",
@@ -64,7 +63,7 @@ def _ascii_fold(s: str) -> str:
 def split_person_name(raw: str) -> tuple[str | None, str | None]:
     """'Sean Vincent Murphy' -> ('sean','murphy'). Returns (None, None) when the string is not a
     usable person name (single token, empty, or company-shaped)."""
-    name = natural_name(raw or "").strip()
+    name = (raw or "").strip()  # people.name is stored in natural order (db.add_person)
     tokens = [_NON_ALNUM.sub("", _ascii_fold(t)) for t in name.split()]
     tokens = [t for t in tokens if t]
     if len(tokens) < 2:
