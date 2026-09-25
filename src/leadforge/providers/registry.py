@@ -151,7 +151,6 @@ class CompaniesHouseRegistry:
                 if self.active_only and (profile["company_status"] or "").casefold() != "active":
                     continue  # dissolved/liquidated, only knowable from the profile fetch
                 _CH_BUCKET.wait()
-                _CH_BUCKET.wait()
                 ro = httpx.get(f"{CH_BASE}/company/{number}/officers",
                                params={"register_type": "directors"}, auth=auth, timeout=15.0)
                 if ro.status_code == 429:

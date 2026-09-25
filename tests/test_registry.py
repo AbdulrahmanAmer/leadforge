@@ -56,6 +56,22 @@ def test_companies_house_maps_active_officers(tmp_path, monkeypatch):
     assert ev.fact == "registry_officer" and "01234567" in ev.url
 
 
+def test_officers_call_consumes_one_bucket_token(tmp_path, monkeypatch):
+    """Step 1 (PIPELINE-MAP R-none / row 1): the officers fetch must call
+    _CH_BUCKET.wait() exactly once, not twice."""
+    cfg = _cfg_with_key(tmp_path, monkeypatch)
+    reg = CompaniesHouseRegistry(cfg)
+    PROFILE = {"sic_codes": ["45200"], "date_of_creation": "2003-02-01", "company_status": "active"}
+    calls = iter([_Resp(SEARCH), _Resp(PROFILE), _Resp(OFFICERS)])
+    monkeypatch.setattr("httpx.get", lambda *a, **k: next(calls))
+    wait_calls = []
+    monkeypatch.setattr(regmod._CH_BUCKET, "wait", lambda: wait_calls.append(1))
+    reg.lookup_with_profile(BIZ)
+    # one token each for search, profile and officers = 3 total; the officers call itself
+    # must consume exactly one (the bug was a duplicate wait() before the officers request).
+    assert wait_calls.count(1) == 3, f"expected 3 bucket waits (search+profile+officers), got {len(wait_calls)}"
+
+
 def test_companies_house_unrelated_name_same_locality_rejected(tmp_path, monkeypatch):
     """v0.3: a same-locality hit whose name shares nothing with the business is worse than no match
     (measured 7-10% wrong-company matches) — rejected purely on name_similarity, before any profile
