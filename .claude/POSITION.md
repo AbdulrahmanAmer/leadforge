@@ -23,7 +23,9 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 - Owner: "park your session for the time being ... we will continue another time".
 - master = cleanup batch 1 merged (6e06d3f..2f46476): 4 bug fixes + legacy/compat removal, suite 760 passed.
 - Batch 2 (PIPELINE-MAP steps 5-13) builder STOPPED mid-work. Partial commits, if any, live on branch
-  worktree-agent-ad9c35eb459d7f3ed (worktree under .claude/worktrees/) — review them against the map before merging or reset and rerun.
+  worktree-agent-ad9c35eb459d7f3ed: steps 5,6,7,8,10,11 committed (eebf7a4..a4b92d6), NOT yet verified by the
+  orchestrator; 12 uncommitted file(s) in its worktree. Left to do in batch 2: steps 12, 13. Verify (suite +
+  watched-fail) before cherry-picking onto master.
 - Remaining: batch 2 (5-13), batch 3 (14-18), batch 4 (19,20,22). Spec: docs/PIPELINE-MAP.md section 6.
 - NOT done at park: two stale  watcher processes from the old Laya training runs (started 02:07/02:22,
   ~1.7k CPU-s each) were left running — the owner declined the kill; ask before touching them.
