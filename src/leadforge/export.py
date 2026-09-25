@@ -21,7 +21,7 @@ from leadforge import compliance, db
 from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
-from leadforge.score import fill_email_affinity, phone_is_validated
+from leadforge.score import phone_is_validated
 from leadforge.util import now_iso
 
 # export_run's `cfg` parameter is optional (existing call sites in cli.py/pipeline.py pass none) — when
@@ -131,16 +131,12 @@ def _site_status(enrich: dict) -> tuple[str, bool]:
     return "not crawled", False
 
 
-def _email_confidence(affinity: str, tier: str, linkage_checked: bool = True) -> str:
-    """Human-readable affinity+tier, per docs/09 §D. 'none' when there is no sendable candidate at all.
-    linkage_checked=False means the affinity came from the coarse pre-v0.3 fallback (ANY freemail on
-    the domain), not the real name/business-token linkage check — the column must not claim a check
-    that never ran."""
+def _email_confidence(affinity: str, tier: str) -> str:
+    """Human-readable affinity+tier, per docs/09 §D. 'none' when there is no sendable candidate at all."""
     if affinity == "own_domain":
         return f"own domain, {tier} mailbox" if tier else "own domain"
     if affinity == "freemail_linked":
-        return ("personal freemail, linked to owner name" if linkage_checked
-                else "personal freemail (linkage not checked — pre-v0.3 row)")
+        return "personal freemail, linked to owner name"
     if affinity == "freemail_unlinked":
         return "personal freemail, UNLINKED — do not mail"
     if affinity == "foreign":
@@ -156,21 +152,19 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
     # Affinity MUST be backfilled BEFORE ranking (docs/09 §D fix): every pre-v0.3 row stores
-    # affinity '' (100% of the live campaign DB), and this SAME filled list is what
-    # compliance.email_eligibility below ranks too, so Email / Email Confidence / Lawful Basis /
-    # contactability can never describe two different addresses for one business.
-    contacts_filled = fill_email_affinity(contacts, s["domain"])
+    # affinity is written at insert time for every email contact (crawl and infer), so ranking and
+    # grading always use the real value — Email / Email Confidence / Lawful Basis / contactability
+    # can never describe two different addresses for one business.
     # Best email: affinity-first (own-domain always outranks a freemail box, even a 'valid' one — the
     # v0.2 sheet exported a font designer's gmail above a real info@ three times), tier second.
     # 'inferred' addresses are NEVER candidates for the Email column — they get their own,
     # so a mail-merge over 'Email' can never pick up a guess.
-    ranked_emails = rank_email_contacts(contacts_filled)
+    ranked_emails = rank_email_contacts(contacts)
     sendable_ranked = [c for c in ranked_emails if c["tier"] not in ("invalid", "inferred")]
     best_row = sendable_ranked[0] if sendable_ranked else None
     best_email = (best_row["value"], best_row["tier"] or "") if best_row else ("", "")
     best_affinity = (best_row["affinity"] or "") if best_row else ""
-    best_affinity_backfilled = bool(best_row and best_row.get("_affinity_backfilled"))
-    inferred = next((c for c in contacts_filled if c["kind"] == "email" and c["tier"] == "inferred"), None)
+    inferred = next((c for c in contacts if c["kind"] == "email" and c["tier"] == "inferred"), None)
     factors = json.loads(s["factors_json"])
     # 'Why This Score' explains Score/Fit — the meta factors (contactability, status) are a separate
     # axis by design (docs/09 §D split) and must never re-blend into it: contactability alone can carry
@@ -272,7 +266,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     site_status, site_dead = _site_status(enrich_all)
     is_suppressed = db.is_suppressed(conn, s["domain"], s["place_id"], best_email[0] or None)
     eligibility = compliance.email_eligibility(
-        s, contacts_filled, entity, icp.compliance.region_profile if icp else "us",
+        s, contacts, entity, icp.compliance.region_profile if icp else "us",
         freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
         suppressed=is_suppressed, site_dead=site_dead,
     )
@@ -298,9 +292,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
         "Registry Match": f"{float(sim):.2f}" if sim is not None else "n/a",
         "Chain": chain_key or "-",
         "Site Status": site_status,
-        "Email Confidence": _email_confidence(best_affinity, best_email[1],
-                                              linkage_checked=not best_affinity_backfilled)
-                           if best_email[0] else "none",
+        "Email Confidence": _email_confidence(best_affinity, best_email[1]) if best_email[0] else "none",
         "All Hooks": "; ".join(hooks) if hooks else "no hooks triggered",
     })
     # v0.4 autopilot (ADR-015): newest non-rejected drafted message for this business in THIS
@@ -315,13 +307,12 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     ).fetchone() if icp is not None else None
     row["_has_draft"] = msg is not None
     if msg is not None:
-        draft_author = (msg["author"] if "author" in msg.keys() else "agent") or "no draft"
-        row["_draft_author"] = draft_author
+        row["_draft_author"] = msg["author"] or "no draft"
         row.update({
             "Draft Subject": msg["subject"] or "no draft",
             "Draft Body": msg["body_text"] or "no draft",
             "Draft Grade": msg["grade"] or "no draft",
-            "Draft Author": draft_author,
+            "Draft Author": row["_draft_author"],
         })
     else:
         row.update({
@@ -419,8 +410,7 @@ def _draft_to_address(conn: sqlite3.Connection, business_row: sqlite3.Row, targe
         if crow and crow["value"]:
             return crow["value"]
     contacts = db.contacts_for(conn, business_row["id"])
-    contacts_filled = fill_email_affinity(contacts, business_row["domain"])
-    ranked = rank_email_contacts(contacts_filled)
+    ranked = rank_email_contacts(contacts)
     sendable = [c for c in ranked if c["tier"] not in ("invalid", "inferred")]
     return sendable[0]["value"] if sendable else ""
 
@@ -456,7 +446,7 @@ def _drafts_sheet(wb: Workbook, conn: sqlite3.Connection, rows_raw: list, icp: I
         dm_name = dm["name"] if dm else "not identified - ask for owner/manager"
         for m in msgs:
             to_addr = _draft_to_address(conn, b, m["target_id"])
-            author = (m["author"] if "author" in m.keys() else "agent") or "agent"
+            author = m["author"] or "agent"
             ws.append([_safe_cell(b["name"]), _safe_cell(dm_name), _safe_cell(to_addr or "-"),
                       _safe_cell(m["subject"] or "-"), _safe_cell(m["body_text"] or "-"),
                       _safe_cell(m["grade"] or "-"), _safe_cell(m["used_fact"] or "-"),
@@ -657,7 +647,7 @@ def summarize_for_digest(conn: sqlite3.Connection, run_id: str) -> dict:
         ).fetchone()
         if m is not None:
             drafted += 1
-            author = (m["author"] if "author" in m.keys() else "agent") or "agent"
+            author = m["author"] or "agent"
             drafts_by_author[author] = drafts_by_author.get(author, 0) + 1
     out["drafted"] = drafted
     out["drafts_by_author"] = drafts_by_author

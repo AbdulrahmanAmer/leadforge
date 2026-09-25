@@ -269,12 +269,12 @@ def _ner_device_report(cfg: Config) -> str:
     """Layer 3: info only, never a failure — reports which device `leadforge enrich` will actually
     use for GLiNER (the model-worker process, enrich/ner_worker.py), not whether NER works at all
     (that is optional-extras' job)."""
-    if not getattr(cfg.enrich, "ner", True):
+    if not cfg.enrich.ner:
         return "off (enrich.ner: false)"
     if not _importable("gliner"):
         return "off ([ner] extra not installed — heuristic extractor only)"
     from leadforge.enrich.ner_worker import resolve_device
-    requested = getattr(cfg.enrich, "ner_device", "auto")
+    requested = cfg.enrich.ner_device
     device = resolve_device(requested)
     if requested == "auto":
         return f"{device} (auto)"

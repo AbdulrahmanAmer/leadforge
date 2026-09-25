@@ -117,22 +117,6 @@ def test_next_action_shows_outreach_state_when_an_outreach_targets_row_exists(tm
     assert row["Next Action"] == "OUTREACH - approved"
 
 
-def test_email_confidence_agrees_with_lawful_basis_on_legacy_rows(tmp_path, monkeypatch):
-    """Real-data proof caught this: a pre-v0.3 contact (no `affinity` stored) showed Lawful Basis
-    'b2b_legitimate_interest' but Email Confidence 'none' for the SAME address — two readings of one
-    fact. Both must now agree that a legacy own-domain role address is exactly that."""
-    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
-    db.upsert_business(conn, Business(id="legacy", name="Legacy Garage", source="gosom",
-                                      dedupe_key="dk-legacy", domain="legacygarage.example"))
-    db.add_contact(conn, Contact(business_id="legacy", kind="email", value="info@legacygarage.example",
-                                 tier="role"))  # affinity left unset, as every pre-v0.3 row is
-    _score(conn, rid, "legacy")
-    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
-    row = _csv_rows(arts)[0]
-    assert row["Email Confidence"] == "own domain, role mailbox"
-    assert row["Lawful Basis (Email)"] == "b2b_legitimate_interest"
-
-
 def test_freemail_never_outranks_own_domain_in_the_email_column(tmp_path, monkeypatch):
     """The v0.2 sheet exported a font designer's gmail above a real info@ three times — this is the
     regression test for the fix: a freemail 'valid' address must never beat an own-domain 'role' one."""
@@ -149,41 +133,6 @@ def test_freemail_never_outranks_own_domain_in_the_email_column(tmp_path, monkey
     assert row["Email"] == "info@dualgarage.example"
     assert row["Email Tier"] == "role"
     assert row["Email Confidence"] == "own domain, role mailbox"
-
-
-def test_freemail_never_outranks_own_domain_when_affinity_is_unset_on_both(tmp_path, monkeypatch):
-    """The real-data shape (fresh-context review blocker): 233/233 contact rows on the live campaign
-    DB store affinity '' — BOTH the freemail and the own-domain contact, not just one. Ranking on the
-    raw rows falls through to tier order alone and the freemail 'valid' address beats the own-domain
-    'role' one; affinity must be backfilled BEFORE ranking, not only on the already-chosen winner."""
-    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
-    db.upsert_business(conn, Business(id="legacy2", name="Legacy2 Garage", source="gosom",
-                                      dedupe_key="dk-legacy2", domain="legacy2garage.example"))
-    db.add_contact(conn, Contact(business_id="legacy2", kind="email", value="dave.font@gmail.com",
-                                 tier="valid"))  # affinity unset, as every pre-v0.3 row is
-    db.add_contact(conn, Contact(business_id="legacy2", kind="email", value="info@legacy2garage.example",
-                                 tier="role"))  # affinity unset here too
-    _score(conn, rid, "legacy2")
-    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
-    row = _csv_rows(arts)[0]
-    assert row["Email"] == "info@legacy2garage.example"
-    assert row["Email Confidence"] == "own domain, role mailbox"
-    assert row["Lawful Basis (Email)"] == "b2b_legitimate_interest"
-
-
-def test_email_confidence_admits_when_freemail_linkage_was_never_checked(tmp_path, monkeypatch):
-    """A legacy row's freemail affinity is a coarse domain-only guess (any freemail box == 'linked'),
-    not the real name-token linkage check — the column must say so, not claim a check that never ran."""
-    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
-    db.upsert_business(conn, Business(id="onlyfree", name="Only Freemail Garage", source="gosom",
-                                      dedupe_key="dk-onlyfree", domain="onlyfreegarage.example"))
-    db.add_contact(conn, Contact(business_id="onlyfree", kind="email", value="stranger@gmail.com",
-                                 tier="valid"))  # affinity unset -> backfilled, not a real linkage check
-    _score(conn, rid, "onlyfree")
-    arts = export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg)
-    row = _csv_rows(arts)[0]
-    assert row["Email"] == "stranger@gmail.com"
-    assert row["Email Confidence"] == "personal freemail (linkage not checked — pre-v0.3 row)"
 
 
 def test_why_this_score_never_shows_the_contactability_meta_factor(tmp_path, monkeypatch):

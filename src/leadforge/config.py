@@ -181,10 +181,8 @@ class OutreachCfg(BaseModel):
     armed: bool = False
     transport: str = "file"            # file (dry-run .eml) | smtp | <registered adapter>
     require_corporate: bool = False    # owner decision 5: plausibility-linked freemail is mailable by default
-    daily_cap_default: int = 30
     send_window: str = "09:00-17:00"   # local time of `timezone`
     timezone: str = "Europe/London"
-    max_touches: int = 2
     follow_up_days: int = 5
     bounce_rate_pause: float = 0.03    # hard bounces over the last 100 live sends
     complaint_rate_pause: float = 0.001

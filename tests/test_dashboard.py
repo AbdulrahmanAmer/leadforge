@@ -13,7 +13,7 @@ from leadforge.dashboard import build_status, serve
 from leadforge.models import Business
 
 
-def _seed(cfg, with_ts: bool) -> tuple[str, float]:
+def _seed(cfg) -> tuple[str, float]:
     conn = db.connect(cfg.db_path)
     run_id = db.create_run(conn, "icp.yaml", "hash")
     started = time.time() - 600.0  # run began 10 minutes ago
@@ -30,22 +30,19 @@ def _seed(cfg, with_ts: bool) -> tuple[str, float]:
     feed = cfg.data_path / "progress.jsonl"
     lines = []
     for i in range(5):
-        d = {"stage": "discover", "done": i, "total": 10 if i < 3 else 14, "msg": f"q{i}"}
-        if with_ts:
-            d["ts"] = started + i * 120.0
+        d = {"stage": "discover", "done": i, "total": 10 if i < 3 else 14, "msg": f"q{i}", "ts": started + i * 120.0}
         lines.append(json.dumps(d))
     # the real feed ends with a line that REPEATS the latest count (the next query's text) — the case that
     # silently dropped the "as of now" pin on 2026-09-03
-    tail = {"stage": "discover", "done": 4, "total": 14, "msg": "q5 (next)"}
-    if with_ts:
-        tail["ts"] = started + 4 * 120.0 + 0.3  # the next-query line follows the completion within a second
+    tail = {"stage": "discover", "done": 4, "total": 14, "msg": "q5 (next)",
+           "ts": started + 4 * 120.0 + 0.3}  # the next-query line follows the completion within a second
     lines.append(json.dumps(tail))
     feed.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return run_id, started
 
 
 def test_status_splits_machine_and_human_and_measures_pace_from_feed_ts(cfg):
-    run_id, started = _seed(cfg, with_ts=True)
+    run_id, started = _seed(cfg)
     st = build_status(cfg.data_path, now=started + 480.0)
     assert st["run"] == run_id and st["stage"] == "discovering"
     names = [m["stage"] for m in st["machine"]["stages"]]
@@ -61,18 +58,8 @@ def test_status_splits_machine_and_human_and_measures_pace_from_feed_ts(cfg):
     assert st["counts"]["queries_saturated"] == 3 and st["counts"]["new_this_run"] == 6
 
 
-def test_feed_without_timestamps_uses_run_start_as_the_clock(cfg):
-    _run_id, started = _seed(cfg, with_ts=False)
-    now = started + 480.0
-    st = build_status(cfg.data_path, now=now)
-    disc = st["machine"]["stages"][0]
-    # 4 items between run start and the feed mtime (~now): cumulative average, never this process's uptime
-    assert disc["pace_source"] == "measured on this run"
-    assert 60.0 < disc["pace_s"] < 200.0
-
-
 def test_status_is_read_only(cfg):
-    _seed(cfg, with_ts=True)
+    _seed(cfg)
     before = sqlite3.connect(cfg.db_path).execute("SELECT COUNT(*) FROM queries").fetchone()[0]
     mtime = cfg.db_path.stat().st_mtime
     build_status(cfg.data_path)
@@ -81,7 +68,7 @@ def test_status_is_read_only(cfg):
 
 
 def test_http_endpoints_serve_json_and_html(cfg):
-    _seed(cfg, with_ts=True)
+    _seed(cfg)
     srv = serve(cfg.data_path, port=0, block=False)
     try:
         port = srv.server_address[1]
@@ -104,7 +91,7 @@ def test_no_workspace_is_reported_not_crashed(tmp_path):
 def test_measured_pace_survives_the_feed_being_truncated_on_restart(cfg):
     """`set_progress_file` wipes the feed on every process start; a resumed run must not fall back to the
     documented default for a stage it already measured (2026-09-03: 26 h ETA from a 22 s/site default)."""
-    run_id, started = _seed(cfg, with_ts=True)
+    run_id, started = _seed(cfg)
     st = build_status(cfg.data_path, now=started + 480.0)
     assert st["machine"]["stages"][0]["pace_source"] == "measured on this run"
     assert json.loads((cfg.data_path / "pace.json").read_text())["discover"]["per_item_s"] == 120.0
@@ -116,7 +103,7 @@ def test_measured_pace_survives_the_feed_being_truncated_on_restart(cfg):
 
 
 def test_walk_away_time_is_discover_plus_the_longest_overlapped_stage(cfg):
-    run_id, started = _seed(cfg, with_ts=True)
+    run_id, started = _seed(cfg)
     st = build_status(cfg.data_path, now=started + 480.0)
     stages = st["machine"]["stages"]
     assert st["machine"]["overlapped"] is True

@@ -15,7 +15,6 @@ import json
 import math
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import httpx
 
@@ -56,8 +55,6 @@ class Tile:
 
     def to_json(self) -> dict:
         return {"bbox": list(self.bbox), "cell_km": self.cell_km, "depth": self.depth}
-
-    as_json = to_json  # back-compat alias (pre-v0.3 callers)
 
     @classmethod
     def from_json(cls, d: dict) -> Tile:
@@ -397,8 +394,8 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
     # Layer 6 (skill v2): enrichment estimate alongside discovery's, so the skill can state one
     # total before asking the user to launch. est sites = est businesses (== est_max_results, the
     # discovery ceiling) x configured website share; minutes = sites / configured crawl rate.
-    website_share = getattr(cfg.enrich, "est_website_share", 0.64)
-    crawl_rate = getattr(cfg.enrich, "est_crawl_rate_per_min", 25.0)
+    website_share = cfg.enrich.est_website_share
+    crawl_rate = cfg.enrich.est_crawl_rate_per_min
     est_enrich_sites = round(out["est_max_results"] * website_share)
     est_enrich_min = round(est_enrich_sites / crawl_rate) if crawl_rate > 0 else 0
     out["est_enrich_sites"] = est_enrich_sites
@@ -407,5 +404,3 @@ def plan_counts(queries: list[PlannedQuery], cfg: Config | None = None) -> dict:
     return out
 
 
-def cache_plan_path(cfg: Config) -> Path:
-    return cfg.cache_dir / "last_plan.json"

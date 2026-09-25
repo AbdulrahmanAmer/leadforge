@@ -112,7 +112,7 @@ def infer_email(person_name: str, domain: str, known_emails: list[str], cfg: Con
     act as anchors. Returns {"email","pattern","confidence","basis"} — never a bare string, because
     the sheet must always be able to show WHY.
     """
-    if not getattr(cfg.validation, "infer_emails", False):
+    if not cfg.validation.infer_emails:
         return None  # opt-in only
     domain = (domain or "").strip().lower().removeprefix("www.")
     if not domain or domain in FREEMAIL_DOMAINS:

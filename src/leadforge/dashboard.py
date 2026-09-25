@@ -37,8 +37,6 @@ DEFAULT_PACE_S = {
     "gbp": 0.02,           # per business, local
     "validate": 0.3,       # per email (DNS MX, cached per domain)
 }
-MACHINE_STAGES = ["discover", "enrich", "registry", "gbp", "validate"]
-HUMAN_STAGES = ["dm_pending", "scoring", "export", "outreach"]
 
 
 def _ro(db_path: Path) -> sqlite3.Connection:
@@ -56,35 +54,23 @@ def _iso_ts(s: str | None) -> float | None:
         return None
 
 
-def _feed_history(feed: Path, run_started: float | None) -> dict[str, list[tuple[float, int, int]]]:
-    """Per-stage [(ts, done, total)] from the feed. Lines without a timestamp (a process older than
-    v0.3.1) are pinned to the run start, except the last which is pinned to the feed's mtime — so the
-    estimate becomes the cumulative average, never a guess from this process's uptime."""
+def _feed_history(feed: Path) -> dict[str, list[tuple[float, int, int]]]:
+    """Per-stage [(ts, done, total)] from the feed. Every line carries its own ts (util.emit_progress
+    always writes one)."""
     hist: dict[str, list[tuple[float, int, int]]] = {}
     if not feed.is_file():
         return hist
     lines = feed.read_text(encoding="utf-8", errors="replace").splitlines()
-    mtime = feed.stat().st_mtime
-    last_stage, last_had_ts = None, True
     for ln in lines:
         try:
             d = json.loads(ln)
         except ValueError:
             continue
-        ts = d.get("ts")
-        last_had_ts = ts is not None
-        if ts is None:
-            ts = run_started or mtime
-        last_stage = d.get("stage", "?")
-        h = hist.setdefault(last_stage, [])
+        stage = d.get("stage", "?")
+        h = hist.setdefault(stage, [])
         done, total = int(d.get("done") or 0), int(d.get("total") or 0)
         if not h or h[-1][1] != done or h[-1][2] != total:
-            h.append((float(ts), done, total))
-    if last_stage and not last_had_ts and hist.get(last_stage):
-        # pre-v0.3.1 feed: its latest count is "as of the file's last write", whatever line carried it
-        # (the last line usually repeats the count with the next query's text, so it never appended above)
-        t, done, total = hist[last_stage][-1]
-        hist[last_stage][-1] = (max(t, mtime), done, total)
+            h.append((float(d["ts"]), done, total))
     return hist
 
 
@@ -179,7 +165,7 @@ def build_status(data_dir: Path, now: float | None = None) -> dict:
     run_started = _iso_ts(run["started_at"]) if run else None
     stats = json.loads(run["stats_json"]) if run else {}
     counts = _counts(conn, run_id)
-    hist = _feed_history(feed, run_started)
+    hist = _feed_history(feed)
     store = _pace_store(data_dir)
     out.update({"run": run_id, "stage": run["stage"] if run else None,
                 "started_at": run["started_at"] if run else None,

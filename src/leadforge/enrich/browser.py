@@ -23,12 +23,6 @@ from urllib.parse import urlsplit
 
 from leadforge.util import LOG, EnvError
 
-# Fallback defaults for callers with no cfg.enrich (e.g. bare test doubles) — real runs always go
-# through cfg.enrich.rendered_pages_per_site / cfg.enrich.browser_concurrency / cfg.enrich.render_timeout_s.
-MAX_RENDERED_PAGES_PER_SITE = 2
-DEFAULT_BROWSER_CONCURRENCY = 4
-DEFAULT_RENDER_TIMEOUT_S = 20.0
-
 # v0.3 speed unit (2026-09-02, build item 2): was a hardcoded threading.Semaphore(2) — renders are the
 # heavyweight exception (a real Chromium instance) regardless of politeness.workers, so they get their
 # own concurrency knob, cfg.enrich.browser_concurrency (default 4). A Semaphore's size is fixed at
@@ -74,7 +68,7 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
         # headed mode = a visible, ordinary browser window (debug aid + renders sites that refuse
         # plain HTTP clients). Deliberately NO stealth/anti-detection flags — icm/SCOPE.md red line.
         kwargs = {"verbose": False}
-        if getattr(cfg.crawl, "headed_browser", False):
+        if cfg.crawl.headed_browser:
             try:
                 from crawl4ai import BrowserConfig
                 kwargs = {"config": BrowserConfig(headless=False, verbose=False)}
@@ -84,7 +78,7 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
         # v0.3 speed unit (2026-09-02, build item 2): a render's OWN timeout — cfg.crawl.timeout_s is
         # the plain-HTTP home-page timeout (dropped to 10s, nowhere near enough for a real browser
         # render) and cfg.enrich.render_timeout_s (default 20s) is deliberately separate from it.
-        render_timeout_s = getattr(getattr(cfg, "enrich", None), "render_timeout_s", DEFAULT_RENDER_TIMEOUT_S)
+        render_timeout_s = cfg.enrich.render_timeout_s
 
         async def _run() -> str:
             async with AsyncWebCrawler(**kwargs) as crawler:
@@ -101,7 +95,7 @@ def fetch_rendered(url: str, cfg, throttle) -> str:
                 md = getattr(res, "markdown", "") or ""
                 return _md_to_html(str(md))
 
-        concurrency = getattr(getattr(cfg, "enrich", None), "browser_concurrency", DEFAULT_BROWSER_CONCURRENCY)
+        concurrency = cfg.enrich.browser_concurrency
         with _get_render_gate(concurrency):
             return asyncio.run(_run())
     except Exception as e:  # noqa: BLE001 — a render failure never kills the run

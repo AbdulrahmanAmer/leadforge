@@ -127,7 +127,7 @@ def validate_emails_parallel(rows: list, cfg: Config) -> list[tuple[int, str, di
     -> [(row_id, tier, meta), ...] in completion order (NOT necessarily input order)."""
     if not rows:
         return []
-    workers = max(1, int(getattr(getattr(cfg, "enrich", None), "dns_workers", 8)))
+    workers = max(1, int(cfg.enrich.dns_workers))
     results: list[tuple[int, str, dict]] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(validate_email, r["value"], r["label"], cfg): r for r in rows}

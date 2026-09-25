@@ -109,7 +109,7 @@ def email_eligibility(row: Any, contacts: list[Any], entity: str, region_profile
     best = ranked[0] if ranked else None
     email = best["value"] if best else None
     tier = best["tier"] if best else ""
-    affinity = (best["affinity"] if best and "affinity" in best.keys() else "") or _infer_affinity(email, row)
+    affinity = (best["affinity"] if best else "") or ""
     basis = lawful_basis_email(entity, email, tier, affinity, region_profile,
                                freemail_policy=freemail_policy, require_corporate=require_corporate)
     if basis == BASIS_NONE:
@@ -122,17 +122,6 @@ def email_eligibility(row: Any, contacts: list[Any], entity: str, region_profile
             "basis": basis, "reasons": reasons}
 
 
-def _infer_affinity(email: str | None, row: Any) -> str:
-    """Rows written before v0.3 carry no `affinity`; derive the coarse class from the domain."""
-    if not email:
-        return ""
-    from leadforge.enrich.extract import FREEMAIL_DOMAINS
-
-    dom = email.rsplit("@", 1)[-1].casefold()
-    biz = (row["domain"] or "") if hasattr(row, "keys") else ""
-    if biz and (dom == biz.casefold() or dom.endswith("." + biz.casefold())):
-        return "own_domain"
-    return "freemail_linked" if dom in FREEMAIL_DOMAINS else "foreign"
 
 
 NEXT_CALL_NAMED = "CALL - named contact"

@@ -26,7 +26,6 @@ from leadforge.outreach.identity import get_mailbox, mailboxes_for_identity
 from leadforge.outreach.plan import site_is_dead
 from leadforge.outreach.states import transition
 from leadforge.outreach.transport import get_transport
-from leadforge.score import fill_email_affinity
 from leadforge.util import LeadForgeError, now_iso
 
 
@@ -46,10 +45,8 @@ def _approved_messages(conn: sqlite3.Connection, campaign: str) -> list[sqlite3.
 
 
 def _target_email(conn: sqlite3.Connection, business_id: str) -> str | None:
-    biz = conn.execute("SELECT domain FROM businesses WHERE id=?", (business_id,)).fetchone()
-    domain = biz["domain"] if biz else None
-    contacts_filled = fill_email_affinity(db.contacts_for(conn, business_id), domain)
-    ranked = [c for c in rank_email_contacts(contacts_filled) if c["tier"] not in ("invalid", "inferred")]
+    contacts = db.contacts_for(conn, business_id)
+    ranked = [c for c in rank_email_contacts(contacts) if c["tier"] not in ("invalid", "inferred")]
     return ranked[0]["value"] if ranked else None
 
 
@@ -58,12 +55,12 @@ def _recompute_eligibility(conn: sqlite3.Connection, cfg: Config, target: sqlite
     stored = json.loads(target["eligibility_json"] or "{}")
     region_profile = stored.get("_region_profile", "us")
     people = db.people_for(conn, biz["id"])
-    contacts_filled = fill_email_affinity(db.contacts_for(conn, biz["id"]), biz["domain"])
+    contacts = db.contacts_for(conn, biz["id"])
     entity = compliance.entity_type(biz, people)
     enrich = json.loads(biz["enrich_json"] or "{}")
     dead = site_is_dead(enrich)
     return compliance.email_eligibility(
-        biz, contacts_filled, entity, region_profile,
+        biz, contacts, entity, region_profile,
         freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
         suppressed=suppressed, site_dead=dead,
     )

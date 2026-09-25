@@ -203,7 +203,7 @@ def _apply_query_result(conn, cfg: Config, icp: ICP, run_id: str, q, pq, listing
     # v0.4.1 novelty gate: a saturated tile whose results were all already known (its neighbours and
     # the other categories found them) does not get children — live 2026-09-03, the depth-1 children
     # of such tiles came back saturated too and added ~0.6 businesses each for ~15 s apiece.
-    novel_enough = per_query_new >= max(0, int(getattr(cfg.discovery, "subdivide_min_new", 0)))
+    novel_enough = per_query_new >= max(0, int(cfg.discovery.subdivide_min_new))
     if not novel_enough and status == "done" and tiled_honoured and len(listings) >= cfg.discovery.subdivide_at \
             and pq.tile.depth < cfg.discovery.max_subdivisions:
         ctx["subdivisions_skipped"] = ctx.get("subdivisions_skipped", 0) + 1
@@ -423,10 +423,8 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
     run_id = run["id"] if run else None
     warns: list[str] = []
     artifacts: list[str] = []
-    # v0.4 (ADR-015): cfg.pipeline may not exist yet on every worktree/branch this builds against —
-    # getattr fallback keeps the default (True) either way.
     if autopilot is None:
-        autopilot = getattr(getattr(cfg, "pipeline", None), "autopilot", True)
+        autopilot = cfg.pipeline.autopilot
 
     # A3 (docs/09): a run can reach ANY later stage (even 'exported') while discovery queries are
     # still 'pending' or 'degraded' — a saturation-subdivision child inserted after the parent's
@@ -521,9 +519,9 @@ def run_pipeline(cfg: Config, icp: ICP, icp_path: Path, resume: bool = False,
         stage = "scored"
 
     # DRAFT (autopilot only; re-entered idempotently on resume — auto_draft skips targets already
-    # drafted). leadforge.draft.service is another builder's new module: lazy import, degrade to a
-    # skip warning rather than block export when it (or the agent runner) is unavailable.
-    if stage == "scored" and autopilot and getattr(getattr(cfg, "draft", None), "auto", True):
+    # drafted). Lazy-imported below; degrades to a skip warning rather than block export when
+    # draft.service (or the agent runner) fails to import or start in this environment.
+    if stage == "scored" and autopilot and cfg.draft.auto:
         stage = "drafting"
 
     if stage == "drafting":

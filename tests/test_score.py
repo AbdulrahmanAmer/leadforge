@@ -231,17 +231,16 @@ def test_contactability_registry_and_phone_confirmed_and_mobile(conn, sample_icp
     assert next(f for f in s.factors if f.factor == "contactability").points == 5 + 5 + 3
 
 
-def test_contactability_backfills_affinity_before_ranking_not_after(conn, sample_icp):
-    """Fresh-context review blocker: 233/233 contact rows on the live campaign DB store affinity ''.
-    Ranking those raw rows falls through to tier order alone and a stranger's freemail 'valid' address
-    outranks the business's own 'role' mailbox — scoring it as a mere 20-pt linked-freemail hit
-    instead of the 22-pt own-domain role hit it actually is. Affinity must be filled BEFORE ranking."""
+def test_contactability_own_domain_role_email_outranks_freemail(conn, sample_icp):
+    """An own-domain role address (affinity written at insert time, as every current insert path
+    does) must outrank a freemail box for a different contact -- scores the 22-pt own-domain role
+    hit, not the 20-pt linked-freemail one."""
     run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
     _seed_business(conn, phone_e164=None, domain="indieauto.example")
     db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="stranger@gmail.com",
-                                 tier="valid"))  # affinity unset, as every pre-v0.3 row is
+                                 tier="valid", affinity="freemail_linked"))
     db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.example",
-                                 tier="role"))  # affinity unset here too
+                                 tier="role", affinity="own_domain"))
     s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
     contact = next(f for f in s.factors if f.factor == "contactability")
     assert contact.points == 22, f"expected own-domain role (22), got {contact.points} ({contact.why})"
@@ -331,18 +330,6 @@ def test_chain_member_penalty_from_db_chain_map(conn, sample_icp):
                    domain="sharedsite.example")  # same domain, different phone -> chain by domain
     s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_a"))
     assert any(f.factor == "negative:chain_member" for f in s.factors)
-
-
-def test_contactability_infers_affinity_for_legacy_rows_without_affinity(conn, sample_icp):
-    """Real-data proof on the live UK campaign DB caught this: a pre-v0.3 contact row (affinity
-    column added this release, so old rows store '') for a real own-domain role email scored 0
-    contactability points instead of 22, because the code only trusted a set `affinity` value."""
-    run_id = db.create_run(conn, "icp.yaml", sample_icp.icp_hash())
-    _seed_business(conn, phone_e164=None, domain="indieauto.com")
-    db.add_contact(conn, Contact(business_id="biz_x", kind="email", value="info@indieauto.com",
-                                 tier="role"))  # affinity left unset — legacy shape
-    s = Scorer(conn, sample_icp, run_id).score_business(_row(conn, "biz_x"))
-    assert next(f for f in s.factors if f.factor == "contactability").points == 22
 
 
 def test_profile_registry_dispatches_default_and_account_fit(conn, sample_icp):

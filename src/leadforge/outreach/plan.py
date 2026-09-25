@@ -23,7 +23,6 @@ from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
 from leadforge.outreach.identity import get_identity
-from leadforge.score import fill_email_affinity
 from leadforge.util import LeadForgeError, now_iso
 
 EXCLUSION_REASONS = ["suppressed", "no_sendable_email", "entity_gate", "chain_duplicate", "site_dead", "already_enrolled"]
@@ -74,15 +73,15 @@ def plan_targets(conn: sqlite3.Connection, cfg: Config, icp: ICP, *, campaign: s
             continue
 
         people = db.people_for(conn, business_id)
-        contacts_filled = fill_email_affinity(db.contacts_for(conn, business_id), s["domain"])
-        ranked = rank_email_contacts(contacts_filled)
+        contacts = db.contacts_for(conn, business_id)
+        ranked = rank_email_contacts(contacts)
         candidate_email = ranked[0]["value"] if ranked else None
         suppressed = db.is_suppressed(conn, candidate_email, s["domain"])
         enrich = json.loads(s["enrich_json"] or "{}")
         dead = site_is_dead(enrich)
         entity = compliance.entity_type(s, people)
         elig = compliance.email_eligibility(
-            s, contacts_filled, entity, icp.compliance.region_profile,
+            s, contacts, entity, icp.compliance.region_profile,
             freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
             suppressed=suppressed, site_dead=dead,
         )

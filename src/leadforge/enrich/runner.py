@@ -157,7 +157,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
             LOG.warning("profile build failed for %s: %s", b["id"], type(e).__name__)
         # U4.5: browser escalation — only when static found nothing and the extra is installed.
         if res.needs_browser and browser.is_available() and not out["emails"] and not out["people"]:
-            rendered_cap = getattr(cfg.enrich, "rendered_pages_per_site", browser.MAX_RENDERED_PAGES_PER_SITE)
+            rendered_cap = cfg.enrich.rendered_pages_per_site
             urls = [p.url for p in res.pages[:rendered_cap]] or [b["website"]]
             rendered_any = False
             for url in urls:
@@ -196,13 +196,13 @@ def _start_ner_worker(cfg: Config) -> None:
     _ner_worker_state["worker"] = None
     _ner_worker_state["fallback_logged"] = False
     _ner_worker_state["fallback_count"] = 0
-    if not getattr(cfg.enrich, "ner", True) or not ner_available():
+    if not cfg.enrich.ner or not ner_available():
         return
     from leadforge.enrich.ner_worker import NerWorker
     try:
-        worker = NerWorker(device=getattr(cfg.enrich, "ner_device", "auto"),
-                           batch_size=getattr(cfg.enrich, "ner_batch", 8),
-                           batch_wait_ms=getattr(cfg.enrich, "ner_batch_wait_ms", 25.0))
+        worker = NerWorker(device=cfg.enrich.ner_device,
+                           batch_size=cfg.enrich.ner_batch,
+                           batch_wait_ms=cfg.enrich.ner_batch_wait_ms)
     except Exception as e:  # noqa: BLE001 — worker startup must never abort the run
         LOG.warning("ner worker failed to start: %s: %s", type(e).__name__, e)
         return
@@ -235,12 +235,12 @@ def _people_fn(cfg: Config):
     extract.extract_people_ner so results cannot drift). enrich.ner=false, a missing [ner] extra, a
     worker that failed to start, or a per-request timeout all fall back to the heuristic extract_people
     — never to in-thread GLiNER (that would defeat the point: crawl threads must not run torch)."""
-    if not getattr(cfg.enrich, "ner", True) or not ner_available():
+    if not cfg.enrich.ner or not ner_available():
         return extract_people
     worker = _ner_worker_state.get("worker")
     if worker is None or not worker.available:
         return extract_people
-    timeout_s = getattr(cfg.enrich, "ner_timeout_s", 30.0)
+    timeout_s = cfg.enrich.ner_timeout_s
 
     def _worker_people(text: str, source_url: str, max_candidates: int = 8):
         try:
@@ -255,7 +255,7 @@ def _people_fn(cfg: Config):
 
 def run_enrich(conn: sqlite3.Connection, cfg: Config, limit: int, stage: str = "all") -> dict:
     from leadforge.enrich.extract import configure_ner
-    configure_ner(getattr(cfg.enrich, "ner_parallel", 2), getattr(cfg.enrich, "ner_threads", 2))
+    configure_ner(cfg.enrich.ner_parallel, cfg.enrich.ner_threads)
     """stage: 'site' (crawl+extract), 'registry' (officer lookup incl. site-less), 'gbp' (Google
     Business Profile facts for site-less businesses — the crawl stage covers sited ones inline),
     'infer', 'validate', 'all'.

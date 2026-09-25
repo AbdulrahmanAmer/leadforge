@@ -178,7 +178,6 @@ class NerWorker:
     def __init__(self, device: str = "auto", model_name: str = MODEL_NAME,
                  batch_size: int = 8, batch_wait_ms: float = 25.0, start_timeout_s: float = 60.0,
                  mp_context: str = "spawn", target=_worker_main) -> None:
-        self.requested_device = device
         self.device = resolve_device(device)
         self.model_name = model_name
         self.batch_size = max(1, int(batch_size))

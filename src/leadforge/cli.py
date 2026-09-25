@@ -576,23 +576,6 @@ def config_cmd(ctx: typer.Context,
         raise typer.Exit(2)
 
 
-def _run_started_ts(data_dir: Path) -> float:
-    """Epoch seconds of the latest run's started_at (read-only), or now when there is no run."""
-    import sqlite3 as _sq
-    import time as _t
-    from datetime import datetime as _dt
-
-    try:
-        conn = _sq.connect(f"file:{(data_dir / 'db.sqlite3').as_posix()}?mode=ro", uri=True)
-        row = conn.execute("SELECT started_at FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
-        conn.close()
-        if row and row[0]:
-            return _dt.fromisoformat(str(row[0]).replace("Z", "+00:00")).timestamp()
-    except Exception:  # noqa: BLE001 — a missing/locked DB just means "no better clock than now"
-        pass
-    return _t.time()
-
-
 @app.command()
 def watch(ctx: typer.Context):
     """Live progress bar for the run happening in this workspace (tail of the progress feed)."""
@@ -633,26 +616,14 @@ def watch(ctx: typer.Context):
                     pos = fh.tell()
                 if lines:
                     idle = 0.0
-                    import time as _t
-                    now = _t.time()
                     # replay the WHOLE backlog (not a tail) so the pace/ETA come from the feed's own clock.
-                    # A feed written by a process older than v0.3.1 has no per-line clock: its backlog is
-                    # pinned to the run's start (from the DB) and its last line to now, which makes the pace
-                    # the honest cumulative average since the run began; live lines get their arrival time.
-                    for i, ln in enumerate(lines):
+                    for ln in lines:
                         try:
                             last = json.loads(ln)
-                            ts = last.get("ts")
-                            if ts is None:
-                                ts = now if (summarized or i == len(lines) - 1) else _run_started_ts(data_dir)
-                            render_progress_line(last["stage"], last["done"], last["total"], last.get("msg", ""), ts=ts)
+                            render_progress_line(last["stage"], last["done"], last["total"], last.get("msg", ""),
+                                                 ts=last["ts"])
                         except (ValueError, KeyError):
                             continue
-                    if last is not None and "ts" not in last and _PROG["hist"]:
-                        # pre-v0.3.1 feed: the latest count is "as of now", even when the last line only
-                        # repeated it (the next query's text) and so never appended a history point
-                        t_, d_, tot_ = _PROG["hist"][-1]
-                        _PROG["hist"][-1] = (max(t_, now), d_, tot_)
                     if not summarized and last is not None:
                         import time as _t
                         typer.echo("\n" + progress_summary(last["stage"], list(_PROG["hist"]), _t.time()), err=True)

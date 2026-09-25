@@ -54,22 +54,16 @@ def best_contact(conn, business_row, cfg: Config):
     classify_email_affinity is what produces that classification on a fresh crawl) must never become
     the packet's contact or a message's To: address, even though it can still legitimately outrank
     other candidates in rank_email_contacts' display order. Mirrors compliance.lawful_basis_email's
-    affinity gate for cfg.validation.freemail_policy. NOTE this does not, and cannot, catch a
-    pre-v0.3 row whose `affinity` column is still blank: fill_email_affinity backfills those through
-    the coarser fallback_email_affinity (score.py), which reads ANY freemail domain as
-    `freemail_linked` — the SAME leniency export.py/compliance.py apply everywhere else, kept
-    consistent on purpose rather than making this module quietly stricter than the rest of the app."""
+    affinity gate for cfg.validation.freemail_policy."""
     from leadforge import db
     from leadforge.enrich.validate import rank_email_contacts
-    from leadforge.score import fill_email_affinity
 
     contacts = db.contacts_for(conn, business_row["id"])
-    filled = fill_email_affinity(contacts, business_row["domain"])
     policy = cfg.validation.freemail_policy
-    for c in rank_email_contacts(filled):
+    for c in rank_email_contacts(contacts):
         if c["tier"] not in ("valid", "role"):
             continue
-        affinity = c.get("affinity") or ""
+        affinity = c["affinity"] or ""
         if affinity == "own_domain":
             return c
         if affinity == "freemail_linked" and policy in ("linked", "any"):
@@ -384,7 +378,7 @@ def auto_draft(conn, cfg: Config, icp: ICP, run_id: str, *, runner: Callable[[li
             # gated retry (live 2026-09-03: 9 of 10 first drafts failed USED_FACT/PROPER_NOUN; the reasons
             # are exactly what the model needs to fix them) -- then the template for whatever still fails
             remaining = batch
-            for _attempt in range(max(0, int(getattr(cfg.draft, "retries", 1)))):
+            for _attempt in range(max(0, int(cfg.draft.retries))):
                 remaining = _rejected_lines(conn, remaining)
                 if not remaining:
                     break

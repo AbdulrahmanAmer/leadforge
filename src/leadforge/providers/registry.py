@@ -258,15 +258,6 @@ def get_registries(cfg) -> list:
     return out
 
 
-def enabled_registries(cfg) -> list[str]:
-    out = []
-    if cfg.registry.companies_house_key:
-        out.append("companies_house")
-    if cfg.registry.opencorporates_token:
-        out.append("opencorporates")
-    return out
-
-
 # ============================================================================ v0.3 interface (U9.6)
 _LEGAL_TOKENS = {"ltd", "limited", "llp", "plc", "the", "and", "co", "company", "uk", "group", "holdings", "services"}
 

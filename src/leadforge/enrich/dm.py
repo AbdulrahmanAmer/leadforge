@@ -155,8 +155,8 @@ def auto_label(conn: sqlite3.Connection, icp: ICP, cfg: Config, *,
     `heuristic_labels`. A runner exception stops the loop (logged, never raised) rather than failing the
     run — the leftover count is exported as `dm_unlabeled` and the digest tells the operator to
     `dm export` them."""
-    batch_size = getattr(getattr(cfg, "agent", None), "batch", 40)
-    max_batches = getattr(getattr(cfg, "agent", None), "max_batches", 50)
+    batch_size = cfg.agent.batch
+    max_batches = cfg.agent.max_batches
     labeled = rejected = 0
     batches = 0
     agent_failures = 0

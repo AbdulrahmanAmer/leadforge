@@ -13,7 +13,6 @@ import random
 import re
 import threading
 import time
-import unicodedata
 from datetime import UTC, datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -140,12 +139,6 @@ def pid_alive(pid: int | None) -> bool:
     except OSError:
         return False
     return True
-
-
-def slugify(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
-    text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
-    return text or "x"
 
 
 _LEGAL_SUFFIX_RE = re.compile(r"^(inc|llc|ltd|llp|plc|co|corp|corporation|gmbh|sa|bv)\.?$", re.IGNORECASE)
