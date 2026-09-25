@@ -118,3 +118,33 @@ def test_departmental_addresses_are_not_person_anchors(cfg, monkeypatch):
     ok = infer_email("Jane Smith", "acme.example",
                      ["experienced.hire@acme.example", "duncan.sweetland@acme.example"], _cfg_on(cfg))
     assert ok["email"] == "jane.smith@acme.example"
+
+
+# --- affinity on inferred rows (cleanup step 2, PIPELINE-MAP R1) ---------------------------------
+def test_infer_stage_writes_affinity(cfg, conn, monkeypatch):
+    """After _infer_stage inserts an inferred email, it must carry the same own_domain/freemail
+    affinity classification new contacts get everywhere else (classify_email_affinity) — never
+    left as '' like a pre-v0.3 legacy row."""
+    from leadforge import db
+    from leadforge.enrich.runner import _infer_stage
+    from leadforge.models import Business, Contact, Person
+
+    monkeypatch.setattr("leadforge.enrich.infer_email._mx_ok", lambda d, t: True)
+    _cfg_on(cfg)
+    db.upsert_business(conn, Business(id="b1", run_id="r", name="Acme Widgets", source="gosom",
+                                      domain="acme.example"))
+    db.add_contact(conn, Contact(business_id="b1", kind="email", value="bob.jones@acme.example",
+                                 label="personal", tier="valid", affinity="own_domain"))
+    db.add_person(conn, Person(business_id="b1", name="Jane Smith", is_dm=1, origin="heuristic",
+                               labeled_by="heuristic_auto"))
+    conn.commit()
+
+    counts: dict = {}
+    _infer_stage(conn, cfg, counts)
+
+    inferred = conn.execute(
+        "SELECT value, affinity FROM contacts WHERE business_id='b1' AND tier='inferred'").fetchall()
+    assert len(inferred) == 1
+    assert inferred[0]["value"] == "jane.smith@acme.example"
+    assert inferred[0]["affinity"] != "", "inferred email must not be left with affinity=''"
+    assert inferred[0]["affinity"] == "own_domain"

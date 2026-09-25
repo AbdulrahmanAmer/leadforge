@@ -433,7 +433,7 @@ def _infer_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
         return
     from leadforge.enrich.infer_email import infer_email
     rows = conn.execute(
-        """SELECT b.id, b.domain, p.name dm FROM businesses b
+        """SELECT b.id, b.domain, b.name_norm, p.name dm FROM businesses b
            JOIN people p ON p.business_id = b.id AND p.is_dm = 1
            WHERE b.domain IS NOT NULL
              AND NOT EXISTS (SELECT 1 FROM contacts c WHERE c.business_id = b.id
@@ -447,10 +447,12 @@ def _infer_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
         guess = infer_email(b["dm"] or "", b["domain"] or "", known, cfg)
         if not guess:
             continue
+        existing_names = [p["name"] for p in db.people_for(conn, b["id"])]
+        affinity = classify_email_affinity(guess["email"], b["domain"], b["name_norm"], existing_names)
         db.add_contact(conn, Contact(business_id=b["id"], kind="email", value=guess["email"],
                                      label="inferred", tier="inferred", verified_at=now_iso(),
                                      meta={"pattern": guess["pattern"], "confidence": guess["confidence"],
-                                           "basis": guess["basis"]}))
+                                           "basis": guess["basis"]}, affinity=affinity))
         # its own fact: an inferred address has no source URL, so it must never claim 'email_found'
         db.add_evidence(conn, Evidence(business_id=b["id"], ref_table="contacts", fact="email_inferred",
                                        url="", snippet=f"{guess['email']} — {guess['basis']} "
