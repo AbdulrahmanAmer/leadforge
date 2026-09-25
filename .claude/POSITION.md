@@ -26,7 +26,7 @@ with bounded NER, then re-labels/scores/drafts/exports); restore draft.auto_max 
 - Acceptance: real Bath GB campaign via skill flow exported 20 leads in 4.4 min (plan said 5).
 - Suite 765 passed, 1 skipped (~70-95 s, `pytest -n 6`); ruff clean; `claude plugin validate .` passes.
 - master is 53 commits ahead of origin (incl. this one) — NOT pushed (owner decides; push publishes to GitHub).
-- Open: resume the parked UK campaign (D:/GainLev/LeadForge/campaign-uk-autorepair) on 0.5.0 when the owner
+- Open: resume the parked UK campaign (E:/LeadForge/campaigns/uk-autorepair) on 0.5.0 when the owner
   wants (`leadforge run --icp icp.yaml --resume --from-stage enriching --detach --json`, ~9k sites ≈ 6 h at 26/min).
 - Laya DM fine-tune DONE (E:/LeadForge/laya-dm, head-only, 460 train ex): held-out 133, shuffled order —
   finetuned 43.6%, random 37.6%, first-cand 29.3%, zero-shot 21.8%. NOT integrated (disagrees with Claude 56%).

@@ -7,7 +7,7 @@ Inputs: three read-only audits on 2026-09-24 (pipeline gaps, parked-run performa
 spot-checked against the code before being used here. Specs: `docs/specs/skill-v2.md`,
 `docs/specs/laya-integration.md`.
 
-## Where we are (measured, parked UK auto-repair run, `D:/GainLev/LeadForge/campaign-uk-autorepair`)
+## Where we are (measured, parked UK auto-repair run, `E:/LeadForge/campaigns/uk-autorepair`)
 
 | Stage | Rate | Note |
 |---|---|---|
