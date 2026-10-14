@@ -6,7 +6,7 @@ import csv
 from leadforge import db
 from leadforge.config import load_config
 from leadforge.export import ACCOUNT_COLUMNS, DEFAULT_EXTRA_COLUMNS, _site_status, export_run
-from leadforge.models import ICP, Business, Contact, Person, Score, ScoreFactor
+from leadforge.models import ICP, Business, Contact, EnrichmentObservation, Person, Score, ScoreFactor
 
 
 def _icp():
@@ -95,6 +95,28 @@ def test_next_action_is_phone_first(tmp_path, monkeypatch):
     assert rows["Named Garage"]["Next Action"] == "CALL - named contact"
     assert rows["Switch Garage"]["Next Action"] == "CALL - ask for the owner"
     assert rows["Mail Garage"]["Next Action"] == "EMAIL - eligible"
+
+
+def test_export_surfaces_person_owned_dm_phone_separately_from_business_phone(tmp_path, monkeypatch):
+    cfg, conn, rid = _bootstrap(tmp_path, monkeypatch)
+    db.upsert_business(conn, Business(id="dm-phone", name="DM Phone Garage", source="gosom",
+                                      dedupe_key="dk-dm-phone", phone_e164="+441483100000"))
+    db.add_person(conn, Person(business_id="dm-phone", name="Jo Owner", title="Owner", is_dm=1,
+                               dm_confidence=0.95, labeled_by="agent"))
+    person_id = conn.execute("SELECT id FROM people WHERE business_id='dm-phone'").fetchone()[0]
+    db.add_contact(conn, Contact(business_id="dm-phone", kind="phone", value="+441483200000",
+                                 label="structured_person", tier="valid", phone_type="direct"))
+    db.add_observation(conn, EnrichmentObservation(
+        business_id="dm-phone", field="phone", value="+441483200000", source="public_site:structured_person",
+        source_url="https://example.test/team", evidence="Jo Owner — Owner — tel", confidence=0.95,
+        verification_state="observed", person_id=person_id, person_name="Jo Owner",
+    ))
+    _score(conn, rid, "dm-phone")
+    row = _csv_rows(export_run(conn, _icp(), rid, cfg.exports_dir, ["csv"], cfg=cfg))[0]
+    assert "+44 1483 100000" in row["Phone"]
+    assert "+44 1483 200000" in row["DM Phone"]
+    assert row["DM Phone Type"] == "direct"
+    assert row["DM Phone Source"] == "public_site:structured_person"
 
 
 def test_next_action_shows_outreach_state_when_an_outreach_targets_row_exists(tmp_path, monkeypatch):

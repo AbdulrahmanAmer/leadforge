@@ -222,3 +222,20 @@ immediately and the changed-area suite now passes 84 tests with Ruff clean. The 
 
 Lesson: every recall improvement that merges evidence must have both a first-observation fixture and a duplicate-
 representation fixture. This is now part of the acceptance gate before adding more source adapters.
+
+### Round 15 — export was hiding the DM route
+
+Audit finding: the data model already allowed person-owned phone observations, but `_row_for` selected the business
+phone for the exported `Phone` column. A direct DM route could therefore be discovered correctly and still be hidden
+from the caller by the switchboard.
+
+Change: exports now include `DM Phone`, `DM Phone Type`, and `DM Phone Source`. Selection is restricted to the
+accepted DM's own phone observations and ranks verified/observed state, direct/mobile type, provider, and confidence.
+The original `Phone` column remains the business-level number for backward compatibility.
+
+Metrics now distinguish `accepted_dms_with_person_phone`, `accepted_dms_with_direct_or_mobile`, and
+`accepted_dms_with_person_email` from generic business contact coverage.
+
+Validation: 23 export/foundation tests passed with Ruff clean. This is a direct accuracy improvement because the
+calling artifact now exposes the DM route instead of only the company route; the next benchmark rerun should measure
+whether this raises DM reach rate without changing extraction.

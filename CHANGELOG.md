@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.2] — 2026-10-14
+
+DM route visibility and coverage metrics.
+
+### Added
+- Exported `DM Phone`, `DM Phone Type`, and `DM Phone Source` columns selected only from the accepted DM's
+  person-owned observations.
+- Coverage metrics separating accepted-DM person-phone, direct/mobile, and person-email coverage from generic
+  business contact coverage.
+
+### Changed
+- The original `Phone` column remains the business-level phone for backward compatibility; callers can now use the
+  explicit DM route columns to prioritize the decision maker.
+
 ## [0.6.1] — 2026-10-14
 
 DM-route accuracy iteration: structured person contact ownership, team-card extraction, and operator calibration.

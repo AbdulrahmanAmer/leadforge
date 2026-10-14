@@ -55,6 +55,25 @@ def test_phase0_metrics_report_coverage_hit_rate_and_outcome_attribution(conn):
     assert cost_per_verified_dm(conn) == 0.0
 
 
+def test_coverage_metrics_separate_person_owned_dm_routes_from_business_contacts(conn):
+    from leadforge.enrich.metrics import coverage_metrics
+
+    _business(conn)
+    db.add_person(conn, Person(business_id="b1", name="Jane Doe", title="Owner", is_dm=1))
+    person_id = conn.execute("SELECT id FROM people WHERE business_id='b1'").fetchone()[0]
+    db.add_contact(conn, Contact(business_id="b1", kind="phone", value="+441234567890",
+                                 phone_type="direct", tier="valid"))
+    db.add_observation(conn, EnrichmentObservation(
+        business_id="b1", field="phone", value="+441234567890", source="team_page",
+        person_id=person_id, verification_state="observed",
+    ))
+    metrics = coverage_metrics(conn)
+    assert metrics["businesses_with_accepted_dm"] == 1
+    assert metrics["accepted_dms_with_person_phone"] == 1
+    assert metrics["accepted_dms_with_direct_or_mobile"] == 1
+    assert metrics["accepted_dms_with_person_email"] == 0
+
+
 def test_legacy_backfill_is_idempotent_and_preserves_person_ownership(conn):
     _business(conn)
     db.add_person(conn, Person(business_id="b1", name="Jane Doe", title="Owner", origin="heuristic"))

@@ -33,6 +33,7 @@ _DEFAULT_CFG = Config()
 
 COLUMNS = [
     "Score", "Tier", "Business", "Category", "DM Name", "DM Title", "DM Conf", "Phone",
+    "DM Phone", "DM Phone Type", "DM Phone Source",
     "Email", "Email Tier", "Email (Inferred)", "Website", "Address", "City", "Region", "Postal", "Country",
     "Rating", "Reviews", "Likely Need (Hook)", "Why This Score", "Maps", "Source", "Verified On", "Stale?",
     "Opening Hours", "Company No", "Incorporated", "Company Status", "SIC Codes", "Call Readiness",
@@ -101,6 +102,44 @@ def _display_phone(e164: str | None) -> str:
         return e164
 
 
+def _best_dm_phone(conn: sqlite3.Connection, business_id: str, dm, contacts) -> tuple[str, str, str]:
+    """Return the strongest person-owned phone for the selected DM.
+
+    Generic business phones remain in ``Phone``. A DM phone is only selected from an observation
+    explicitly attached to this person's row; this prevents a nearby switchboard or another
+    employee's line from being presented as the DM route.
+    """
+    if dm is None:
+        return "", "", ""
+    contact_types = {
+        c["value"]: (c["phone_type"] or "unknown")
+        for c in contacts if c["kind"] == "phone"
+    }
+    state_rank = {"verified": 4, "observed": 3, "unverified": 1}
+    type_rank = {"direct": 4, "mobile": 4, "unknown": 2, "main_line": 1, "switchboard": 0}
+    provider_rank = {"human_calling": 3, "oss": 2, "byol": 1}
+    candidates = []
+    for obs in db.observations_for(conn, business_id, "phone"):
+        if obs["person_id"] != dm["id"] or obs["verification_state"] in {"rejected", "stale"}:
+            continue
+        try:
+            value = json.loads(obs["value_json"])
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, str) or not value.strip():
+            continue
+        phone_type = contact_types.get(value, "unknown")
+        candidates.append((
+            state_rank.get(obs["verification_state"], 0), type_rank.get(phone_type, 0),
+            provider_rank.get(obs["provider"], 0), float(obs["confidence"] or 0),
+            value, phone_type, obs["source"],
+        ))
+    if not candidates:
+        return "", "", ""
+    _state, _type, _provider, _confidence, value, phone_type, source = max(candidates)
+    return _display_phone(value), phone_type, source
+
+
 def _site_status(enrich: dict) -> tuple[str, bool]:
     """-> ('not crawlable (robots)' | 'dead (<status/error>)' | 'live' | 'redirects to <host>' |
     'unreachable' | 'not crawled', site_dead). v0.3 polish decision table (docs/09 §D), checked
@@ -151,6 +190,7 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
     people = db.people_for(conn, s["business_id"])
     dm = next((p for p in people if p["is_dm"] == 1), None)
     contacts = db.contacts_for(conn, s["business_id"])
+    dm_phone, dm_phone_type, dm_phone_source = _best_dm_phone(conn, s["business_id"], dm, contacts)
     # Affinity MUST be backfilled BEFORE ranking (docs/09 §D fix): every pre-v0.3 row stores
     # affinity is written at insert time for every email contact (crawl and infer), so ranking and
     # grading always use the real value — Email / Email Confidence / Lawful Basis / contactability
@@ -182,6 +222,9 @@ def _row_for(conn: sqlite3.Connection, s, staleness_days: int = 90, *,
         "DM Conf": round(dm["dm_confidence"], 2) if dm else "",
         "Phone": _display_phone(s["phone_e164"]) or s["phone_raw"]
                  or _display_phone(next((c["value"] for c in contacts if c["kind"] == "phone"), None)),
+        "DM Phone": dm_phone or "none person-owned",
+        "DM Phone Type": dm_phone_type or "-",
+        "DM Phone Source": dm_phone_source or "-",
         "Email": best_email[0], "Email Tier": best_email[1],
         "Website": s["website"] or "", "Address": s["address_street"] or s["address_full"] or "",
         "City": s["address_city"] or "", "Region": s["address_region"] or "", "Postal": s["address_postal"] or "",

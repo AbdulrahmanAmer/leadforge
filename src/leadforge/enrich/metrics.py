@@ -14,7 +14,7 @@ from leadforge.util import now_iso
 def coverage_metrics(conn: sqlite3.Connection) -> dict[str, int]:
     """Return current business/contact/person/observation coverage counts."""
     q = lambda sql: int(conn.execute(sql).fetchone()[0])  # noqa: E731
-    return {
+    metrics = {
         "businesses": q("SELECT COUNT(*) FROM businesses"),
         "businesses_with_website": q("SELECT COUNT(*) FROM businesses WHERE website IS NOT NULL AND website != ''"),
         "businesses_with_people": q("SELECT COUNT(DISTINCT business_id) FROM people"),
@@ -23,6 +23,32 @@ def coverage_metrics(conn: sqlite3.Connection) -> dict[str, int]:
         "verified_phones": q("SELECT COUNT(*) FROM contacts WHERE kind='phone' AND tier='valid'"),
         "observations": q("SELECT COUNT(*) FROM enrichment_observations"),
     }
+    # DM-route coverage is intentionally person-owned. A business-level phone does not count here,
+    # because it cannot prove that the caller will reach the selected decision maker.
+    metrics.update({
+        "businesses_with_accepted_dm": q(
+            "SELECT COUNT(DISTINCT business_id) FROM people WHERE is_dm=1"
+        ),
+        "accepted_dms_with_person_phone": q(
+            """SELECT COUNT(DISTINCT p.business_id) FROM people p
+               JOIN enrichment_observations o ON o.business_id=p.business_id AND o.person_id=p.id
+               WHERE p.is_dm=1 AND o.field='phone' AND o.verification_state NOT IN ('rejected','stale')"""
+        ),
+        "accepted_dms_with_direct_or_mobile": q(
+            """SELECT COUNT(DISTINCT p.business_id) FROM people p
+               JOIN enrichment_observations o ON o.business_id=p.business_id AND o.person_id=p.id
+               JOIN contacts c ON c.business_id=p.business_id AND c.kind='phone'
+                 AND c.value=json_extract(o.value_json, '$')
+               WHERE p.is_dm=1 AND o.field='phone' AND o.verification_state NOT IN ('rejected','stale')
+                 AND c.phone_type IN ('direct','mobile')"""
+        ),
+        "accepted_dms_with_person_email": q(
+            """SELECT COUNT(DISTINCT p.business_id) FROM people p
+               JOIN enrichment_observations o ON o.business_id=p.business_id AND o.person_id=p.id
+               WHERE p.is_dm=1 AND o.field='email' AND o.verification_state NOT IN ('rejected','stale')"""
+        ),
+    })
+    return metrics
 
 
 def source_hit_rates(conn: sqlite3.Connection) -> list[dict[str, Any]]:
