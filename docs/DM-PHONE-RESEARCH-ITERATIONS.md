@@ -356,3 +356,13 @@ only for ProfilePage, Event organizer/performer, and Organization employee/found
 
 Validation: 61 extraction/foundation tests passed; Ruff is clean after fixing a closure-lint regression. The fixture
 proves a ProfilePage reference recovers a graph-defined owner's phone.
+
+### Round 27 — vCard value-node normalization
+
+Finding: hCard/vCard markup can wrap `TYPE=cell|work|home` and the actual value in separate nested elements. Reading
+the whole `.tel` node can produce a non-parseable label-plus-number string.
+
+Change: structured-card extraction now prefers nested `.value`/`itemprop=value` nodes and avoids the type label,
+while preserving the same-card person ownership and later phone classification.
+
+Validation: 13 enrichment-foundation tests passed with Ruff and diff checks clean.

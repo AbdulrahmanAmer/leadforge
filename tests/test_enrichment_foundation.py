@@ -198,3 +198,16 @@ def test_structured_profile_main_entity_id_resolves_person_from_graph():
     assert [(p.name, p.title, p.phones) for p in people] == [
         ("Riley Stone", "Owner", ("+44 20 7946 0303",)),
     ]
+
+
+def test_vcard_nested_value_ignores_tel_type_label():
+    html = '''
+    <div class="vcard"><span class="fn">Jamie Cole</span><span class="title">Director</span>
+      <span class="tel"><span class="type">cell</span><span class="value">+44 7700 900123</span></span>
+      <span class="email"><span class="value">jamie@example.test</span></span>
+    </div>
+    '''
+    people = extract_structured_people(html, "https://example.test/team")
+    assert len(people) == 1
+    assert people[0].phones == ("+44 7700 900123",)
+    assert people[0].emails == ("jamie@example.test",)

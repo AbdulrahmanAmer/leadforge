@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.13] — 2026-10-14
+
+vCard value-node normalization.
+
+### Fixed
+- Nested vCard `.value`/`itemprop=value` phone and email nodes are extracted without adjacent type labels such as
+  `cell`, `work`, or `home`.
+
 ## [0.6.12] — 2026-10-14
 
 JSON-LD identity reference resolution.
