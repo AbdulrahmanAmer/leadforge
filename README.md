@@ -39,6 +39,18 @@ leadforge doctor --fix --full  # installs deps, pinned scraper binary, AND the q
 Requires **Python 3.11+**. No compiler needed — every default dependency is a pure-python wheel.
 Windows, macOS and Linux are equal citizens.
 
+### Upgrade an older or customized LeadForge copy
+
+If you already have a LeadForge copy with local changes, do not overwrite it with a fresh checkout. Clone the
+target release into a separate directory, compare it with your current workspace, and merge the upstream changes
+selectively while preserving your configuration, lead data, exports, and intentional customizations. The complete
+copy-paste instructions for Claude Code, Codex, and other coding agents are in the
+[`customized-workspace upgrade prompt`](docs/UPGRADE-MERGE-PROMPT.md). The current stable target is `v0.6.0`.
+
+The upgrade workflow includes a safety-point check, three-way comparison, schema/config/version review, focused
+tests followed by the full suite, secret/generated-file checks, and an explicit final report. It does not use
+destructive reset/checkout operations or force-pushes.
+
 ## Use it (the normal way)
 
 Just ask your agent:
