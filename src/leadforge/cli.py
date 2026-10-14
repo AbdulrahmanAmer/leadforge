@@ -294,6 +294,30 @@ def benchmark_outcomes(
                 next_="leadforge benchmark outcomes --in called.tsv --apply" if not apply_changes else "leadforge export")
 
 
+@benchmark_app.command("dm-fields")
+def benchmark_dm_fields(
+    ctx: typer.Context,
+    input_path: str = typer.Option(..., "--in", help="CSV/TSV/XLSX with operator-confirmed DM fields."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Write matched DM observations; default is preview only."),
+):
+    """Preview or import person-owned DM phone/email fields for calibration."""
+    from leadforge import db
+    from leadforge.enrich.benchmark import import_dm_fields
+
+    cfg = _cfg(ctx)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = import_dm_fields(conn, Path(input_path), dry_run=not apply_changes,
+                                  default_region=cfg.default_region)
+    except (OSError, ValueError) as exc:
+        emit_digest(False, "benchmark-dm-fields", warnings=[str(exc)[:160]])
+        raise typer.Exit(2) from exc
+    _say(ctx, f"rows={result['rows']} matched={result['matched']} imported={result['imported']} "
+          f"duplicates={result['duplicates']} ambiguous={result['ambiguous']} unmatched={result['unmatched']}")
+    emit_digest(True, "benchmark-dm-fields", counts=result,
+                next_="leadforge benchmark dm-fields --in called.xlsx --apply" if not apply_changes else "leadforge export")
+
+
 @dm_app.command("export")
 def dm_export(
     ctx: typer.Context,

@@ -86,10 +86,35 @@ def test_phone_typing_is_conservative_and_supports_all_public_labels():
 def test_structured_people_extracts_schema_person_and_vcard_without_text_inference():
     html = '''
     <script type="application/ld+json">{"@context":"https://schema.org","@type":"Person",
-      "name":"Jane Doe","jobTitle":"Managing Director"}</script>
-    <div class="vcard"><span class="fn">Sam Smith</span><span class="title">Operations Manager</span></div>
+      "name":"Jane Doe","jobTitle":"Managing Director","telephone":"+44 20 7946 0958",
+      "email":"jane.doe@example.test"}</script>
+    <div class="vcard"><span class="fn">Sam Smith</span><span class="title">Operations Manager</span>
+      <a class="tel" href="tel:+1-212-555-0100">+1 212 555 0100</a>
+      <a class="email" href="mailto:sam.smith@example.test">Email Sam</a></div>
     '''
     people = extract_structured_people(html, "https://example.test/team")
     assert {(p.name, p.title) for p in people} == {
         ("Jane Doe", "Managing Director"), ("Sam Smith", "Operations Manager")
     }
+    jane = next(p for p in people if p.name == "Jane Doe")
+    sam = next(p for p in people if p.name == "Sam Smith")
+    assert jane.phones == ("+44 20 7946 0958",)
+    assert jane.emails == ("jane.doe@example.test",)
+    assert sam.phones == ("+1 212 555 0100",)
+    assert sam.emails == ("sam.smith@example.test",)
+
+
+def test_structured_people_extracts_common_team_card_contacts():
+    html = '''
+    <section class="team-member">
+      <h3>Alex Morgan</h3><div class="role">Managing Director</div>
+      <a href="tel:+442012345678">Call Alex</a>
+      <a href="mailto:alex@example.test">Email Alex</a>
+    </section>
+    '''
+    people = extract_structured_people(html, "https://example.test/about/team")
+    assert len(people) == 1
+    assert people[0].name == "Alex Morgan"
+    assert people[0].title == "Managing Director"
+    assert people[0].phones == ("+442012345678",)
+    assert people[0].emails == ("alex@example.test",)

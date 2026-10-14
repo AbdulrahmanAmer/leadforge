@@ -132,6 +132,8 @@ class PersonCandidate:
     snippet: str
     source_url: str
     context: str = "other"  # v0.3: "team" | "other" — was this found on/near a team/staff/about context?
+    phones: tuple[str, ...] = ()
+    emails: tuple[str, ...] = ()
 
 
 def extract_structured_people(html: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
@@ -144,17 +146,42 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
     out: list[PersonCandidate] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(name: str, title: str, snippet: str, context: str) -> None:
+    def add(name: str, title: str, snippet: str, context: str,
+            phones: list[str] | tuple[str, ...] = (), emails: list[str] | tuple[str, ...] = ()) -> None:
         name = " ".join((name or "").split())
         title = " ".join((title or "").split())
         if not name or len(name.split()) > 6:
             return
         key = (name.casefold(), title.casefold())
-        if key in seen or len(out) >= max_candidates:
+        clean_phone_values: list[str] = []
+        phone_keys: set[str] = set()
+        for raw_phone in phones:
+            value = " ".join(str(raw_phone).split())
+            phone_key = re.sub(r"\D", "", value)
+            if value and phone_key not in phone_keys:
+                phone_keys.add(phone_key)
+                clean_phone_values.append(value)
+        clean_phones = tuple(clean_phone_values)
+        clean_emails = tuple(dict.fromkeys(
+            str(v).strip().removeprefix("mailto:").split("?", 1)[0].lower()
+            for v in emails if EMAIL_RE.fullmatch(str(v).strip().removeprefix("mailto:").split("?", 1)[0].lower())
+        ))
+        if key in seen:
+            for index, existing in enumerate(out):
+                if (existing.name.casefold(), existing.title.casefold()) == key:
+                    merged_phones = tuple(dict.fromkeys(existing.phones + clean_phones))
+                    merged_emails = tuple(dict.fromkeys(existing.emails + clean_emails))
+                    out[index] = PersonCandidate(name=existing.name, title=existing.title,
+                                                  snippet=existing.snippet, source_url=existing.source_url,
+                                                  context=existing.context, phones=merged_phones,
+                                                  emails=merged_emails)
+                    break
+            return
+        if len(out) >= max_candidates:
             return
         seen.add(key)
         out.append(PersonCandidate(name=name, title=title, snippet=snippet[:300], source_url=source_url,
-                                   context=context))
+                                   context=context, phones=clean_phones, emails=clean_emails))
 
     def walk(value):
         if isinstance(value, list):
@@ -184,16 +211,36 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
             occupation = obj.get("hasOccupation")
             if not title and isinstance(occupation, dict):
                 title = occupation.get("name", "")
-            add(str(name or ""), str(title or ""), f"Schema.org Person: {name} — {title}".strip(" —"), "structured")
+            telephone = obj.get("telephone", ())
+            email = obj.get("email", ())
+            if isinstance(telephone, dict):
+                telephone = telephone.get("value", ())
+            if isinstance(email, dict):
+                email = email.get("value", ())
+            if not isinstance(telephone, (list, tuple)):
+                telephone = (telephone,) if telephone else ()
+            if not isinstance(email, (list, tuple)):
+                email = (email,) if email else ()
+            add(str(name or ""), str(title or ""), f"Schema.org Person: {name} — {title}".strip(" —"),
+                "structured", telephone, email)
 
-    for card in tree.css(".vcard, [itemtype*='schema.org/Person']"):
-        name_node = card.css_first(".fn, [itemprop='name']")
+    for card in tree.css(
+        ".vcard, [itemtype*='schema.org/Person'], .team-member, .team_member, "
+        ".staff-member, .staff_member, .employee, [class*='team-member']"
+    ):
+        name_node = card.css_first(".fn, [itemprop='name'], h2, h3, h4")
         if name_node is None:
             continue
-        title_node = card.css_first(".title, [itemprop='jobTitle']")
+        title_node = card.css_first(".title, [itemprop='jobTitle'], .role, .position")
         name = name_node.text(separator=" ")
         title = title_node.text(separator=" ") if title_node is not None else ""
-        add(name, title, f"Structured contact: {name} — {title}".strip(" —"), "structured")
+        phones = [n.text(separator=" ") for n in card.css(".tel, [itemprop='telephone']")]
+        emails = [n.text(separator=" ") for n in card.css(".email, [itemprop='email']")]
+        for node in card.css("a[href^='tel:']"):
+            phones.append((node.attributes.get("href") or "")[4:].split("?", 1)[0])
+        for node in card.css("a[href^='mailto:']"):
+            emails.append((node.attributes.get("href") or "")[7:].split("?", 1)[0])
+        add(name, title, f"Structured contact: {name} — {title}".strip(" —"), "structured", phones, emails)
     return out
 
 

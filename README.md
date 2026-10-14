@@ -139,6 +139,8 @@ leadforge enrich --stage recheck        # report observations due for recheck
 leadforge byol import --in contacts.csv # preview conservative matching (add --apply to write)
 leadforge benchmark outcomes --in called.xlsx
 leadforge benchmark outcomes --in called.xlsx --apply
+leadforge benchmark dm-fields --in called.xlsx       # preview person-owned DM phone/email calibration
+leadforge benchmark dm-fields --in called.xlsx --apply
 ```
 
 The benchmark importer accepts CSV/TSV and calling workbooks. It understands WESCORE-style `Dialing List`, `List #2`,
@@ -146,6 +148,11 @@ The benchmark importer accepts CSV/TSV and calling workbooks. It understands WES
 and uses stable business ID, domain, phone, or existing contact evidence for conservative matching. It is preview-only
 unless `--apply` is supplied. See [`docs/10-enrichment-phase0-baseline.md`](docs/10-enrichment-phase0-baseline.md) for
 the baseline, metrics, risks, and implementation order.
+
+`benchmark dm-fields` is the operator-calibration path for workbooks containing `Decision Maker`, `DM Title`,
+`DM Direct Phone / Best Route`, and DM email columns. It records the route as human-called evidence tied to the
+person and workbook sheet; it does not replace public-source observations. See the ongoing accuracy loop in
+[`docs/DM-PHONE-RESEARCH-ITERATIONS.md`](docs/DM-PHONE-RESEARCH-ITERATIONS.md).
 
 ## Under the hood
 
@@ -206,9 +213,10 @@ with a company rubric (incorporation age, new-director trigger, hiring). Example
 
 ## Status
 
-**v0.6.0 — enrichment truth and verification (2026-10-14).** LeadForge now stores field-level enrichment
+**v0.6.1 — DM-route accuracy iteration (2026-10-14).** LeadForge now stores field-level enrichment
 observations with provenance, confidence, verification, ownership, freshness, jurisdiction, and cost; supports
-multiple people and contacts, richer public structured-person extraction, conservative BYOL and calling-workbook
+multiple people and contacts, richer public structured-person/team-card extraction, conservative BYOL and
+person-owned calling-workbook
 benchmarks, source/provider/outreach attribution, and opt-in strict email confirmation based on licensed-provider,
 delivery, reply, or operator evidence. The OSS/no-key path remains the default; SMTP mailbox probing and LinkedIn
 scraping remain excluded.

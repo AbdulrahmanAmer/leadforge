@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 from leadforge import db
 from leadforge.cli import app
 from leadforge.config import load_config
-from leadforge.enrich.benchmark import import_outcomes
+from leadforge.enrich.benchmark import import_dm_fields, import_outcomes
 from leadforge.models import Business
 
 
@@ -66,3 +66,31 @@ def test_workbook_import_reads_calling_tabs_and_is_idempotent(conn, tmp_path: Pa
     assert written["imported"] == 1
     assert written["duplicates"] == 1
     assert conn.execute("SELECT COUNT(*) FROM outcomes WHERE business_id=?", (business_id,)).fetchone()[0] == 1
+
+
+def test_workbook_dm_fields_are_person_owned_and_dry_run_by_default(conn, tmp_path: Path):
+    db.upsert_business(conn, Business(id="b1", name="Example", name_norm="example",
+                                      domain="example.co.uk", dedupe_key="dm-fields"))
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List #2"
+    sheet.append(["Company", "Decision Maker", "DM Title", "DM Direct Phone / Best Route", "DM Email", "Website"])
+    sheet.append(["Example", "Jane Doe", "Owner", "+44 20 1234 5678", "jane@example.co.uk",
+                  "https://www.example.co.uk"])
+    path = tmp_path / "dm-fields.xlsx"
+    workbook.save(path)
+
+    preview = import_dm_fields(conn, path, default_region="GB")
+    assert preview["matched"] == 1 and preview["imported"] == 0
+    assert conn.execute("SELECT COUNT(*) FROM people").fetchone()[0] == 0
+
+    written = import_dm_fields(conn, path, dry_run=False, default_region="GB")
+    assert written["imported"] == 2
+    person = conn.execute("SELECT * FROM people WHERE name='Jane Doe'").fetchone()
+    assert person["title"] == "Owner"
+    observations = conn.execute(
+        "SELECT * FROM enrichment_observations WHERE provider='human_calling' ORDER BY field"
+    ).fetchall()
+    assert {row["field"] for row in observations} == {"email", "phone"}
+    assert all(row["person_id"] == person["id"] for row in observations)
+    assert all(row["source"] == "human_calling:List #2" for row in observations)

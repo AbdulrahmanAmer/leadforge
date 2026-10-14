@@ -37,7 +37,7 @@ from leadforge.enrich.extract import (
 )
 from leadforge.enrich.validate import validate_email, validate_emails_parallel
 from leadforge.models import Contact, EnrichmentObservation, Evidence, Person
-from leadforge.normalize import COUNTRY_TO_REGION
+from leadforge.normalize import COUNTRY_TO_REGION, to_e164
 from leadforge.util import LOG, HostThrottle, emit_progress, now_iso
 
 
@@ -669,6 +669,38 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
         db.add_evidence(conn, Evidence(business_id=bid, ref_table="people", fact="dm_candidate",
                                        url=cand.source_url, snippet=f"{cand.name} — {cand.title}", observed_at=now_iso()))
         counts["dm_candidates"] += 1
+        # Structured Person/vCard contacts are person-owned observations. Keep the legacy contact
+        # table populated for exports, while the observation's person_id prevents a published
+        # direct line from being mistaken for a generic switchboard number.
+        region = _region_for_business(b, cfg.default_region)
+        for raw_phone in cand.phones:
+            phone, _reason = to_e164(raw_phone, region)
+            if not phone:
+                continue
+            phone_type = classify_phone(phone, context=f"{cand.name} {cand.title}", business_phone=b["phone_e164"])
+            db.add_contact(conn, Contact(business_id=bid, kind="phone", value=phone, label="structured_person",
+                                         tier="valid", verified_at=now_iso(), phone_type=phone_type))
+            _record_observation(conn, EnrichmentObservation(
+                business_id=bid, field="phone", value=phone, source="public_site:structured_person",
+                source_url=cand.source_url, evidence=cand.snippet, confidence=0.95,
+                verification_state="observed", provider="oss",
+                person_id=person_row["id"] if person_row else None, person_name=cand.name,
+            ), fresh_days=180)
+        for raw_email in cand.emails:
+            email = raw_email.strip().removeprefix("mailto:").split("?", 1)[0].lower()
+            if not email_matches_business(email, b["domain"]):
+                continue
+            local = email.split("@", 1)[0]
+            label = "role" if local in {"info", "sales", "office", "contact", "hello", "admin", "support", "team"} else "personal"
+            stage = "published_role" if label == "role" else "published_personal"
+            db.add_contact(conn, Contact(business_id=bid, kind="email", value=email, label=label,
+                                         tier="valid", verified_at=now_iso(), email_stage=stage))
+            _record_observation(conn, EnrichmentObservation(
+                business_id=bid, field="email", value=email, source="public_site:structured_person",
+                source_url=cand.source_url, evidence=cand.snippet, confidence=0.95,
+                verification_state="observed", provider="oss",
+                person_id=person_row["id"] if person_row else None, person_name=cand.name,
+            ), fresh_days=90)
     if registry_result is not None:
         registry_people, profile, _any_covered = registry_result
         _persist_registry_result(conn, b, counts, registry_people, profile)

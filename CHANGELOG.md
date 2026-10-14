@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.1] — 2026-10-14
+
+DM-route accuracy iteration: structured person contact ownership, team-card extraction, and operator calibration.
+
+### Added
+- Schema.org Person, vCard, and conservative team/staff card extraction for person-owned phones/emails.
+- `leadforge benchmark dm-fields` for dry-run-by-default import of operator-confirmed DM title, phone route, and
+  email fields from CSV/TSV/XLSX calling workbooks.
+- Ongoing evidence-driven accuracy log in `docs/DM-PHONE-RESEARCH-ITERATIONS.md`.
+
+### Changed
+- Structured contacts are merged across duplicate markup representations and persisted with person IDs,
+  provenance, confidence, and freshness scheduling while preserving legacy contact exports.
+
 ## [0.6.0] — 2026-10-14
 
 Enrichment truth, provenance, calling benchmarks, and strict email verification controls.
