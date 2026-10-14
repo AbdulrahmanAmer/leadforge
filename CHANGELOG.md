@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.7] — 2026-10-14
+
+Calling-workbook DM identity parsing correction.
+
+### Fixed
+- WESCORE `Decision Maker / Ask For` headers now populate the person name in DM-field and outcome imports; `DM Name`
+  is also recognized.
+
 ## [0.6.6] — 2026-10-14
 
 Structured-data type normalization.

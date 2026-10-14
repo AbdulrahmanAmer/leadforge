@@ -284,3 +284,17 @@ Finding: JSON-LD may encode `@type` as a full vocabulary URL rather than a bare 
 the final URL segment before recognizing Person, Event, ProfilePage, Organization, and business types.
 
 Validation: 60 extraction/foundation tests passed with Ruff and diff checks clean, including a full-URL Person fixture.
+
+### Round 21 — WESCORE header fidelity correction
+
+Audit finding: the supplied workbook uses `Decision Maker / Ask For`, not the shorter `Decision Maker` header. The
+reader recognized the DM phone column but silently dropped all names, which would have made the benchmark look like
+phone-only data.
+
+Change: added aliases for `Decision Maker / Ask For` and `DM Name`. Re-reading the real Workbook 2 now yields 122/122
+named DM-route rows, 122/122 titles, and 63/122 DM emails. The route outcome distribution remains independently
+available: 25 voicemail, 24 callback, 24 send-information, 25 not-interested, 11 wrong/disconnected, 7 no-answer,
+5 gatekeeper, and 1 meeting booked.
+
+Validation: benchmark tests, Ruff, and diff checks pass. This is a benchmark-integrity breakthrough: the calibration
+set now contains the identity fields needed to measure DM-linked coverage rather than merely phone availability.

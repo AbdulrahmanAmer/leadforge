@@ -56,6 +56,8 @@ _WORKBOOK_HEADER_ALIASES = {
     "queuenumber": "queue",
     "company": "company",
     "decisionmaker": "decision_maker",
+    "decisionmakeraskfor": "decision_maker",
+    "dmname": "decision_maker",
     "dmemail": "email",
     "email": "email",
     "phone": "phone",
