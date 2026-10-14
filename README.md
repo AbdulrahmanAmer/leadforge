@@ -150,7 +150,8 @@ Architecture, data model, pipeline behavior and every decision are documented in
 [vision](docs/00-vision.md) · [research](docs/01-research.md) · [architecture](docs/02-architecture.md) ·
 [data model](docs/03-data-model.md) · [pipeline](docs/04-pipeline-behavior.md) ·
 [build plan](docs/05-icm-build-plan.md) · [token contract](docs/06-token-contract.md) ·
-[compliance](docs/07-compliance.md) · [decisions](docs/08-decisions.md).
+[compliance](docs/07-compliance.md) · [decisions](docs/08-decisions.md) ·
+[customized-workspace upgrade prompt](docs/UPGRADE-MERGE-PROMPT.md).
 
 ## Ground rules baked into the code
 
