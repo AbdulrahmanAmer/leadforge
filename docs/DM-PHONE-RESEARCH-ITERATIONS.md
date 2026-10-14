@@ -271,8 +271,9 @@ public speaker/organizer pages while retaining an explicit person-to-contact ass
 
 ### Round 19 — explicit Organization/ProfilePage people
 
-Research/action: structured business pages can expose `Organization.employee`, `founder`, or `member`, while profile
-pages can expose `mainEntity` as a Person. The extractor now follows only those explicit relationships and preserves
+Research/action: [Google ProfilePage guidance](https://developers.google.com/search/docs/appearance/structured-data/profile-page)
+identifies `mainEntity` as the person or organization a profile page is about. Structured business pages can also
+expose `Organization.employee`, `founder`, or `member`. The extractor now follows only those explicit relationships and preserves
 the nested person's own telephone/email values. It still ignores arbitrary nested review/article authors.
 
 Validation: 59 extraction/foundation tests passed with Ruff and diff checks clean. This expands recall for about,
