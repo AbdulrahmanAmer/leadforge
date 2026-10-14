@@ -137,3 +137,18 @@ def test_structured_people_extracts_common_team_card_contacts():
     assert people[0].title == "Managing Director"
     assert people[0].phones == ("+442012345678",)
     assert people[0].emails == ("alex@example.test",)
+
+
+def test_structured_event_roles_can_provide_explicit_person_contacts():
+    html = '''
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Event","name":"Trade Expo",
+      "organizer":{"@type":"Person","name":"Morgan Lee","jobTitle":"Founder",
+        "telephone":"+44 20 7946 0958","email":"morgan@example.test"},
+      "review":{"@type":"Review","author":{"@type":"Person","name":"Customer Reviewer"}}}
+    </script>
+    '''
+    people = extract_structured_people(html, "https://example.test/events/trade-expo")
+    assert [(p.name, p.context, p.phones, p.emails) for p in people] == [
+        ("Morgan Lee", "event", ("+44 20 7946 0958",), ("morgan@example.test",)),
+    ]

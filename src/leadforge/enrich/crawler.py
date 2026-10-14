@@ -23,7 +23,7 @@ from leadforge.util import LOG, HostThrottle
 PAGE_KEYWORDS = re.compile(
     r"(about|team|staff|people|leadership|founders?|management|meet|contact|reach[\s-]?us|"
     r"get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|impress|imprint|"
-    r"legal|careers?|jobs?)",
+    r"legal|careers?|jobs?|press|media|news|speakers?|conference|exhibitors?|events?)",
     re.IGNORECASE,
 )
 
@@ -33,7 +33,8 @@ PAGE_KEYWORDS = re.compile(
 # under pure document-order selection). Anything not matching this gets sorted after.
 _HIGH_PRIORITY_KEYWORDS = re.compile(
     r"(contact|reach[\s-]?us|get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|"
-    r"about|team|staff|people|leadership|founders?|management|meet)",
+    r"about|team|staff|people|leadership|founders?|management|meet|press|media|news|speakers?|conference|"
+    r"exhibitors?|events?)",
     re.IGNORECASE,
 )
 

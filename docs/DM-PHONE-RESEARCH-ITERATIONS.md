@@ -248,3 +248,22 @@ actual DM-route outcomes against switchboard outcomes instead of mixing them.
 
 Validation: 28 benchmark/export/foundation tests passed with Ruff and diff checks clean. This does not infer that a
 callback reached the DM; it records the route the operator dialed, leaving the disposition as the independent result.
+
+### Round 17 — public event/press page discovery
+
+Change: the polite same-host crawler now treats press, media, news, speaker, conference, exhibitor, and event links
+as public enrichment candidates, with high priority alongside about/team/contact pages. This increases the chance of
+reaching publicly published professional biographies before the page cap is exhausted.
+
+Validation: an offline crawler fixture proves speaker, press, and event links are selected. No external host,
+login-gated page, LinkedIn page, or search-engine scraping was added.
+
+### Round 18 — nested event Person ownership
+
+Research: official event structured-data guidance permits `performer` as a Person and `organizer` as a Person;
+Schema.org Person defines telephone/email/jobTitle fields. The extractor now follows only those explicit Event roles
+and carries their same-object phones/emails. It intentionally does not recursively follow review authors or arbitrary
+Article authors, which would create false DM candidates.
+
+Validation: 63 extraction/crawler/foundation tests passed with Ruff clean. The expected value is higher recall on
+public speaker/organizer pages while retaining an explicit person-to-contact association.

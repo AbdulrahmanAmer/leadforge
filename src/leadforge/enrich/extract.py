@@ -192,6 +192,32 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
             if isinstance(value.get("@graph"), (list, dict)):
                 yield from walk(value["@graph"])
 
+    def person_type(value) -> bool:
+        if not isinstance(value, dict):
+            return False
+        kind = value.get("@type", "")
+        kinds = kind if isinstance(kind, list) else [kind]
+        return any(str(k).casefold() == "person" for k in kinds)
+
+    def add_json_person(obj: dict, context: str, prefix: str) -> None:
+        name = obj.get("name")
+        title = obj.get("jobTitle", "")
+        occupation = obj.get("hasOccupation")
+        if not title and isinstance(occupation, dict):
+            title = occupation.get("name", "")
+        telephone = obj.get("telephone", ())
+        email = obj.get("email", ())
+        if isinstance(telephone, dict):
+            telephone = telephone.get("value", ())
+        if isinstance(email, dict):
+            email = email.get("value", ())
+        if not isinstance(telephone, (list, tuple)):
+            telephone = (telephone,) if telephone else ()
+        if not isinstance(email, (list, tuple)):
+            email = (email,) if email else ()
+        add(str(name or ""), str(title or ""), f"{prefix}: {name} — {title}".strip(" —"),
+            context, telephone, email)
+
     tree = HTMLParser(html)
     for script in tree.css('script[type="application/ld+json"]'):
         raw = (script.text() or "").strip()
@@ -204,25 +230,17 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
         for obj in walk(payload):
             kind = obj.get("@type", "")
             kinds = kind if isinstance(kind, list) else [kind]
-            if not any(str(k).casefold() == "person" for k in kinds):
-                continue
-            name = obj.get("name")
-            title = obj.get("jobTitle", "")
-            occupation = obj.get("hasOccupation")
-            if not title and isinstance(occupation, dict):
-                title = occupation.get("name", "")
-            telephone = obj.get("telephone", ())
-            email = obj.get("email", ())
-            if isinstance(telephone, dict):
-                telephone = telephone.get("value", ())
-            if isinstance(email, dict):
-                email = email.get("value", ())
-            if not isinstance(telephone, (list, tuple)):
-                telephone = (telephone,) if telephone else ()
-            if not isinstance(email, (list, tuple)):
-                email = (email,) if email else ()
-            add(str(name or ""), str(title or ""), f"Schema.org Person: {name} — {title}".strip(" —"),
-                "structured", telephone, email)
+            if any(str(k).casefold() == "person" for k in kinds):
+                add_json_person(obj, "structured", "Schema.org Person")
+            # Event pages often publish named organizers/performers as nested Person objects. Only
+            # these explicit event roles are followed; arbitrary nested authors/reviewers are not.
+            if any(str(k).casefold() == "event" for k in kinds):
+                for role in ("organizer", "performer"):
+                    nested = obj.get(role, ())
+                    nested_values = nested if isinstance(nested, list) else (nested,)
+                    for person in nested_values:
+                        if person_type(person):
+                            add_json_person(person, "event", f"Schema.org Event {role.title()}")
 
     for card in tree.css(
         ".vcard, [itemtype*='schema.org/Person'], .team-member, .team_member, "

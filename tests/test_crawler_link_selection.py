@@ -175,3 +175,23 @@ def test_contact_link_survives_page_budget_against_many_low_priority_keyword_lin
     assert "/contact" in _urls(res.pages), (
         f"contact page was cut off by the page budget; fetched paths: {_urls(res.pages)}"
     )
+
+
+def test_public_speaker_and_press_pages_are_candidates(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    cfg.politeness.delay_s = 0.0
+    crawler = SiteCrawler(cfg)
+    try:
+        links = crawler._candidate_links(
+            "https://example.test/",
+            """<html><body>
+              <a href="/services">Services</a>
+              <a href="/speakers">Our Speakers</a>
+              <a href="/press">Press</a>
+              <a href="/events">Events</a>
+            </body></html>""",
+        )
+    finally:
+        crawler.close()
+    assert {link.rsplit("/", 1)[-1] for link in links} >= {"speakers", "press", "events"}

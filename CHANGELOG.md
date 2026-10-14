@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.6.4] — 2026-10-14
+
+Public professional-page discovery and event-person extraction.
+
+### Added
+- Same-host discovery for public press, media, news, speaker, conference, exhibitor, and event pages.
+- Explicit Schema.org Event organizer/performer Person extraction with same-object contact ownership.
+
+### Changed
+- Nested structured extraction remains conservative: review authors and arbitrary nested people are excluded.
+
 ## [0.6.3] — 2026-10-14
 
 DM-route outcome attribution.
