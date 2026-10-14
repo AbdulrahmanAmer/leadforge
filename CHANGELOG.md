@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.10] — 2026-10-14
+
+Route-assisted decision-maker disambiguation.
+
+### Changed
+- When multiple priority-title candidates exist, the deterministic fallback may select one only when exactly one has
+  an explicit non-stale person-owned direct/mobile phone; generic main lines and ties remain unlabeled.
+
 ## [0.6.9] — 2026-10-14
 
 Cross-source person identity continuity.

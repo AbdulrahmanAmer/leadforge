@@ -322,3 +322,14 @@ remain attached to the existing person ID.
 
 Validation: 36 runner/foundation tests passed with Ruff and diff checks clean, including a title-change ownership
 fixture.
+
+### Round 24 — route-assisted DM disambiguation
+
+Finding: the deterministic DM fallback intentionally refused to choose between two priority-title candidates, even
+when one candidate had an explicit person-owned direct/mobile phone and the other had none.
+
+Change: when title matches are tied, heuristic labeling now selects exactly one candidate only if that candidate has a
+non-stale person-owned direct/mobile observation. Confidence is higher than the single-title fallback but remains
+below agent/registry confidence; ties and generic main lines remain unlabeled.
+
+Validation: 23 DM-label/foundation tests passed with Ruff and diff checks clean.

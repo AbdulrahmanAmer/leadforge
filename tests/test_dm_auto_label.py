@@ -9,7 +9,7 @@ import json
 
 from leadforge import db
 from leadforge.enrich import dm
-from leadforge.models import Business, Person
+from leadforge.models import Business, Contact, EnrichmentObservation, Person
 
 
 def _seed_business(conn, biz_id: str, people: list[tuple[str, str, str]]) -> None:
@@ -98,6 +98,24 @@ def test_heuristic_labels_only_when_exactly_one_title_matches(cfg, sample_icp):
     assert abs(one["dm_confidence"] - 0.55) < 1e-9
     assert all(p["is_dm"] == 0 for p in db.people_for(conn, "biz_two"))
     assert all(p["is_dm"] == 0 for p in db.people_for(conn, "biz_zero"))
+
+
+def test_heuristic_labels_uses_one_explicit_direct_route_to_break_title_tie(cfg, sample_icp):
+    conn = db.connect(cfg.db_path)
+    _seed_business(conn, "biz_route", [("Jane Smith", "Owner", "..."),
+                                        ("Bob Jones", "General Manager", "...")])
+    jane_id = conn.execute("SELECT id FROM people WHERE business_id='biz_route' AND name='Jane Smith'").fetchone()[0]
+    db.add_contact(conn, Contact(business_id="biz_route", kind="phone", value="+14155550100",
+                                 phone_type="direct", tier="valid"))
+    db.add_observation(conn, EnrichmentObservation(
+        business_id="biz_route", field="phone", value="+14155550100", source="team_page",
+        person_id=jane_id, verification_state="observed",
+    ))
+    out = dm.heuristic_labels(conn, sample_icp)
+    assert out == {"labeled": 1}
+    jane = next(p for p in db.people_for(conn, "biz_route") if p["name"] == "Jane Smith")
+    assert jane["is_dm"] == 1 and jane["labeled_by"] == "heuristic_route"
+    assert abs(jane["dm_confidence"] - 0.65) < 1e-9
 
 
 def test_auto_label_with_stub_runner_picks_zero_for_every_line(cfg, sample_icp):

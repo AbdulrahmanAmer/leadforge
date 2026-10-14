@@ -130,9 +130,9 @@ def apply_labels(conn: sqlite3.Connection, in_path: Path) -> dict:
 def heuristic_labels(conn: sqlite3.Connection, icp: ICP, limit: int = 10_000) -> dict:
     """Deterministic fallback (ADR-015): for every still-pending business with EXACTLY ONE unlabeled
     candidate whose title contains one of the ICP's priority titles (case-insensitive), mark them the DM
-    at a modest confidence. Everything else — zero matches, or two-plus (genuinely ambiguous) — is left
-    alone; this never writes a reject (-1), only ever a pick, so it can't wrongly close out a business a
-    human or the agent runner still needs to look at."""
+    at a modest confidence. When multiple priority-title candidates exist, an explicit person-owned
+    direct/mobile phone may disambiguate exactly one candidate. Everything else — zero matches, or
+    genuinely ambiguous candidates — is left alone; this never writes a reject (-1)."""
     titles_priority = [t.casefold() for t in icp.decision_maker.titles_priority if t]
     labeled = 0
     if titles_priority:
@@ -144,6 +144,20 @@ def heuristic_labels(conn: sqlite3.Connection, icp: ICP, limit: int = 10_000) ->
                 _set_dm(conn, title_matches[0]["id"], is_dm=1, confidence=0.55, title=None,
                        labeled_by="heuristic_auto")
                 labeled += 1
+            elif len(title_matches) > 1:
+                routed = [p for p in title_matches if conn.execute(
+                    """SELECT 1 FROM enrichment_observations o
+                       JOIN contacts c ON c.business_id=o.business_id AND c.kind='phone'
+                         AND c.value=json_extract(o.value_json, '$')
+                       WHERE o.business_id=? AND o.person_id=? AND o.field='phone'
+                         AND o.verification_state NOT IN ('rejected','stale')
+                         AND c.phone_type IN ('direct','mobile') LIMIT 1""",
+                    (b["id"], p["id"]),
+                ).fetchone()]
+                if len(routed) == 1:
+                    _set_dm(conn, routed[0]["id"], is_dm=1, confidence=0.65, title=None,
+                            labeled_by="heuristic_route")
+                    labeled += 1
     conn.commit()
     return {"labeled": labeled}
 
