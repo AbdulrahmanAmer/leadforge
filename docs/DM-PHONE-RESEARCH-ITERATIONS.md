@@ -239,3 +239,12 @@ Metrics now distinguish `accepted_dms_with_person_phone`, `accepted_dms_with_dir
 Validation: 23 export/foundation tests passed with Ruff clean. This is a direct accuracy improvement because the
 calling artifact now exposes the DM route instead of only the company route; the next benchmark rerun should measure
 whether this raises DM reach rate without changing extraction.
+
+### Round 16 — outcome attribution distinguishes DM routes
+
+Change: when a calling workbook row contains `DM Direct Phone / Best Route`, outcome import now defaults its
+`contact_type` to `dm_direct`; ordinary phone rows remain `phone`. This lets source/provider attribution compare
+actual DM-route outcomes against switchboard outcomes instead of mixing them.
+
+Validation: 28 benchmark/export/foundation tests passed with Ruff and diff checks clean. This does not infer that a
+callback reached the DM; it records the route the operator dialed, leaving the disposition as the independent result.

@@ -94,3 +94,20 @@ def test_workbook_dm_fields_are_person_owned_and_dry_run_by_default(conn, tmp_pa
     assert {row["field"] for row in observations} == {"email", "phone"}
     assert all(row["person_id"] == person["id"] for row in observations)
     assert all(row["source"] == "human_calling:List #2" for row in observations)
+
+
+def test_dm_route_outcomes_are_attributed_as_dm_direct(conn, tmp_path: Path):
+    db.upsert_business(conn, Business(id="b1", name="Example", name_norm="example",
+                                      domain="example.co.uk", dedupe_key="dm-outcome"))
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List #2"
+    sheet.append(["Company", "Decision Maker", "DM Direct Phone / Best Route", "Disposition", "Website"])
+    sheet.append(["Example", "Jane Doe", "+44 20 1234 5678", "Callback", "https://www.example.co.uk"])
+    path = tmp_path / "dm-outcome.xlsx"
+    workbook.save(path)
+
+    result = import_outcomes(conn, path, dry_run=False)
+    assert result["imported"] == 1
+    outcome = conn.execute("SELECT * FROM outcomes WHERE business_id='b1'").fetchone()
+    assert outcome["contact_type"] == "dm_direct"

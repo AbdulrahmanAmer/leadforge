@@ -206,7 +206,7 @@ def import_outcomes(conn: sqlite3.Connection, path: Path, dry_run: bool = True) 
             contacted_at=contacted_at,
             source=row.get("source") or f"user_workbook:{row.get('sheet', 'unknown')}",
             provider=row.get("provider") or "human_calling",
-            contact_type=row.get("contact_type") or "phone",
+            contact_type=row.get("contact_type") or ("dm_direct" if row.get("dm_phone") else "phone"),
         )
         result["imported"] += 1
     return result

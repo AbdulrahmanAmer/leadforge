@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.3] — 2026-10-14
+
+DM-route outcome attribution.
+
+### Changed
+- Calling-workbook outcomes with `DM Direct Phone / Best Route` are attributed as `dm_direct`, while ordinary
+  phone outcomes remain `phone`, enabling route-specific reach-rate analysis.
+
 ## [0.6.2] — 2026-10-14
 
 DM route visibility and coverage metrics.
