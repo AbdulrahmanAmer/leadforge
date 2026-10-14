@@ -23,7 +23,7 @@ from leadforge.util import LOG, HostThrottle
 PAGE_KEYWORDS = re.compile(
     r"(about|team|staff|people|leadership|founders?|management|meet|contact|reach[\s-]?us|"
     r"get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|impress|imprint|"
-    r"legal|careers?|jobs?|press|media|news|speakers?|conference|exhibitors?|events?)",
+    r"legal|careers?|jobs?|press|media|news|speakers?|conference|exhibitors?|events?|profiles?|bios?|biograph(?:y|ies))",
     re.IGNORECASE,
 )
 
@@ -34,7 +34,7 @@ PAGE_KEYWORDS = re.compile(
 _HIGH_PRIORITY_KEYWORDS = re.compile(
     r"(contact|reach[\s-]?us|get[\s-]?in[\s-]?touch|enquir(?:y|ies)|inquir(?:y|ies)|connect[\s-]?with|"
     r"about|team|staff|people|leadership|founders?|management|meet|press|media|news|speakers?|conference|"
-    r"exhibitors?|events?)",
+    r"exhibitors?|events?|profiles?|bios?|biograph(?:y|ies))",
     re.IGNORECASE,
 )
 

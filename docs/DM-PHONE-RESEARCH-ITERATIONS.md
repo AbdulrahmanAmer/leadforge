@@ -334,3 +334,13 @@ non-stale person-owned direct/mobile observation. Confidence is higher than the 
 below agent/registry confidence; ties and generic main lines remain unlabeled.
 
 Validation: 23 DM-label/foundation tests passed with Ruff and diff checks clean.
+
+### Round 25 — profile-link discovery alignment
+
+Finding: profile extraction was implemented, but normal site crawling only selected about/team/contact-style links;
+explicit `/profile`, `/bio`, and `/biography` pages could be missed by the page budget.
+
+Change: profile, bio, and biography links are now first-class high-priority same-host candidates. No external profile
+network or login-gated source is followed.
+
+Validation: 16 crawler/foundation tests passed with Ruff and diff checks clean.

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.11] — 2026-10-14
+
+Profile-page discovery alignment.
+
+### Added
+- Same-host `/profile`, `/bio`, and `/biography` links are prioritized so explicit public profile markup is reached
+  by the crawler.
+
 ## [0.6.10] — 2026-10-14
 
 Route-assisted decision-maker disambiguation.

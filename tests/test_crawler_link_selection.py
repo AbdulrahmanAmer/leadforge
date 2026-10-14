@@ -190,8 +190,9 @@ def test_public_speaker_and_press_pages_are_candidates(tmp_path, monkeypatch):
               <a href="/speakers">Our Speakers</a>
               <a href="/press">Press</a>
               <a href="/events">Events</a>
+              <a href="/profile/jane">Jane's profile</a>
             </body></html>""",
         )
     finally:
         crawler.close()
-    assert {link.rsplit("/", 1)[-1] for link in links} >= {"speakers", "press", "events"}
+    assert {link.rsplit("/", 1)[-1] for link in links} >= {"speakers", "press", "events", "jane"}
