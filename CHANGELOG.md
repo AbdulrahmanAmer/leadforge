@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.5] — 2026-10-14
+
+Explicit structured business/profile people.
+
+### Added
+- Extraction of explicitly nested `Organization.employee`, `founder`, `member`, and `ProfilePage.mainEntity`
+  Person records, including person-owned telephone/email values.
+
 ## [0.6.4] — 2026-10-14
 
 Public professional-page discovery and event-person extraction.

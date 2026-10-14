@@ -152,3 +152,21 @@ def test_structured_event_roles_can_provide_explicit_person_contacts():
     assert [(p.name, p.context, p.phones, p.emails) for p in people] == [
         ("Morgan Lee", "event", ("+44 20 7946 0958",), ("morgan@example.test",)),
     ]
+
+
+def test_structured_organization_and_profile_page_people_are_explicit_only():
+    html = '''
+    <script type="application/ld+json">
+    [{"@context":"https://schema.org","@type":"Organization","name":"Acme",
+      "founder":{"@type":"Person","name":"Taylor Reed","jobTitle":"Founder",
+        "telephone":"+44 20 7946 0101"}},
+     {"@context":"https://schema.org","@type":"ProfilePage","mainEntity":
+      {"@type":"Person","name":"Jordan Vale","jobTitle":"Managing Director",
+       "email":"jordan@example.test"}}]
+    </script>
+    '''
+    people = extract_structured_people(html, "https://example.test/about/jordan")
+    assert {(p.name, p.context, p.phones, p.emails) for p in people} == {
+        ("Taylor Reed", "structured", ("+44 20 7946 0101",), ()),
+        ("Jordan Vale", "profile", (), ("jordan@example.test",)),
+    }

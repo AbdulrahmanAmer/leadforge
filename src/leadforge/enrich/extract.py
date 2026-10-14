@@ -241,6 +241,23 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
                     for person in nested_values:
                         if person_type(person):
                             add_json_person(person, "event", f"Schema.org Event {role.title()}")
+            if any(str(k).casefold() == "profilepage" for k in kinds):
+                nested = obj.get("mainEntity", ())
+                nested_values = nested if isinstance(nested, list) else (nested,)
+                for person in nested_values:
+                    if person_type(person):
+                        add_json_person(person, "profile", "Schema.org ProfilePage")
+            org_like = any(
+                str(k).casefold() in {"organization", "corporation", "localbusiness"}
+                or str(k).casefold().endswith("business") for k in kinds
+            )
+            if org_like:
+                for role in ("employee", "founder", "member"):
+                    nested = obj.get(role, ())
+                    nested_values = nested if isinstance(nested, list) else (nested,)
+                    for person in nested_values:
+                        if person_type(person):
+                            add_json_person(person, "structured", f"Schema.org {role.title()}")
 
     for card in tree.css(
         ".vcard, [itemtype*='schema.org/Person'], .team-member, .team_member, "

@@ -213,9 +213,9 @@ with a company rubric (incorporation age, new-director trigger, hiring). Example
 
 ## Status
 
-**v0.6.4 — DM-route accuracy iteration (2026-10-14).** LeadForge now stores field-level enrichment
+**v0.6.5 — DM-route accuracy iteration (2026-10-14).** LeadForge now stores field-level enrichment
 observations with provenance, confidence, verification, ownership, freshness, jurisdiction, and cost; supports
-multiple people and contacts, richer public structured-person/team-card extraction, conservative BYOL and
+multiple people and contacts, richer public structured-person/team-card/event extraction, conservative BYOL and
 person-owned calling-workbook
 benchmarks, source/provider/outreach attribution, and opt-in strict email confirmation based on licensed-provider,
 delivery, reply, or operator evidence. The OSS/no-key path remains the default; SMTP mailbox probing and LinkedIn

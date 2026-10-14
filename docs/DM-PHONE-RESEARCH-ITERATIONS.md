@@ -260,10 +260,20 @@ login-gated page, LinkedIn page, or search-engine scraping was added.
 
 ### Round 18 — nested event Person ownership
 
-Research: official event structured-data guidance permits `performer` as a Person and `organizer` as a Person;
-Schema.org Person defines telephone/email/jobTitle fields. The extractor now follows only those explicit Event roles
+Research: [Google's Event structured-data guidance](https://developers.google.com/search/docs/appearance/structured-data/event)
+permits `performer` as a Person and `organizer` as a Person; [Schema.org Person](https://schema.org/Person) defines
+telephone/email/jobTitle fields. The extractor now follows only those explicit Event roles
 and carries their same-object phones/emails. It intentionally does not recursively follow review authors or arbitrary
 Article authors, which would create false DM candidates.
 
 Validation: 63 extraction/crawler/foundation tests passed with Ruff clean. The expected value is higher recall on
 public speaker/organizer pages while retaining an explicit person-to-contact association.
+
+### Round 19 — explicit Organization/ProfilePage people
+
+Research/action: structured business pages can expose `Organization.employee`, `founder`, or `member`, while profile
+pages can expose `mainEntity` as a Person. The extractor now follows only those explicit relationships and preserves
+the nested person's own telephone/email values. It still ignores arbitrary nested review/article authors.
+
+Validation: 59 extraction/foundation tests passed with Ruff and diff checks clean. This expands recall for about,
+leadership, and owner profile pages without turning generic business markup into a person assignment.
