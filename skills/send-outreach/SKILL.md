@@ -4,7 +4,7 @@ description: Send bounded, audited cold-email outreach to a LeadForge lead sheet
 license: MIT
 compatibility: Requires shell access, Python 3.11+, network, and an existing LeadForge workspace with scored leads. Windows, macOS, Linux.
 metadata:
-  version: "0.5.0"
+  version: "0.6.0"
   author: leadforge
 ---
 

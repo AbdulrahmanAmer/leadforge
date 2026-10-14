@@ -175,12 +175,20 @@ class RegistryCfg(BaseModel):
     active_only: bool = True           # v0.3: dissolved/liquidated companies are never matched
 
 
+class PaidEnrichmentCfg(BaseModel):
+    """Optional licensed enrichment adapters; no paid adapter runs unless explicitly enabled."""
+
+    enabled: bool = False
+    providers: list[str] = Field(default_factory=list)
+
+
 class OutreachCfg(BaseModel):
     """v0.3 sending layer (ADR-011/012). Nothing sends unless `armed` is true AND `--live` AND `--i-am` agree."""
 
     armed: bool = False
     transport: str = "file"            # file (dry-run .eml) | smtp | <registered adapter>
     require_corporate: bool = False    # owner decision 5: plausibility-linked freemail is mailable by default
+    require_email_confirmation: bool = False  # provider/delivery/reply/operator confirmation; never SMTP probing
     send_window: str = "09:00-17:00"   # local time of `timezone`
     timezone: str = "Europe/London"
     follow_up_days: int = 5
@@ -258,6 +266,7 @@ class Config(BaseModel):
     enrich: EnrichCfg = Field(default_factory=EnrichCfg)
     validation: ValidationCfg = Field(default_factory=ValidationCfg)
     registry: RegistryCfg = Field(default_factory=RegistryCfg)
+    paid_enrichment: PaidEnrichmentCfg = Field(default_factory=PaidEnrichmentCfg)
     social: SocialCfg = Field(default_factory=SocialCfg)
     export: ExportCfg = Field(default_factory=ExportCfg)
     outreach: OutreachCfg = Field(default_factory=OutreachCfg)

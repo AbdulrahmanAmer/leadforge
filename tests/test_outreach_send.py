@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import pytest
 
 from leadforge import db
+from leadforge.models import EnrichmentObservation
 from leadforge.outreach import send as send_mod
 from leadforge.outreach.approve import approve_messages
 from leadforge.util import LeadForgeError
@@ -47,6 +48,47 @@ def test_dry_run_marks_nothing_sent_and_writes_eml(cfg, conn):
     assert conn.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()["state"] == "approved"
     assert conn.execute("SELECT state FROM outreach_targets WHERE id=?", (tid,)).fetchone()["state"] == "approved"
     assert len(result["artifacts"]) == 1
+
+
+def test_dry_run_rechecks_email_eligibility_before_rendering(cfg, conn):
+    _bid, _tid, _mid = _ready_message(conn, campaign="dry-ineligible", email="invalid@example.test")
+    conn.execute("UPDATE contacts SET tier='invalid' WHERE business_id=?", (_bid,))
+    conn.commit()
+    result = send_mod.dry_run(conn, cfg, campaign="dry-ineligible")
+    assert result["counts"]["would_send"] == 0
+    assert result["counts"]["skipped_no_recipient"] == 1
+    assert result["artifacts"] == []
+
+
+def test_send_rechecks_due_email_observation(cfg, conn):
+    _armed_cfg(cfg)
+    bid, _tid, mid = _ready_message(conn, campaign="stale-email")
+    db.add_observation(conn, EnrichmentObservation(
+        business_id=bid, field="email", value="owner@abbeyauto.co.uk", source="public_site",
+        verification_state="verified", recheck_at="2020-01-01T00:00:00Z",
+    ))
+    conn.commit()
+    result = send_mod.live_send(conn, cfg, campaign="stale-email", i_am="alice")
+    assert result["counts"]["sent"] == 0
+    assert result["counts"]["skipped_ineligible"] == 1
+    assert conn.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()["state"] == "approved"
+
+
+def test_strict_email_confirmation_requires_real_evidence(cfg, conn):
+    _armed_cfg(cfg)
+    cfg.outreach.require_email_confirmation = True
+    bid, _tid, mid = _ready_message(conn, campaign="strict-email")
+    result = send_mod.live_send(conn, cfg, campaign="strict-email", i_am="alice")
+    assert result["counts"]["skipped_ineligible"] == 1
+    conn.execute(
+        "INSERT INTO enrichment_observations(business_id,field,value_json,source,verification_state,provider,observed_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (bid, "email_confirmation", '"owner@abbeyauto.co.uk"', "delivery", "verified", "oss", "2026-10-14T00:00:00Z"),
+    )
+    conn.commit()
+    result = send_mod.live_send(conn, cfg, campaign="strict-email", i_am="alice")
+    assert result["counts"]["sent"] == 1
+    assert conn.execute("SELECT state FROM messages WHERE id=?", (mid,)).fetchone()["state"] == "sent"
 
 
 def test_live_unarmed_sends_nothing(cfg, conn):

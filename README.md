@@ -94,6 +94,47 @@ message, never sent.
 The workbook also carries a **Summary** tab (counts, tier split, top hooks, compliance reminder for your region)
 and an **About** tab that explains the columns — so your partner can read it without asking you.
 
+## Enrichment coverage and verification
+
+LeadForge keeps a field-level observation for enriched values. Each observation records its source URL, evidence,
+confidence, verification state, provider, cost, jurisdiction, timestamps, freshness/recheck deadline, and (when
+known) the person who owns the value. A business may have multiple people, and each person may have multiple phones
+and emails. Public enrichment includes team/about pages, Schema.org `Person`, vCards, nearby `mailto:` links,
+registry officers, press/speaker pages, and existing lawful Google Business Profile owner-reply evidence. Phones are
+typed as `switchboard`, `main_line`, `direct`, `mobile`, or `unknown`; emails retain their stage: published personal,
+published role, inferred pattern, or licensed-provider verification.
+
+The default path remains OSS and keyless. Paid enrichment adapters are optional and disabled unless explicitly
+configured. No LinkedIn scraping or SMTP mailbox probing is used. MX validation confirms that a domain can receive
+mail; it does not claim that a particular mailbox exists.
+
+For stricter outreach, require confirmation evidence in `leadforge.yaml`:
+
+```yaml
+outreach:
+  require_email_confirmation: true
+```
+
+Strict mode permits only licensed-provider verification, actual delivery evidence, a reply, or explicit operator
+confirmation. MX-only, inferred, risky, unknown, stale, and unconfirmed addresses are blocked before rendering or
+sending.
+
+Useful enrichment and benchmarking commands:
+
+```bash
+leadforge enrich --stage backfill       # project legacy contacts/people/evidence into observations
+leadforge enrich --stage recheck        # report observations due for recheck
+leadforge byol import --in contacts.csv # preview conservative matching (add --apply to write)
+leadforge benchmark outcomes --in called.xlsx
+leadforge benchmark outcomes --in called.xlsx --apply
+```
+
+The benchmark importer accepts CSV/TSV and calling workbooks. It understands WESCORE-style `Dialing List`, `List #2`,
+`List #3`, `Call Log`, and callback tabs, maps human dispositions to canonical outcomes, preserves sheet provenance,
+and uses stable business ID, domain, phone, or existing contact evidence for conservative matching. It is preview-only
+unless `--apply` is supplied. See [`docs/10-enrichment-phase0-baseline.md`](docs/10-enrichment-phase0-baseline.md) for
+the baseline, metrics, risks, and implementation order.
+
 ## Under the hood
 
 ```
@@ -119,9 +160,10 @@ Architecture, data model, pipeline behavior and every decision are documented in
   login-gated scraping**, **no anti-bot evasion**, **no dialer, no SMS**. Public business data only.
 - **Email sending is opt-in and audited (v0.3, ADR-011):** dry-run by default, `--live` only with `outreach.armed: true`
   and a named approver, approval bound to the message's content hash, suppression / eligibility / caps / warm-up / send
-  window re-checked inside the send transaction, one-click unsubscribe, bounces and complaints written to the suppression
-  list automatically, a per-mailbox circuit breaker. No paid service is required or bundled (ADR-012): the transport is
-  whatever mailbox you configure.
+  window and current email verification/recheck state re-checked before rendering/sending, one-click unsubscribe,
+  bounces and complaints written to the suppression list automatically, a per-mailbox circuit breaker. Strict mode
+  additionally requires licensed-provider verification or delivery/reply/operator confirmation. No paid service is
+  required or bundled (ADR-012): the transport is whatever mailbox you configure.
 - **Country is required** on every campaign and areas must be specific — vague locations are how lead lists fill
   with garbage, so the tool refuses them and asks instead of guessing.
 - **Autopilot never sends anything (v0.4, ADR-015):** `leadforge run` labels decision makers, scores, drafts and
@@ -150,6 +192,13 @@ with a company rubric (incorporation age, new-director trigger, hiring). Example
 `config/icp.company.example.yaml`.
 
 ## Status
+
+**v0.6.0 — enrichment truth and verification (2026-10-14).** LeadForge now stores field-level enrichment
+observations with provenance, confidence, verification, ownership, freshness, jurisdiction, and cost; supports
+multiple people and contacts, richer public structured-person extraction, conservative BYOL and calling-workbook
+benchmarks, source/provider/outreach attribution, and opt-in strict email confirmation based on licensed-provider,
+delivery, reply, or operator evidence. The OSS/no-key path remains the default; SMTP mailbox probing and LinkedIn
+scraping remain excluded.
 
 **v0.4.0 — autopilot (2026-09-03).** `leadforge run` now finishes itself: decision-maker labeling, scoring,
 drafting and export happen in one call by default (`pipeline.autopilot`), driven by the operator's own

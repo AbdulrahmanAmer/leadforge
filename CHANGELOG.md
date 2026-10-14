@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.6.0] — 2026-10-14
+
+Enrichment truth, provenance, calling benchmarks, and strict email verification controls.
+
+### Added
+- Unified field-level enrichment observations with value, source, URL, evidence, confidence, verification state,
+  timestamps, provider, cost, jurisdiction, freshness/recheck deadlines, and person ownership.
+- Multiple contacts per person with phone typing (`switchboard`, `main_line`, `direct`, `mobile`, `unknown`) and
+  explicit email stages (published personal, published role, inferred pattern, licensed provider).
+- Structured public-person extraction for Schema.org `Person` and vCards, alongside existing public-page and registry
+  enrichment paths; LinkedIn crawling and SMTP probing remain prohibited.
+- Conservative BYOL CSV import and `leadforge byol import`, with dry-run default and strong matching only.
+- CSV/TSV/XLSX benchmark import and `leadforge benchmark outcomes`, including WESCORE `Dialing List`, `List #2`,
+  `List #3`, `Call Log`, and callback-tab mapping, canonical dispositions, provenance, and idempotent re-imports.
+- Coverage, source hit-rate, outreach attribution, cost-per-verified-DM metrics, country policy profiles, and
+  observation backfill/recheck commands.
+- Optional paid-provider adapter contract, disabled by default.
+- Optional `outreach.require_email_confirmation` strict gate. It accepts licensed-provider verification, delivery,
+  reply, or operator confirmation evidence; MX-only and unconfirmed addresses are blocked.
+
+### Changed
+- Public-site enrichment now projects new email, phone, and person findings into observations while preserving the
+  existing legacy tables and scoring path.
+- Outreach dry-run and live-send paths re-check current suppression, eligibility, freshness, and strict confirmation
+  state before rendering or sending.
+
 ## [0.5.0] — 2026-09-25
 
 The upgrade-plan release (`docs/UPGRADE-PLAN.md`, Layers 0-6), summarised from that plan's own measured

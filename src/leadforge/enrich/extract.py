@@ -13,6 +13,7 @@ classify_email_affinity give the evidence and provenance behind an address inste
 from __future__ import annotations
 
 import html as html_mod
+import json
 import os
 import re
 import threading
@@ -131,6 +132,69 @@ class PersonCandidate:
     snippet: str
     source_url: str
     context: str = "other"  # v0.3: "team" | "other" — was this found on/near a team/staff/about context?
+
+
+def extract_structured_people(html: str, source_url: str, max_candidates: int = 8) -> list[PersonCandidate]:
+    """Extract explicitly published people from JSON-LD Person objects and hCards/vCards.
+
+    This only accepts structured markup that names a person; it does not infer a person from
+    arbitrary page text. The result is intentionally the existing ``PersonCandidate`` shape so
+    persistence, DM labeling, and compliance gates remain unchanged.
+    """
+    out: list[PersonCandidate] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(name: str, title: str, snippet: str, context: str) -> None:
+        name = " ".join((name or "").split())
+        title = " ".join((title or "").split())
+        if not name or len(name.split()) > 6:
+            return
+        key = (name.casefold(), title.casefold())
+        if key in seen or len(out) >= max_candidates:
+            return
+        seen.add(key)
+        out.append(PersonCandidate(name=name, title=title, snippet=snippet[:300], source_url=source_url,
+                                   context=context))
+
+    def walk(value):
+        if isinstance(value, list):
+            for item in value:
+                yield from walk(item)
+        elif isinstance(value, dict):
+            yield value
+            if isinstance(value.get("@graph"), (list, dict)):
+                yield from walk(value["@graph"])
+
+    tree = HTMLParser(html)
+    for script in tree.css('script[type="application/ld+json"]'):
+        raw = (script.text() or "").strip()
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        for obj in walk(payload):
+            kind = obj.get("@type", "")
+            kinds = kind if isinstance(kind, list) else [kind]
+            if not any(str(k).casefold() == "person" for k in kinds):
+                continue
+            name = obj.get("name")
+            title = obj.get("jobTitle", "")
+            occupation = obj.get("hasOccupation")
+            if not title and isinstance(occupation, dict):
+                title = occupation.get("name", "")
+            add(str(name or ""), str(title or ""), f"Schema.org Person: {name} — {title}".strip(" —"), "structured")
+
+    for card in tree.css(".vcard, [itemtype*='schema.org/Person']"):
+        name_node = card.css_first(".fn, [itemprop='name']")
+        if name_node is None:
+            continue
+        title_node = card.css_first(".title, [itemprop='jobTitle']")
+        name = name_node.text(separator=" ")
+        title = title_node.text(separator=" ") if title_node is not None else ""
+        add(name, title, f"Structured contact: {name} — {title}".strip(" —"), "structured")
+    return out
 
 
 def decode_cfemail(hexstr: str) -> str | None:
@@ -312,6 +376,24 @@ def extract_phones(html: str, text: str, region: str) -> list[str]:
         if phonenumbers.is_valid_number(match.number):
             out.setdefault(phonenumbers.format_number(match.number, phonenumbers.PhoneNumberFormat.E164))
     return list(out)
+
+
+def classify_phone(phone: str, context: str = "", business_phone: str | None = None) -> str:
+    """Classify a public phone conservatively without probing or external lookup."""
+    normalized_context = (context or "").casefold()
+    if any(token in normalized_context for token in ("switchboard", "reception", "operator")):
+        return "switchboard"
+    if any(token in normalized_context for token in ("direct", "extension", "ext.")):
+        return "direct"
+    try:
+        parsed = phonenumbers.parse(phone, None)
+        if phonenumbers.number_type(parsed) == phonenumbers.PhoneNumberType.MOBILE:
+            return "mobile"
+    except phonenumbers.NumberParseException:
+        return "unknown"
+    if business_phone and phone == business_phone:
+        return "main_line"
+    return "unknown"
 
 
 def extract_socials(html: str) -> dict[str, str]:

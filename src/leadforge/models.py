@@ -252,6 +252,8 @@ class Contact(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     # v0.3: own_domain | freemail_linked | freemail_unlinked | foreign (see extract.classify_email_affinity)
     affinity: str = ""
+    phone_type: Literal["switchboard", "main_line", "direct", "mobile", "unknown"] = "unknown"
+    email_stage: Literal["published_personal", "published_role", "inferred_pattern", "licensed_provider", "unknown"] = "unknown"
 
 
 class Person(BaseModel):
@@ -280,6 +282,28 @@ class Evidence(BaseModel):
     url: str = ""
     snippet: str = ""
     observed_at: str = ""
+
+
+class EnrichmentObservation(BaseModel):
+    """A field-level, provenance-preserving enrichment observation."""
+
+    business_id: str
+    field: str
+    value: Any
+    source: str = "unknown"
+    source_url: str = ""
+    evidence: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    observed_at: str = ""
+    verified_at: str = ""
+    verification_state: Literal["unverified", "observed", "verified", "rejected", "stale"] = "unverified"
+    provider: str = "oss"
+    cost: float = Field(default=0.0, ge=0.0)
+    jurisdiction: str = ""
+    person_id: int | None = None
+    person_name: str = ""
+    fresh_until: str = ""
+    recheck_at: str = ""
 
 
 class ScoreFactor(BaseModel):

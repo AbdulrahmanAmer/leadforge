@@ -22,6 +22,7 @@ from leadforge import compliance, db
 from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.models import ICP
+from leadforge.outreach.email_gate import confirmation_evidence
 from leadforge.outreach.identity import get_identity
 from leadforge.util import LeadForgeError, now_iso
 
@@ -101,6 +102,11 @@ def plan_targets(conn: sqlite3.Connection, cfg: Config, icp: ICP, *, campaign: s
         if not elig["eligible"]:
             counts["no_sendable_email"] += 1  # defensive: any remaining ineligible reason
             continue
+        if cfg.outreach.require_email_confirmation:
+            confirmation = confirmation_evidence(conn, business_id, elig["email"] or "")
+            if not confirmation["confirmed"]:
+                counts["no_sendable_email"] += 1
+                continue
 
         elig_stored = dict(elig)
         elig_stored["_tier"] = s["tier"]

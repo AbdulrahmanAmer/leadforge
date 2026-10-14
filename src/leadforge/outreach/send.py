@@ -22,6 +22,7 @@ from leadforge import compliance, db
 from leadforge.config import Config
 from leadforge.enrich.validate import rank_email_contacts
 from leadforge.outreach import render
+from leadforge.outreach.email_gate import confirmation_evidence
 from leadforge.outreach.identity import get_mailbox, mailboxes_for_identity
 from leadforge.outreach.plan import site_is_dead
 from leadforge.outreach.states import transition
@@ -59,11 +60,28 @@ def _recompute_eligibility(conn: sqlite3.Connection, cfg: Config, target: sqlite
     entity = compliance.entity_type(biz, people)
     enrich = json.loads(biz["enrich_json"] or "{}")
     dead = site_is_dead(enrich)
-    return compliance.email_eligibility(
+    elig = compliance.email_eligibility(
         biz, contacts, entity, region_profile,
         freemail_policy=cfg.validation.freemail_policy, require_corporate=cfg.outreach.require_corporate,
         suppressed=suppressed, site_dead=dead,
     )
+    if elig.get("email"):
+        if cfg.outreach.require_email_confirmation:
+            confirmation = confirmation_evidence(conn, biz["id"], elig["email"])
+            if not confirmation["confirmed"]:
+                elig["eligible"] = False
+                elig["reasons"].append("email_unconfirmed")
+        due = conn.execute(
+            """SELECT 1 FROM enrichment_observations
+               WHERE business_id=? AND field='email' AND value_json=?
+                 AND ((recheck_at != '' AND recheck_at <= ?) OR (fresh_until != '' AND fresh_until <= ?))
+               LIMIT 1""",
+            (biz["id"], json.dumps(elig["email"]), now_iso(), now_iso()),
+        ).fetchone()
+        if due:
+            elig["eligible"] = False
+            elig["reasons"].append("email_stale")
+    return elig
 
 
 def dry_run(conn: sqlite3.Connection, cfg: Config, *, campaign: str, max_n: int | None = None) -> dict:
@@ -72,7 +90,8 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, *, campaign: str, max_n: int 
     rows = _approved_messages(conn, campaign)
     if max_n is not None:
         rows = rows[:max_n]
-    would_send, paths, skipped = 0, [], 0
+    would_send, paths = 0, []
+    skipped = skipped_suppressed = skipped_ineligible = 0
     for m in rows:
         target = conn.execute("SELECT * FROM outreach_targets WHERE id=?", (m["target_id"],)).fetchone()
         if target is None:
@@ -81,9 +100,20 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, *, campaign: str, max_n: int 
         biz = conn.execute("SELECT * FROM businesses WHERE id=?", (target["business_id"],)).fetchone()
         identity = (conn.execute("SELECT * FROM sending_identities WHERE id=?", (target["identity_id"],)).fetchone()
                     if target["identity_id"] else None)
-        to_email = _target_email(conn, target["business_id"])
-        if not to_email or identity is None or biz is None:
+        if identity is None or biz is None:
             skipped += 1
+            continue
+        to_email = _target_email(conn, target["business_id"])
+        if not to_email:
+            skipped += 1
+            continue
+        suppressed = db.is_suppressed(conn, to_email, biz["domain"])
+        if suppressed:
+            skipped_suppressed += 1
+            continue
+        elig = _recompute_eligibility(conn, cfg, target, biz, suppressed)
+        if not elig["eligible"]:
+            skipped_ineligible += 1
             continue
         rendered = render.render_message(conn, target_id=target["id"], identity=identity, to_email=to_email,
                                           subject=m["subject"] or "", body_text=m["body_text"] or "",
@@ -92,7 +122,8 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, *, campaign: str, max_n: int 
         would_send += 1
         paths.append(path)
     return {
-        "counts": {"would_send": would_send, "candidates": len(rows), "skipped_no_recipient": skipped},
+        "counts": {"would_send": would_send, "candidates": len(rows), "skipped_no_recipient": skipped,
+                    "skipped_suppressed": skipped_suppressed, "skipped_ineligible": skipped_ineligible},
         "outbox_dir": str(transport.outbox_dir), "artifacts": paths,
     }
 

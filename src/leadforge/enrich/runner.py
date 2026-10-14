@@ -6,11 +6,13 @@ and the needs_browser accounting. Called by `leadforge enrich` and the `run` orc
 
 from __future__ import annotations
 
+import json
 import queue
 import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime, timedelta
 
 from selectolax.parser import HTMLParser as _HTMLParser
 
@@ -23,18 +25,40 @@ from leadforge.enrich.extract import (
     NER_TEXT_CHARS,
     NER_THRESHOLD,
     classify_email_affinity,
+    classify_phone,
     email_context,
     extract_emails,
     extract_people,
     extract_phones,
     extract_socials,
+    extract_structured_people,
     ner_available,
     people_from_ner_entities,
 )
 from leadforge.enrich.validate import validate_email, validate_emails_parallel
-from leadforge.models import Contact, Evidence, Person
+from leadforge.models import Contact, EnrichmentObservation, Evidence, Person
 from leadforge.normalize import COUNTRY_TO_REGION
 from leadforge.util import LOG, HostThrottle, emit_progress, now_iso
+
+
+def _record_observation(conn: sqlite3.Connection, observation: EnrichmentObservation, *, fresh_days: int) -> None:
+    """Write a deduplicated field observation while legacy tables remain authoritative."""
+    value_json = json.dumps(observation.value)
+    duplicate = conn.execute(
+        """SELECT 1 FROM enrichment_observations
+           WHERE business_id=? AND field=? AND value_json=? AND source=? AND source_url=?
+             AND COALESCE(person_id, 0)=COALESCE(?, 0) LIMIT 1""",
+        (observation.business_id, observation.field, value_json, observation.source,
+         observation.source_url, observation.person_id),
+    ).fetchone()
+    if duplicate:
+        return
+    observed_at = observation.observed_at or now_iso()
+    deadline = (datetime.now(UTC) + timedelta(days=fresh_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    db.add_observation(conn, observation.model_copy(update={
+        "observed_at": observed_at, "fresh_until": observation.fresh_until or deadline,
+        "recheck_at": observation.recheck_at or deadline,
+    }))
 
 
 def _mailto_anchor_context(html: str, email: str, window: int = 90) -> str | None:
@@ -120,6 +144,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                         out["socials"].setdefault(net, url)
                     for cand in people_fn(text, b["website"]):
                         out["people"].append(cand)
+                    out["people"].extend(extract_structured_people(rendered, b["website"]))
                     # a rescued site scores on the same evidence as a crawled one: signals + profile
                     # (without these, phone_only_booking mis-fired and WE SCORE columns came out empty)
                     out["signals"].update(SiteCrawler.compute_signals([page], cfg.crawl.stale_after_years))
@@ -149,6 +174,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                 out["socials"].setdefault(net, url)
             for cand in people_fn(page.text, page.url):
                 out["people"].append(cand)
+            out["people"].extend(extract_structured_people(page.html, page.url))
         # WE SCORE account-intel profile (v0.1.1): tech stack, departments, headcount, triggers.
         from leadforge.enrich.profile import build_profile
         try:
@@ -173,6 +199,7 @@ def _process_one(cfg: Config, throttle: HostThrottle, b) -> dict:
                                                       "context": _email_evidence(rendered, text, email)})
                 for cand in people_fn(text, url):
                     out["people"].append(cand)
+                out["people"].extend(extract_structured_people(rendered, url))
             if rendered_any:
                 out["needs_browser"] = False
                 out["signals"]["rendered"] = True
@@ -451,7 +478,8 @@ def _infer_stage(conn: sqlite3.Connection, cfg: Config, counts: dict) -> None:
         db.add_contact(conn, Contact(business_id=b["id"], kind="email", value=guess["email"],
                                      label="inferred", tier="inferred", verified_at=now_iso(),
                                      meta={"pattern": guess["pattern"], "confidence": guess["confidence"],
-                                           "basis": guess["basis"]}, affinity=affinity))
+                                           "basis": guess["basis"]}, affinity=affinity,
+                                     email_stage="inferred_pattern"))
         # its own fact: an inferred address has no source URL, so it must never claim 'email_found'
         db.add_evidence(conn, Evidence(business_id=b["id"], ref_table="contacts", fact="email_inferred",
                                        url="", snippet=f"{guess['email']} — {guess['basis']} "
@@ -598,15 +626,29 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
             vmeta = {**vmeta, "reason": "freemail_unlinked"}
         if tier == "valid":
             counts["emails_valid"] += 1
+        email_stage = "published_role" if meta["label"] == "role" else "published_personal"
         cid = db.add_contact(conn, Contact(business_id=bid, kind="email", value=email, label=meta["label"],
-                                           tier=tier, verified_at=now_iso(), meta=vmeta, affinity=affinity))
+                                           tier=tier, verified_at=now_iso(), meta=vmeta, affinity=affinity,
+                                           email_stage=email_stage))
         snippet = meta.get("context") or email
         db.add_evidence(conn, Evidence(business_id=bid, ref_table="contacts", ref_id=cid, fact="email_found",
                                        url=meta["url"], snippet=snippet, observed_at=now_iso()))
+        _record_observation(conn, EnrichmentObservation(
+            business_id=bid, field="email", value=email, source="public_site", source_url=meta["url"],
+            evidence=snippet, confidence=1.0 if tier == "valid" else 0.65,
+            verification_state="verified" if tier == "valid" else ("rejected" if tier == "invalid" else "observed"),
+            provider="oss", person_name=next((name for name in existing_names if email.casefold().startswith(name.split()[0].casefold())), ""),
+        ), fresh_days=90)
         counts["contacts"] += 1
     for phone in res["phones"]:
+        phone_type = classify_phone(phone, business_phone=b["phone_e164"])
         db.add_contact(conn, Contact(business_id=bid, kind="phone", value=phone, label="site", tier="valid",
-                                     verified_at=now_iso()))
+                                     verified_at=now_iso(), phone_type=phone_type))
+        _record_observation(conn, EnrichmentObservation(
+            business_id=bid, field="phone", value=phone, source="public_site", source_url=b["website"] or "",
+            evidence="phone published on the public business site", confidence=0.9,
+            verification_state="verified", provider="oss",
+        ), fresh_days=180)
         counts["contacts"] += 1
     for net, url in res["socials"].items():
         db.add_contact(conn, Contact(business_id=bid, kind="social", value=url, label=net, tier="valid"))
@@ -614,6 +656,16 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
         db.add_person(conn, Person(business_id=bid, name=cand.name, title=cand.title, source_url=cand.source_url,
                                    snippet=cand.snippet, labeled_by="heuristic", labeled_at=now_iso(),
                                    origin="heuristic"))
+        person_row = conn.execute(
+            "SELECT id FROM people WHERE business_id=? AND name=? AND COALESCE(title,'')=? ORDER BY id DESC LIMIT 1",
+            (bid, cand.name, cand.title or ""),
+        ).fetchone()
+        _record_observation(conn, EnrichmentObservation(
+            business_id=bid, field="person.name", value=cand.name, source="public_site",
+            source_url=cand.source_url, evidence=cand.snippet, confidence=0.75,
+            verification_state="observed", provider="oss", person_id=person_row["id"] if person_row else None,
+            person_name=cand.name,
+        ), fresh_days=180)
         db.add_evidence(conn, Evidence(business_id=bid, ref_table="people", fact="dm_candidate",
                                        url=cand.source_url, snippet=f"{cand.name} — {cand.title}", observed_at=now_iso()))
         counts["dm_candidates"] += 1

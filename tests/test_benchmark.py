@@ -1,0 +1,68 @@
+import json
+from pathlib import Path
+
+from openpyxl import Workbook
+from typer.testing import CliRunner
+
+from leadforge import db
+from leadforge.cli import app
+from leadforge.config import load_config
+from leadforge.enrich.benchmark import import_outcomes
+from leadforge.models import Business
+
+
+def test_outcome_benchmark_import_is_dry_run_and_strong_match_only(conn, tmp_path):
+    db.upsert_business(conn, Business(id="b1", name="Acme", name_norm="acme", domain="acme.test", dedupe_key="k1"))
+    path = tmp_path / "called.tsv"
+    path.write_text(
+        "business_id\tchannel\toutcome\tcall_date\tcontact_type\tsource\n"
+        "b1\tphone\tinterested\t2026-10-14\tmain_line\tgbp\n"
+        "unknown\tphone\tno_answer\t2026-10-14\tmain_line\tgbp\n", encoding="utf-8"
+    )
+    preview = import_outcomes(conn, path)
+    assert preview["matched"] == 1 and preview["imported"] == 0
+    assert db.outcome_counts(conn) == {}
+    written = import_outcomes(conn, path, dry_run=False)
+    assert written["imported"] == 1
+    row = conn.execute("SELECT * FROM outcomes WHERE business_id='b1'").fetchone()
+    assert row["source"] == "gbp" and row["contact_type"] == "main_line"
+
+
+def test_benchmark_outcomes_cli_is_preview_by_default(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config(tmp_path)
+    conn = db.connect(cfg.db_path)
+    db.upsert_business(conn, Business(id="b1", name="Acme", name_norm="acme", dedupe_key="k1"))
+    conn.close()
+    path = tmp_path / "called.csv"
+    path.write_text("business_id,channel,outcome\nb1,phone,interested\n", encoding="utf-8")
+    result = CliRunner().invoke(app, ["--json", "benchmark", "outcomes", "--in", str(path)])
+    assert result.exit_code == 0, result.output
+    digest = next(line for line in result.output.splitlines() if line.startswith("LF_DIGEST "))
+    assert json.loads(digest[len("LF_DIGEST "):])["counts"]["imported"] == 0
+
+
+def test_workbook_import_reads_calling_tabs_and_is_idempotent(conn, tmp_path: Path):
+    business_id = "workbook-business"
+    db.upsert_business(conn, Business(id=business_id, name="Example", name_norm="example", domain="example.co.uk", dedupe_key="workbook"))
+    conn.execute("UPDATE businesses SET domain='example.co.uk', phone_e164='+442012345678' WHERE id=?", (business_id,))
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Dialing List"
+    sheet.append(["Queue #", "Company", "Decision Maker", "Phone", "Disposition", "Notes", "Website", "Dialed By"])
+    sheet.append(["1", "Example", "Jane Doe", "+44 20 1234 5678", "Callback", "tomorrow", "https://www.example.co.uk", "Agent"])
+    callbacks = workbook.create_sheet("Nagham Callbacks")
+    callbacks.append(["NAGHAM CALLBACKS"])
+    callbacks.append(["", ""])
+    callbacks.append(["Priority", "Queue #", "Company", "Phone", "Original Callback Note", "Website"])
+    callbacks.append(["A", "1", "Example", "+44 20 1234 5678", "tomorrow", "https://www.example.co.uk"])
+    path = tmp_path / "called.xlsx"
+    workbook.save(path)
+
+    preview = import_outcomes(conn, path)
+    assert preview["rows"] == 2
+    assert preview["matched"] == 2
+    written = import_outcomes(conn, path, dry_run=False)
+    assert written["imported"] == 1
+    assert written["duplicates"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM outcomes WHERE business_id=?", (business_id,)).fetchone()[0] == 1

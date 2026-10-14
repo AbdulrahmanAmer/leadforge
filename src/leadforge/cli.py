@@ -175,21 +175,38 @@ def enrich(
     ctx: typer.Context,
     icp: str = typer.Option("icp.yaml", "--icp", help="used for caps.max_sites"),
     limit: int = typer.Option(0, "--limit"),
-    stage: str = typer.Option("all", "--stage", help="all|site|registry|validate"),
+    stage: str = typer.Option("all", "--stage", help="all|site|registry|validate|backfill|recheck"),
 ):
     """Crawl business sites, extract + validate contacts, build DM candidates."""
     from leadforge import db
     from leadforge.enrich.runner import run_enrich
 
     cfg = _cfg(ctx)
-    if stage not in ("all", "site", "registry", "validate"):
+    if stage not in ("all", "site", "registry", "validate", "backfill", "recheck"):
         # a typo used to be a silent zero-work success — an agent read that as "nothing left"
-        emit_digest(False, "enrich", warnings=[f"unknown --stage '{stage}' (all|site|registry|validate)"])
+        emit_digest(False, "enrich", warnings=[f"unknown --stage '{stage}' (all|site|registry|validate|backfill|recheck)"])
         raise typer.Exit(2)
     from leadforge.util import set_progress_file
     set_progress_file(cfg.data_path / "progress.jsonl")  # standalone enrich feeds `leadforge watch` too
     conn = db.connect(cfg.db_path)
     run = db.latest_run(conn)
+    if stage == "backfill":
+        from leadforge.enrich.metrics import backfill_legacy_observations
+
+        counts = backfill_legacy_observations(conn)
+        _say(ctx, f"backfill inserted={counts['inserted']} contacts={counts['contacts']} "
+              f"people={counts['people']} evidence={counts['evidence']}")
+        emit_digest(True, "enrich", run=run["id"] if run else None, counts=counts,
+                    next_="leadforge enrich --stage site")
+        return
+    if stage == "recheck":
+        due = db.observations_due(conn)
+        business_ids = {row["business_id"] for row in due}
+        counts = {"observations_due": len(due), "businesses_due": len(business_ids)}
+        _say(ctx, f"observations_due={counts['observations_due']} businesses_due={counts['businesses_due']}")
+        emit_digest(True, "enrich", run=run["id"] if run else None, counts=counts,
+                    next_="leadforge enrich --stage site --limit " + str(len(business_ids)))
+        return
     # site budget: explicit --limit wins, else the campaign's cap, else a safe default
     max_sites = limit
     if not max_sites:
@@ -221,6 +238,60 @@ from leadforge.outreach.cli import outreach_app  # noqa: E402
 
 app.add_typer(outreach_app, name="outreach")
 app.add_typer(draft_app, name="draft")
+
+benchmark_app = typer.Typer(help="Hand-checked enrichment and outreach benchmarks.")
+app.add_typer(benchmark_app, name="benchmark")
+
+byol_app = typer.Typer(help="Import operator-supplied enrichment lists.")
+app.add_typer(byol_app, name="byol")
+
+
+@byol_app.command("import")
+def byol_import(
+    ctx: typer.Context,
+    input_path: str = typer.Option(..., "--in", help="CSV file supplied by the operator."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Write only uniquely matched rows; default is preview."),
+):
+    """Preview or apply conservative BYOL contact/person matching."""
+    from leadforge import db
+    from leadforge.enrich.byol import import_csv
+
+    cfg = _cfg(ctx)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = import_csv(conn, Path(input_path), dry_run=not apply_changes)
+    except OSError as exc:
+        emit_digest(False, "byol-import", warnings=[str(exc)[:160]])
+        raise typer.Exit(2) from exc
+    _say(ctx, f"rows={result['rows']} matched={result['matched']} imported={result['imported']} "
+          f"ambiguous={result['ambiguous']} unmatched={result['unmatched']}")
+    emit_digest(True, "byol-import", counts=result,
+                next_="leadforge byol import --in contacts.csv --apply" if not apply_changes else "leadforge enrich --stage backfill")
+
+
+@benchmark_app.command("outcomes")
+def benchmark_outcomes(
+    ctx: typer.Context,
+      input_path: str = typer.Option(..., "--in", help="CSV/TSV/XLSX called-outcomes workbook or sheet."),
+    apply_changes: bool = typer.Option(False, "--apply", help="Write matched outcomes; default is preview only."),
+):
+    """Preview or import called-lead outcomes for source/provider attribution."""
+    from leadforge import db
+    from leadforge.enrich.benchmark import import_outcomes
+    from leadforge.enrich.metrics import outreach_attribution
+
+    cfg = _cfg(ctx)
+    conn = db.connect(cfg.db_path)
+    try:
+        result = import_outcomes(conn, Path(input_path), dry_run=not apply_changes)
+    except (OSError, ValueError) as exc:
+        emit_digest(False, "benchmark-outcomes", warnings=[str(exc)[:160]])
+        raise typer.Exit(2) from exc
+    _say(ctx, f"rows={result['rows']} matched={result['matched']} imported={result['imported']} "
+          f"duplicates={result.get('duplicates', 0)} ambiguous={result['ambiguous']} unmatched={result['unmatched']}")
+    counts = {**result, "attribution": outreach_attribution(conn)}
+    emit_digest(True, "benchmark-outcomes", counts=counts,
+                next_="leadforge benchmark outcomes --in called.tsv --apply" if not apply_changes else "leadforge export")
 
 
 @dm_app.command("export")

@@ -19,10 +19,10 @@ import json
 import sqlite3
 from pathlib import Path
 
-from leadforge.models import Business, Contact, Evidence, Person, Score
+from leadforge.models import Business, Contact, EnrichmentObservation, Evidence, Person, Score
 from leadforge.util import InputError, now_iso, sha1_hex
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS contacts (
   id INTEGER PRIMARY KEY AUTOINCREMENT, business_id TEXT NOT NULL REFERENCES businesses(id),
   kind TEXT NOT NULL, value TEXT NOT NULL, label TEXT DEFAULT 'unknown', tier TEXT DEFAULT 'unknown',
   verified_at TEXT DEFAULT '', meta_json TEXT NOT NULL DEFAULT '{}', affinity TEXT DEFAULT '',
+  phone_type TEXT DEFAULT 'unknown', email_stage TEXT DEFAULT 'unknown',
   UNIQUE(business_id, kind, value)
 );
 
@@ -70,6 +71,19 @@ CREATE TABLE IF NOT EXISTS evidence (
   ref_table TEXT DEFAULT 'businesses', ref_id INTEGER, fact TEXT NOT NULL, url TEXT DEFAULT '',
   snippet TEXT DEFAULT '', observed_at TEXT DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS enrichment_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  field TEXT NOT NULL, value_json TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'unknown', source_url TEXT DEFAULT '', evidence TEXT DEFAULT '',
+  confidence REAL NOT NULL DEFAULT 0, observed_at TEXT DEFAULT '', verified_at TEXT DEFAULT '',
+  verification_state TEXT NOT NULL DEFAULT 'unverified', provider TEXT NOT NULL DEFAULT 'oss',
+  cost REAL NOT NULL DEFAULT 0, jurisdiction TEXT DEFAULT '', person_id INTEGER REFERENCES people(id),
+  person_name TEXT DEFAULT '', fresh_until TEXT DEFAULT '', recheck_at TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_enrichment_observations_business ON enrichment_observations(business_id);
+CREATE INDEX IF NOT EXISTS idx_enrichment_observations_recheck ON enrichment_observations(recheck_at);
 
 CREATE TABLE IF NOT EXISTS scores (
   id INTEGER PRIMARY KEY AUTOINCREMENT, business_id TEXT NOT NULL REFERENCES businesses(id),
@@ -127,7 +141,8 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS outcomes (
   id INTEGER PRIMARY KEY AUTOINCREMENT, business_id TEXT NOT NULL REFERENCES businesses(id),
   campaign TEXT DEFAULT '', channel TEXT NOT NULL, result TEXT NOT NULL, notes TEXT DEFAULT '',
-  recorded_by TEXT DEFAULT '', contacted_at TEXT, recorded_at TEXT
+  recorded_by TEXT DEFAULT '', contacted_at TEXT, recorded_at TEXT,
+  contact_id INTEGER REFERENCES contacts(id), source TEXT DEFAULT '', provider TEXT DEFAULT '', contact_type TEXT DEFAULT ''
 );
 """
 
@@ -482,7 +497,7 @@ def merge_business_into(conn: sqlite3.Connection, keep_id: str, drop_id: str) ->
     """Fold a duplicate row into another: contacts/people/evidence/scores re-pointed, the duplicate deleted."""
     if keep_id == drop_id:
         return
-    for table in ("contacts", "people", "evidence", "outcomes", "outreach_targets"):
+    for table in ("contacts", "people", "evidence", "enrichment_observations", "outcomes", "outreach_targets"):
         conn.execute(f"UPDATE OR IGNORE {table} SET business_id=? WHERE business_id=?", (keep_id, drop_id))
         conn.execute(f"DELETE FROM {table} WHERE business_id=?", (drop_id,))
     conn.execute("UPDATE OR IGNORE scores SET business_id=? WHERE business_id=?", (keep_id, drop_id))
@@ -495,12 +510,15 @@ def merge_business_into(conn: sqlite3.Connection, keep_id: str, drop_id: str) ->
 def add_contact(conn: sqlite3.Connection, c: Contact) -> int:
     """Insert or refresh; returns the contact row id (so evidence can reference it)."""
     conn.execute(
-        """INSERT INTO contacts(business_id,kind,value,label,tier,verified_at,meta_json,affinity)
-           VALUES(?,?,?,?,?,?,?,?)
+        """INSERT INTO contacts(business_id,kind,value,label,tier,verified_at,meta_json,affinity,phone_type,email_stage)
+           VALUES(?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(business_id,kind,value) DO UPDATE SET
              label=excluded.label, tier=excluded.tier, verified_at=excluded.verified_at, meta_json=excluded.meta_json,
-             affinity=CASE WHEN excluded.affinity != '' THEN excluded.affinity ELSE contacts.affinity END""",
-        (c.business_id, c.kind, c.value, c.label, c.tier, c.verified_at, json.dumps(c.meta), c.affinity),
+             affinity=CASE WHEN excluded.affinity != '' THEN excluded.affinity ELSE contacts.affinity END,
+             phone_type=CASE WHEN excluded.phone_type != 'unknown' THEN excluded.phone_type ELSE contacts.phone_type END,
+             email_stage=CASE WHEN excluded.email_stage != 'unknown' THEN excluded.email_stage ELSE contacts.email_stage END""",
+        (c.business_id, c.kind, c.value, c.label, c.tier, c.verified_at, json.dumps(c.meta), c.affinity,
+         c.phone_type, c.email_stage),
     )
     row = conn.execute("SELECT id FROM contacts WHERE business_id=? AND kind=? AND value=?",
                        (c.business_id, c.kind, c.value)).fetchone()
@@ -543,6 +561,45 @@ def add_evidence(conn: sqlite3.Connection, e: Evidence) -> None:
 
 def evidence_for(conn: sqlite3.Connection, business_id: str) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM evidence WHERE business_id=? ORDER BY id", (business_id,)).fetchall()
+
+
+def add_observation(conn: sqlite3.Connection, observation: EnrichmentObservation) -> int:
+    """Persist one field-level observation and return its row id."""
+    cur = conn.execute(
+        """INSERT INTO enrichment_observations(
+           business_id,field,value_json,source,source_url,evidence,confidence,observed_at,verified_at,
+           verification_state,provider,cost,jurisdiction,person_id,person_name,fresh_until,recheck_at)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (observation.business_id, observation.field, json.dumps(observation.value), observation.source,
+         observation.source_url, observation.evidence[:1000], observation.confidence,
+         observation.observed_at or now_iso(), observation.verified_at, observation.verification_state,
+         observation.provider, observation.cost, observation.jurisdiction, observation.person_id,
+         observation.person_name, observation.fresh_until, observation.recheck_at),
+    )
+    return int(cur.lastrowid)
+
+
+def observations_for(conn: sqlite3.Connection, business_id: str, field: str | None = None) -> list[sqlite3.Row]:
+    if field is None:
+        return conn.execute(
+            "SELECT * FROM enrichment_observations WHERE business_id=? ORDER BY id", (business_id,)
+        ).fetchall()
+    return conn.execute(
+        "SELECT * FROM enrichment_observations WHERE business_id=? AND field=? ORDER BY id",
+        (business_id, field),
+    ).fetchall()
+
+
+def observations_due(conn: sqlite3.Connection, as_of: str | None = None) -> list[sqlite3.Row]:
+    """Return observations whose explicit freshness/recheck deadline has passed."""
+    cutoff = as_of or now_iso()
+    return conn.execute(
+        """SELECT * FROM enrichment_observations
+           WHERE (recheck_at != '' AND recheck_at <= ?)
+              OR (fresh_until != '' AND fresh_until <= ?)
+           ORDER BY COALESCE(NULLIF(recheck_at, ''), fresh_until), id""",
+        (cutoff, cutoff),
+    ).fetchall()
 
 
 def save_score(conn: sqlite3.Connection, s: Score) -> None:
@@ -601,10 +658,13 @@ def outreach_state_for(conn: sqlite3.Connection, business_id: str, campaign: str
 
 
 def add_outcome(conn: sqlite3.Connection, business_id: str, channel: str, result: str, campaign: str = "",
-                notes: str = "", recorded_by: str = "", contacted_at: str | None = None) -> int:
+                notes: str = "", recorded_by: str = "", contacted_at: str | None = None,
+                contact_id: int | None = None, source: str = "", provider: str = "",
+                contact_type: str = "") -> int:
     cur = conn.execute(
-        "INSERT INTO outcomes(business_id,campaign,channel,result,notes,recorded_by,contacted_at,recorded_at) VALUES(?,?,?,?,?,?,?,?)",
-        (business_id, campaign, channel, result, notes, recorded_by, contacted_at or now_iso(), now_iso()),
+        "INSERT INTO outcomes(business_id,campaign,channel,result,notes,recorded_by,contacted_at,recorded_at,contact_id,source,provider,contact_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (business_id, campaign, channel, result, notes, recorded_by, contacted_at or now_iso(), now_iso(),
+         contact_id, source, provider, contact_type),
     )
     conn.commit()
     return int(cur.lastrowid)
