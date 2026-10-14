@@ -309,3 +309,16 @@ is distinct (or no primary was supplied). This keeps the operator-confirmed rout
 conservative.
 
 Validation: 17 benchmark/foundation tests passed with Ruff and diff checks clean.
+
+### Round 23 — cross-source person identity continuity
+
+Finding: the same person can appear once in a registry or heuristic candidate with one title and later on a team,
+profile, or event page with another title. Exact name+title uniqueness would create two people and detach the newer
+phone observation from the identity that may already be selected as DM.
+
+Change: persistence now reuses an existing person when the normalized full name matches exactly and there is only one
+candidate identity for that business; ambiguous names still create separate rows. New structured phones/emails then
+remain attached to the existing person ID.
+
+Validation: 36 runner/foundation tests passed with Ruff and diff checks clean, including a title-change ownership
+fixture.

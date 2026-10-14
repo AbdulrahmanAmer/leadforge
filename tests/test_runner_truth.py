@@ -236,6 +236,24 @@ def test_heuristic_person_row_gets_origin_heuristic(cfg, conn, monkeypatch):
     assert pat["origin"] == "heuristic"
 
 
+def test_same_person_with_new_title_reuses_identity_for_observation_ownership(cfg, conn, monkeypatch):
+    _biz_row(conn, "b1", "Acme Garage", domain="acmegarage.test", website="http://acmegarage.test")
+    db.add_person(conn, Person(business_id="b1", name="Pat Owner", title="Owner",
+                               labeled_by="registry", origin="registry"))
+    original_id = conn.execute("SELECT id FROM people WHERE business_id='b1'").fetchone()[0]
+    res = _res(True)
+    res["people"] = [PersonCandidate(name="Pat Owner", title="Managing Director",
+                                      snippet="Pat Owner — Managing Director",
+                                      source_url="http://acmegarage.test/team", phones=("+441234567890",))]
+    runner._persist(conn, cfg, _biz_row(conn, "b1", "Acme Garage", domain="acmegarage.test",
+                                        website="http://acmegarage.test"), res, _counts())
+    assert conn.execute("SELECT COUNT(*) FROM people WHERE business_id='b1'").fetchone()[0] == 1
+    observation = conn.execute(
+        "SELECT person_id FROM enrichment_observations WHERE business_id='b1' AND field='phone'"
+    ).fetchone()
+    assert observation["person_id"] == original_id
+
+
 # --- GBP facts (site-less path) -------------------------------------------------------------------
 def test_gbp_reply_signature_becomes_people_row_origin_gbp(cfg, conn):
     _biz_row(conn, "b1", "Tyler's Garage")

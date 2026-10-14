@@ -653,13 +653,26 @@ def _persist(conn: sqlite3.Connection, cfg: Config, b, res: dict, counts: dict,
     for net, url in res["socials"].items():
         db.add_contact(conn, Contact(business_id=bid, kind="social", value=url, label=net, tier="valid"))
     for cand in res["people"]:
-        db.add_person(conn, Person(business_id=bid, name=cand.name, title=cand.title, source_url=cand.source_url,
-                                   snippet=cand.snippet, labeled_by="heuristic", labeled_at=now_iso(),
-                                   origin="heuristic"))
         person_row = conn.execute(
             "SELECT id FROM people WHERE business_id=? AND name=? AND COALESCE(title,'')=? ORDER BY id DESC LIMIT 1",
             (bid, cand.name, cand.title or ""),
         ).fetchone()
+        if not person_row:
+            normalized_name = " ".join(cand.name.split()).casefold()
+            same_name = [p for p in db.people_for(conn, bid)
+                         if " ".join((p["name"] or "").split()).casefold() == normalized_name]
+            if len(same_name) == 1:
+                # Preserve one identity when heuristic, structured, registry, and profile pages
+                # publish the same person with different title wording.
+                person_row = same_name[0]
+            else:
+                db.add_person(conn, Person(business_id=bid, name=cand.name, title=cand.title, source_url=cand.source_url,
+                                           snippet=cand.snippet, labeled_by="heuristic", labeled_at=now_iso(),
+                                           origin="heuristic"))
+                person_row = conn.execute(
+                    "SELECT id FROM people WHERE business_id=? AND name=? AND COALESCE(title,'')=? ORDER BY id DESC LIMIT 1",
+                    (bid, cand.name, cand.title or ""),
+                ).fetchone()
         _record_observation(conn, EnrichmentObservation(
             business_id=bid, field="person.name", value=cand.name, source="public_site",
             source_url=cand.source_url, evidence=cand.snippet, confidence=0.75,

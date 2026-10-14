@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.9] — 2026-10-14
+
+Cross-source person identity continuity.
+
+### Changed
+- Structured/registry/heuristic records with one exact normalized name now share the existing person identity across
+  title changes, preserving person-owned phone/email observations; ambiguous names remain separate.
+
 ## [0.6.8] — 2026-10-14
 
 Conservative DM phone typing.
