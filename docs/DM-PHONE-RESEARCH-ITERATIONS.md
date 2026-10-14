@@ -277,3 +277,10 @@ the nested person's own telephone/email values. It still ignores arbitrary neste
 
 Validation: 59 extraction/foundation tests passed with Ruff and diff checks clean. This expands recall for about,
 leadership, and owner profile pages without turning generic business markup into a person assignment.
+
+### Round 20 — Schema.org type URL normalization
+
+Finding: JSON-LD may encode `@type` as a full vocabulary URL rather than a bare token. The extractor now normalizes
+the final URL segment before recognizing Person, Event, ProfilePage, Organization, and business types.
+
+Validation: 60 extraction/foundation tests passed with Ruff and diff checks clean, including a full-URL Person fixture.

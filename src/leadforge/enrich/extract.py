@@ -197,7 +197,12 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
             return False
         kind = value.get("@type", "")
         kinds = kind if isinstance(kind, list) else [kind]
-        return any(str(k).casefold() == "person" for k in kinds)
+        return any(str(k).rstrip("/").rsplit("/", 1)[-1].casefold() == "person" for k in kinds)
+
+    def type_names(value) -> set[str]:
+        kind = value.get("@type", "") if isinstance(value, dict) else ""
+        kinds = kind if isinstance(kind, list) else [kind]
+        return {str(k).rstrip("/").rsplit("/", 1)[-1].casefold() for k in kinds}
 
     def add_json_person(obj: dict, context: str, prefix: str) -> None:
         name = obj.get("name")
@@ -228,29 +233,25 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
         except (TypeError, ValueError):
             continue
         for obj in walk(payload):
-            kind = obj.get("@type", "")
-            kinds = kind if isinstance(kind, list) else [kind]
-            if any(str(k).casefold() == "person" for k in kinds):
+            kinds = type_names(obj)
+            if "person" in kinds:
                 add_json_person(obj, "structured", "Schema.org Person")
             # Event pages often publish named organizers/performers as nested Person objects. Only
             # these explicit event roles are followed; arbitrary nested authors/reviewers are not.
-            if any(str(k).casefold() == "event" for k in kinds):
+            if "event" in kinds:
                 for role in ("organizer", "performer"):
                     nested = obj.get(role, ())
                     nested_values = nested if isinstance(nested, list) else (nested,)
                     for person in nested_values:
                         if person_type(person):
                             add_json_person(person, "event", f"Schema.org Event {role.title()}")
-            if any(str(k).casefold() == "profilepage" for k in kinds):
+            if "profilepage" in kinds:
                 nested = obj.get("mainEntity", ())
                 nested_values = nested if isinstance(nested, list) else (nested,)
                 for person in nested_values:
                     if person_type(person):
                         add_json_person(person, "profile", "Schema.org ProfilePage")
-            org_like = any(
-                str(k).casefold() in {"organization", "corporation", "localbusiness"}
-                or str(k).casefold().endswith("business") for k in kinds
-            )
+            org_like = any(k in {"organization", "corporation", "localbusiness"} or k.endswith("business") for k in kinds)
             if org_like:
                 for role in ("employee", "founder", "member"):
                     nested = obj.get(role, ())

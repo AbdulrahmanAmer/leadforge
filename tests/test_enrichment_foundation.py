@@ -170,3 +170,15 @@ def test_structured_organization_and_profile_page_people_are_explicit_only():
         ("Taylor Reed", "structured", ("+44 20 7946 0101",), ()),
         ("Jordan Vale", "profile", (), ("jordan@example.test",)),
     }
+
+
+def test_structured_full_schema_type_urls_are_normalized():
+    html = '''
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"https://schema.org/Person",
+      "name":"Casey North","jobTitle":"Director","telephone":"+44 20 7946 0202"}
+    </script>
+    '''
+    people = extract_structured_people(html, "https://example.test/profile/casey")
+    assert len(people) == 1 and people[0].name == "Casey North"
+    assert people[0].phones == ("+44 20 7946 0202",)

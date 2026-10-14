@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.6] — 2026-10-14
+
+Structured-data type normalization.
+
+### Changed
+- Full Schema.org type URLs are normalized before person/event/profile/business extraction, improving recall without
+  broadening arbitrary nested-person traversal.
+
 ## [0.6.5] — 2026-10-14
 
 Explicit structured business/profile people.
