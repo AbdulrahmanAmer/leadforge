@@ -182,3 +182,19 @@ def test_structured_full_schema_type_urls_are_normalized():
     people = extract_structured_people(html, "https://example.test/profile/casey")
     assert len(people) == 1 and people[0].name == "Casey North"
     assert people[0].phones == ("+44 20 7946 0202",)
+
+
+def test_structured_profile_main_entity_id_resolves_person_from_graph():
+    html = '''
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@graph":[
+      {"@type":"ProfilePage","mainEntity":{"@id":"#owner","@type":"Person"}},
+      {"@id":"#owner","@type":"Person","name":"Riley Stone","jobTitle":"Owner",
+       "telephone":"+44 20 7946 0303"}
+    ]}
+    </script>
+    '''
+    people = extract_structured_people(html, "https://example.test/profile/riley")
+    assert [(p.name, p.title, p.phones) for p in people] == [
+        ("Riley Stone", "Owner", ("+44 20 7946 0303",)),
+    ]

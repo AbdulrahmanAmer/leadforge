@@ -232,7 +232,23 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
             payload = json.loads(raw)
         except (TypeError, ValueError):
             continue
-        for obj in walk(payload):
+        objects = list(walk(payload))
+        id_index = {
+            str(obj.get("@id")): obj for obj in objects
+            if isinstance(obj, dict) and obj.get("@id")
+        }
+
+        def resolve(value, index=id_index):
+            if not isinstance(value, dict) or not value.get("@id"):
+                return value
+            target = index.get(str(value["@id"]))
+            if not isinstance(target, dict):
+                return value
+            merged = dict(target)
+            merged.update(value)
+            return merged
+
+        for obj in objects:
             kinds = type_names(obj)
             if "person" in kinds:
                 add_json_person(obj, "structured", "Schema.org Person")
@@ -243,12 +259,14 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
                     nested = obj.get(role, ())
                     nested_values = nested if isinstance(nested, list) else (nested,)
                     for person in nested_values:
+                        person = resolve(person)
                         if person_type(person):
                             add_json_person(person, "event", f"Schema.org Event {role.title()}")
             if "profilepage" in kinds:
                 nested = obj.get("mainEntity", ())
                 nested_values = nested if isinstance(nested, list) else (nested,)
                 for person in nested_values:
+                    person = resolve(person)
                     if person_type(person):
                         add_json_person(person, "profile", "Schema.org ProfilePage")
             org_like = any(k in {"organization", "corporation", "localbusiness"} or k.endswith("business") for k in kinds)
@@ -257,6 +275,7 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
                     nested = obj.get(role, ())
                     nested_values = nested if isinstance(nested, list) else (nested,)
                     for person in nested_values:
+                        person = resolve(person)
                         if person_type(person):
                             add_json_person(person, "structured", f"Schema.org {role.title()}")
 

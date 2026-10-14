@@ -344,3 +344,15 @@ Change: profile, bio, and biography links are now first-class high-priority same
 network or login-gated source is followed.
 
 Validation: 16 crawler/foundation tests passed with Ruff and diff checks clean.
+
+### Round 26 — JSON-LD identity reference resolution
+
+Finding: `ProfilePage.mainEntity`, Event roles, and Organization people can use `@id` references to a separate
+Person object in `@graph`. Without resolving those references, the page exposes an identity but the extractor loses
+the person's name, title, phone, and email.
+
+Change: JSON-LD extraction now builds a document-local `@id` index and resolves explicit nested-person references
+only for ProfilePage, Event organizer/performer, and Organization employee/founder/member relationships.
+
+Validation: 61 extraction/foundation tests passed; Ruff is clean after fixing a closure-lint regression. The fixture
+proves a ProfilePage reference recovers a graph-defined owner's phone.

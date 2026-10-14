@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.12] — 2026-10-14
+
+JSON-LD identity reference resolution.
+
+### Added
+- Document-local `@id` resolution for explicit ProfilePage, Event, and Organization Person relationships, preserving
+  names, titles, phones, and emails defined in a separate `@graph` object.
+
 ## [0.6.11] — 2026-10-14
 
 Profile-page discovery alignment.
