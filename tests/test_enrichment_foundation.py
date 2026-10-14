@@ -211,3 +211,17 @@ def test_vcard_nested_value_ignores_tel_type_label():
     assert len(people) == 1
     assert people[0].phones == ("+44 7700 900123",)
     assert people[0].emails == ("jamie@example.test",)
+
+
+def test_person_microdata_meta_content_values_are_owned_by_card_person():
+    html = '''
+    <div itemscope itemtype="https://schema.org/Person">
+      <span itemprop="name">Avery Hill</span><span itemprop="jobTitle">Founder</span>
+      <meta itemprop="telephone" content="+44 20 7946 0404">
+      <meta itemprop="email" content="avery@example.test">
+    </div>
+    '''
+    people = extract_structured_people(html, "https://example.test/about/avery")
+    assert len(people) == 1
+    assert people[0].phones == ("+44 20 7946 0404",)
+    assert people[0].emails == ("avery@example.test",)

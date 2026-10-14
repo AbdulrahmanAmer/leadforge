@@ -293,8 +293,10 @@ def extract_structured_people(html: str, source_url: str, max_candidates: int = 
             value_node = node.css_first(".value, [itemprop='value']")
             if value_node is not None:
                 return value_node.text(separator=" ")
-            attr = "title" if phone else "data-value"
-            return node.attributes.get(attr) or node.text(separator=" ")
+            for attr in (("content", "title", "data-value") if phone else ("content", "data-value", "title")):
+                if node.attributes.get(attr):
+                    return node.attributes[attr]
+            return node.text(separator=" ")
 
         phones = [structured_value(n, phone=True) for n in card.css(".tel, [itemprop='telephone']")]
         emails = [structured_value(n, phone=False) for n in card.css(".email, [itemprop='email']")]

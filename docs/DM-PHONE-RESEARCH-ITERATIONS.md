@@ -366,3 +366,13 @@ Change: structured-card extraction now prefers nested `.value`/`itemprop=value` 
 while preserving the same-card person ownership and later phone classification.
 
 Validation: 13 enrichment-foundation tests passed with Ruff and diff checks clean.
+
+### Round 28 — metadata microdata values
+
+Finding: valid Person microdata often uses `<meta itemprop="telephone|email" content="...">`, which has no visible
+text for the existing card extractor to read.
+
+Change: structured-card values now prefer `content` attributes before title/data-value/text fallbacks, preserving the
+same-card ownership rule.
+
+Validation: 14 enrichment-foundation tests passed with Ruff and diff checks clean.

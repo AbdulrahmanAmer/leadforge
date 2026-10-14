@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.14] — 2026-10-14
+
+Person microdata metadata extraction.
+
+### Fixed
+- Person-card `meta itemprop=telephone|email content=...` values are now captured and attached to the card person.
+
 ## [0.6.13] — 2026-10-14
 
 vCard value-node normalization.
