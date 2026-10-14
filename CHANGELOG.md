@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.8] — 2026-10-14
+
+Conservative DM phone typing.
+
+### Fixed
+- Calling-workbook DM routes identical to the primary company phone are typed as `main_line`; only distinct routes
+  are typed as `direct`, preventing inflated direct-DM coverage metrics.
+
 ## [0.6.7] — 2026-10-14
 
 Calling-workbook DM identity parsing correction.

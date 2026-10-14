@@ -258,6 +258,8 @@ def import_dm_fields(conn: sqlite3.Connection, path: Path, dry_run: bool = True,
         if dm_phone:
             normalized, _reason = to_e164(dm_phone, default_region)
             value = normalized or _phone(dm_phone)
+            primary_phone, _primary_reason = to_e164(row.get("phone", ""), default_region)
+            phone_type = "main_line" if primary_phone and value == primary_phone else "direct"
             duplicate = conn.execute(
                 "SELECT 1 FROM enrichment_observations WHERE business_id=? AND field='phone' AND value_json=? "
                 "AND source=? AND COALESCE(person_id,0)=COALESCE(?,0) LIMIT 1",
@@ -267,7 +269,7 @@ def import_dm_fields(conn: sqlite3.Connection, path: Path, dry_run: bool = True,
                 result["duplicates"] += 1
             else:
                 db.add_contact(conn, Contact(business_id=business_id, kind="phone", value=value,
-                                             label="human_called_dm", tier="unknown", phone_type="direct"))
+                                             label="human_called_dm", tier="unknown", phone_type=phone_type))
                 db.add_observation(conn, EnrichmentObservation(
                     business_id=business_id, field="phone", value=value, source=source,
                     source_url=source_url, evidence=evidence, confidence=1.0,

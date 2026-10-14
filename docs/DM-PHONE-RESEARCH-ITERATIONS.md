@@ -298,3 +298,14 @@ available: 25 voicemail, 24 callback, 24 send-information, 25 not-interested, 11
 
 Validation: benchmark tests, Ruff, and diff checks pass. This is a benchmark-integrity breakthrough: the calibration
 set now contains the identity fields needed to measure DM-linked coverage rather than merely phone availability.
+
+### Round 22 — DM route typing calibration
+
+Audit finding: in the real 122-row DM-route slice, 92 values equal the primary company phone, 28 are distinct from
+the primary phone, and 2 have no primary phone. Treating every row as `direct` would inflate direct-DM coverage.
+
+Change: workbook import now labels a DM route `main_line` when it equals the primary phone and `direct` only when it
+is distinct (or no primary was supplied). This keeps the operator-confirmed route while making direct/mobile metrics
+conservative.
+
+Validation: 17 benchmark/foundation tests passed with Ruff and diff checks clean.

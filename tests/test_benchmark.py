@@ -96,6 +96,22 @@ def test_workbook_dm_fields_are_person_owned_and_dry_run_by_default(conn, tmp_pa
     assert all(row["source"] == "human_calling:List #2" for row in observations)
 
 
+def test_dm_route_same_as_primary_is_main_line_not_direct(conn, tmp_path: Path):
+    db.upsert_business(conn, Business(id="b1", name="Example", name_norm="example",
+                                      domain="example.co.uk", dedupe_key="same-phone"))
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "List #2"
+    sheet.append(["Company", "Primary Phone", "Decision Maker / Ask For", "DM Direct Phone / Best Route", "Website"])
+    sheet.append(["Example", "+44 20 1234 5678", "Jane Doe", "+44 20 1234 5678", "https://www.example.co.uk"])
+    path = tmp_path / "same-phone.xlsx"
+    workbook.save(path)
+    result = import_dm_fields(conn, path, dry_run=False, default_region="GB")
+    assert result["imported"] == 1
+    phone = conn.execute("SELECT phone_type FROM contacts WHERE kind='phone'").fetchone()
+    assert phone["phone_type"] == "main_line"
+
+
 def test_dm_route_outcomes_are_attributed_as_dm_direct(conn, tmp_path: Path):
     db.upsert_business(conn, Business(id="b1", name="Example", name_norm="example",
                                       domain="example.co.uk", dedupe_key="dm-outcome"))
